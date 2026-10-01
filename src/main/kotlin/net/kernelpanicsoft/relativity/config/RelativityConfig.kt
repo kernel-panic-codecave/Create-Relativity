@@ -84,6 +84,11 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.time.dilate_ticks.comment"),
 				default = true,
 			)
+			val maxFrameSpeedup by double(
+				title = Component.translatable("config.create_relativity.time.max_frame_speedup"),
+				comment = Component.translatable("config.create_relativity.time.max_frame_speedup.comment"),
+				default = 8.0,
+			)
 		}
 	}
 

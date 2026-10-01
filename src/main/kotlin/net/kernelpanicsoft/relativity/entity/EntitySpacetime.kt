@@ -6,6 +6,7 @@ import net.kernelpanicsoft.relativity.accretion.Accretion
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.kernelpanicsoft.relativity.time.LocalClocks
+import net.kernelpanicsoft.relativity.time.ReferenceFrame
 import net.minecraft.core.registries.Registries
 import net.minecraft.resources.ResourceKey
 import net.minecraft.server.level.ServerPlayer
@@ -54,6 +55,18 @@ object EntitySpacetime {
 		val level = entity.level()
 		// A hole sits inside its own horizon; it must not swallow itself (hole-hole interaction is M10's).
 		if (entity is BlackHoleEntity || entity.isSpectator || entity.isPassenger) return
+		// Singleplayer frame: the player's own ticks follow their clock while the world runs faster around them.
+		if (entity is Player) {
+			val due = if (level.isClientSide) {
+				!entity.isLocalPlayer || ReferenceFrame.localPlayerTicks(entity)
+			} else {
+				ReferenceFrame.playerTicks(entity)
+			}
+			if (!due) {
+				event.isCanceled = true
+				return
+			}
+		}
 		if (SpacetimeField.blackHoles(level).isEmpty()) {
 			// No holes left (removed or evaporated): let go of any stretch.
 			if (!level.isClientSide && entity is LivingEntity && SpacetimeAttachments.bodyStretch.get(entity) != 1.0) {
