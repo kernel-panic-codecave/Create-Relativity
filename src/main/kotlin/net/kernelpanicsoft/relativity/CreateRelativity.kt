@@ -1,12 +1,16 @@
 package net.kernelpanicsoft.relativity
 
 import dev.architectury.platform.Platform
+import net.kernelpanicsoft.relativity.client.RelativityClient
 import net.kernelpanicsoft.relativity.command.RelativityCommands
 import net.kernelpanicsoft.relativity.config.RelativityConfig
+import net.kernelpanicsoft.relativity.network.RelativityNetwork
 import net.kernelpanicsoft.relativity.sable.RelativityForceGroups
-import net.kernelpanicsoft.relativity.sable.SpikeAttractor
+import net.kernelpanicsoft.relativity.sable.SableSpacetimeForces
+import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.minecraft.resources.ResourceLocation
 import net.neoforged.fml.common.Mod
+import net.neoforged.fml.loading.FMLEnvironment
 import net.neoforged.neoforge.common.NeoForge
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -25,11 +29,13 @@ object CreateRelativity {
 
 	init {
 		RelativityConfig.init()
+		SpacetimeAttachments.init()
+		RelativityNetwork.init()
 		RelativityForceGroups.register()
-		// Explicit event classes: Kotlin compiles function references to indy lambdas, which
-		// the type-inferring addListener(Consumer) overload can't resolve.
-		NeoForge.EVENT_BUS.addListener(SpikeAttractor::onPrePhysicsTick)
+		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onPrePhysicsTick)
+		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(RelativityCommands::register)
+		if (FMLEnvironment.dist.isClient) RelativityClient.init()
 		LOGGER.info("Create: Relativity initialized")
 	}
 }

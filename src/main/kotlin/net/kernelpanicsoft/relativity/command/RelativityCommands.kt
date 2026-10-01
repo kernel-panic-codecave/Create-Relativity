@@ -1,9 +1,12 @@
 package net.kernelpanicsoft.relativity.command
 
 import com.mojang.brigadier.arguments.DoubleArgumentType
+import com.mojang.brigadier.builder.LiteralArgumentBuilder
+import com.mojang.brigadier.context.CommandContext
 import net.kernelpanicsoft.relativity.config.RelativityConfig
-import net.kernelpanicsoft.relativity.physics.Schwarzschild
-import net.kernelpanicsoft.relativity.sable.SpikeAttractor
+import net.kernelpanicsoft.relativity.spacetime.BlackHole
+import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
+import net.minecraft.commands.CommandSourceStack
 import net.minecraft.commands.Commands
 import net.minecraft.commands.arguments.coordinates.Vec3Argument
 import net.minecraft.network.chat.Component
@@ -13,27 +16,62 @@ object RelativityCommands {
 	fun register(event: RegisterCommandsEvent) {
 		event.dispatcher.register(
 			Commands.literal("relativity").requires { it.hasPermission(2) }
-				.then(Commands.literal("spike")
-					.then(Commands.literal("attractor")
-						.then(Commands.argument("pos", Vec3Argument.vec3())
-							.then(Commands.argument("rs", DoubleArgumentType.doubleArg(0.01, 1000.0))
-								.executes { ctx ->
-									val pos = Vec3Argument.getVec3(ctx, "pos")
-									val rs = DoubleArgumentType.getDouble(ctx, "rs")
-									val units = RelativityConfig.units(ctx.source.level.dimension())
-									val hole = Schwarzschild(rs, units)
-									SpikeAttractor.active = SpikeAttractor.Attractor(ctx.source.level.dimension(), pos, hole)
-									ctx.source.sendSuccess({
-										Component.literal("Spike attractor at %.1f %.1f %.1f, r_s=%.2f, M=%.0f".format(
-											pos.x, pos.y, pos.z, rs, units.massForRadius(rs)))
-									}, true)
-									1
-								})))
-					.then(Commands.literal("clear").executes { ctx ->
-						SpikeAttractor.active = null
-						ctx.source.sendSuccess({ Component.literal("Spike attractor cleared") }, true)
-						1
-					}))
+				.then(blackHole())
 		)
 	}
+
+	private fun blackHole(): LiteralArgumentBuilder<CommandSourceStack> =
+		Commands.literal("bh")
+			.then(Commands.literal("create")
+				.then(Commands.argument("pos", Vec3Argument.vec3())
+					.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.05, 256.0))
+						.executes { create(it, 0.0) }
+						.then(Commands.argument("spin", DoubleArgumentType.doubleArg(0.0, 0.998))
+							.executes { create(it, DoubleArgumentType.getDouble(it, "spin")) }))))
+			.then(Commands.literal("list").executes(::list))
+			.then(Commands.literal("remove").executes(::removeNearest))
+			.then(Commands.literal("clear").executes { ctx ->
+				val removed = SpacetimeField.removeBlackHoles(ctx.source.level) { true }
+				ctx.source.sendSuccess({ Component.translatable("commands.create_relativity.bh.cleared", removed) }, true)
+				removed
+			})
+
+	private fun create(ctx: CommandContext<CommandSourceStack>, spin: Double): Int {
+		val pos = Vec3Argument.getVec3(ctx, "pos")
+		val radius = DoubleArgumentType.getDouble(ctx, "radius")
+		val level = ctx.source.level
+		SpacetimeField.addBlackHole(level, BlackHole(x = pos.x, y = pos.y, z = pos.z, schwarzschildRadius = radius, spin = spin))
+		val mass = RelativityConfig.units(level.dimension()).massForRadius(radius)
+		ctx.source.sendSuccess({
+			Component.translatable("commands.create_relativity.bh.created", fmt(pos.x), fmt(pos.y), fmt(pos.z), fmt(radius), fmt(spin), "%.3g".format(mass))
+		}, true)
+		return 1
+	}
+
+	private fun list(ctx: CommandContext<CommandSourceStack>): Int {
+		val holes = SpacetimeField.blackHoles(ctx.source.level)
+		ctx.source.sendSuccess({ Component.translatable("commands.create_relativity.bh.list", holes.size) }, false)
+		for (hole in holes) {
+			ctx.source.sendSuccess({
+				Component.literal("  %s  r_s=%s  χ=%s  horizon=%s  ISCO=%s".format(
+					"${fmt(hole.x)} ${fmt(hole.y)} ${fmt(hole.z)}", fmt(hole.schwarzschildRadius), fmt(hole.spin),
+					fmt(hole.horizonRadius), fmt(hole.isco(prograde = true))))
+			}, false)
+		}
+		return holes.size
+	}
+
+	private fun removeNearest(ctx: CommandContext<CommandSourceStack>): Int {
+		val from = ctx.source.position
+		val nearest = SpacetimeField.blackHoles(ctx.source.level).minByOrNull { it.center.distanceToSqr(from) }
+		if (nearest == null) {
+			ctx.source.sendFailure(Component.translatable("commands.create_relativity.bh.none"))
+			return 0
+		}
+		SpacetimeField.removeBlackHoles(ctx.source.level) { it.id == nearest.id }
+		ctx.source.sendSuccess({ Component.translatable("commands.create_relativity.bh.removed", fmt(nearest.x), fmt(nearest.y), fmt(nearest.z)) }, true)
+		return 1
+	}
+
+	private fun fmt(value: Double) = "%.2f".format(value)
 }

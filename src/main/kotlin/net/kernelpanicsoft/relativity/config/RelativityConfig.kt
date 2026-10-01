@@ -31,6 +31,17 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 		}
 	}
 
+	/** Per-player client settings. */
+	object Client : ConfigSpec.Client(CreateRelativity.MOD) {
+		object Debug : CategorySpec(Component.translatable("config.create_relativity.debug"), "debug") {
+			val showRadii by boolean(
+				title = Component.translatable("config.create_relativity.debug.show_radii"),
+				comment = Component.translatable("config.create_relativity.debug.show_radii.comment"),
+				default = true,
+			)
+		}
+	}
+
 	/** Planetoid space is far from Minecraft-scale c: block planets would otherwise be near-black-holes. */
 	const val PLANETOID_DIMENSION = "create_relativity:planetoid"
 	const val PLANETOID_C = 512.0

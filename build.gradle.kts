@@ -1,6 +1,7 @@
 plugins {
     id("dev.architectury.loom") version "1.17.493"
     kotlin("jvm") version "2.4.20"
+    kotlin("plugin.serialization") version "2.4.20"
     // Archie's build plugin: stamps Archie's library deps as FML game libraries so the dev runtime loads them
     id("net.kernelpanicsoft.archie.archie-plugin") version "1.0.9-SNAPSHOT"
 }
@@ -83,6 +84,8 @@ dependencies {
     "neoForge"("net.neoforged:neoforge:${property("neoforge_version")}")
 
     implementation("dev.nyon:KotlinLangForge:${property("klf_version")}+neoforge")
+    // Provided at runtime by KotlinLangForge (jar-in-jar); needed to compile @Serializable packets/attachments
+    compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-core:1.11.0")
 
     // Archie: config, networking, saved state. Transitive on purpose: Loom's remap drops its
     // jar-in-jar metadata, so its libraries (patched by archie-plugin) must come in as dependencies.

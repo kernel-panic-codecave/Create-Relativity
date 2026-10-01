@@ -444,8 +444,8 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | # | Milestone | Deliverable / "done when" |
 |---|---|---|
 | **M0** ✅ | Scaffolding + **Sable API spike** | Mod loads with Create 6 + Aeronautics + Sable + Veil + KFF. [`docs/sable-spike.md`](docs/sable-spike.md) answers: how to apply force/torque to a sub-level, get mass/inertia, split a sub-level, teleport/move one across dimensions, and hook its rendering. |
-| **M1** | physics-core | All §2 tests green. A CLI/plot harness draws orbits and precession. |
-| **M2** | Spacetime layer + debug | `/relativity bh create`, synced sources, debug renderer for r_s / ISCO / photon sphere. |
+| **M1** ✅ | physics-core | All §2 tests green. A CLI/plot harness draws orbits and precession. |
+| **M2** ✅ | Spacetime layer + debug | `/relativity bh create`, synced sources, debug renderer for r_s / ISCO / photon sphere. |
 | **M3** | **Lensing shader** (Schwarzschild LUT + cubemap) | Static BH looks right: shadow size, Einstein ring. *First visual wow point.* |
 | **M4** | Entity geodesics + horizon + proper time | Items and mobs orbit, precess, and fall in. Players die at the singularity. HUD chronometer. |
 | **M5** | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation. |

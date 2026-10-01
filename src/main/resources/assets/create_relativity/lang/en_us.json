@@ -7,5 +7,13 @@
   "config.create_relativity.physics.unit_radius_mass": "Mass of a 1-Block Black Hole",
   "config.create_relativity.physics.unit_radius_mass.comment": "Sable mass whose Schwarzschild radius is one block; sets the gravitational constant. Default block mass is 1.0.",
   "config.create_relativity.physics.speed_of_light_overrides": "Speed of Light per Dimension",
-  "config.create_relativity.physics.speed_of_light_overrides.comment": "Dimension id -> c in blocks/s. Planetoid space defaults higher so block planets aren't nearly black holes."
+  "config.create_relativity.physics.speed_of_light_overrides.comment": "Dimension id -> c in blocks/s. Planetoid space defaults higher so block planets aren't nearly black holes.",
+  "config.create_relativity.debug": "Debug",
+  "config.create_relativity.debug.show_radii": "Show Black Hole Radii",
+  "config.create_relativity.debug.show_radii.comment": "Draw horizon (purple), photon orbits (yellow) and ISCOs (cyan; dimmer = retrograde) around every black hole.",
+  "commands.create_relativity.bh.created": "Black hole at %s %s %s: r_s=%s, spin=%s, mass=%s",
+  "commands.create_relativity.bh.list": "%s black hole(s) in this dimension:",
+  "commands.create_relativity.bh.removed": "Removed black hole at %s %s %s",
+  "commands.create_relativity.bh.cleared": "Removed %s black hole(s)",
+  "commands.create_relativity.bh.none": "No black holes in this dimension"
 }
