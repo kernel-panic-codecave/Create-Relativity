@@ -14,6 +14,9 @@ import net.minecraft.world.phys.Vec3
 /** A 10×6×10 all-air template, for tests that place blocks. */
 internal const val SMALL = "create_relativity:gametest/small"
 
+/** A 20×10×20 all-air template, for tests that need room around a hole. */
+internal const val MEDIUM = "create_relativity:gametest/medium"
+
 /**
  * Registers the GameTest suite (only under `runGametest`/`runGametestClient`: the gametest dependency isn't on the
  * production classpath, so every reference to it stays behind [net.kernelpanicsoft.archie.gametest.platform.AGameTestPlatform.isGameTest]).
@@ -25,6 +28,7 @@ internal object RelativityGameTest : AGameTestEventObject(CreateRelativity.MOD) 
 			register<HoleDynamicsGameTest>()
 			register<CreateTorsionGameTest>()
 			register<ShipGameTest>()
+			register<KerrGameTest>()
 		}
 	}
 }

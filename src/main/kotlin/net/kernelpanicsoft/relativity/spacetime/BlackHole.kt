@@ -48,6 +48,15 @@ data class BlackHole(
 	fun isco(prograde: Boolean): Double = KerrOrbits.isco(mass, kotlin.math.abs(spin), prograde)
 
 	/** Cylindrical radius in the equatorial plane of the Boyer–Lindquist circle [r] (Kerr–Schild: `√(r² + a²)`). */
+	/**
+	 * Outer edge of the ergosphere (spheroidal r) at polar angle with cosine [cosTheta] from the spin axis:
+	 * M + √(M² − a² cos²θ). Inside it nothing can stay still; everything is dragged around with the spin.
+	 */
+	fun ergosphereRadius(cosTheta: Double): Double {
+		val a = spin * mass
+		return mass + kotlin.math.sqrt(mass * mass - a * a * cosTheta * cosTheta)
+	}
+
 	fun equatorialExtent(r: Double): Double = kotlin.math.sqrt(r * r + (spin * mass) * (spin * mass))
 
 	companion object {
