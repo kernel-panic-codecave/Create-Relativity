@@ -20,7 +20,9 @@
     "client.network.PacketEntityIdAccessors$RotateHead",
     "client.network.PacketEntityIdAccessors$EntityEvent",
     "client.network.PacketEntityIdAccessors$SectionBlocks",
-    "client.GameRendererPickMixin"
+    "client.GameRendererPickMixin",
+    "client.GameRendererShadersAccessor",
+    "client.FrustumMixin"
   ],
   "injectors": {
     "defaultRequire": 1

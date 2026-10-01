@@ -79,6 +79,8 @@ object SpacetimeDebugRenderer {
 		RenderSystem.defaultBlendFunc()
 		RenderSystem.setShader(GameRenderer::getRendertypeLinesShader)
 		RenderSystem.lineWidth(2f)
+		// Gizmos mark true positions: keep the vertex lens out of them.
+		net.kernelpanicsoft.relativity.client.lens.VertexLens.setEnabled(false)
 
 		val poseStack = PoseStack()
 		poseStack.mulPose(camera.rotation().conjugate(Quaternionf()))

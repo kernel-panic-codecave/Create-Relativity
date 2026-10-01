@@ -28,6 +28,7 @@ uniform float DisplayTanHalfFov;    // > 0: the frame was rendered wider than th
 uniform int HoleCount;
 uniform vec4 Holes[MAX_HOLES]; // xyz: centre relative to the camera (blocks), w: Schwarzschild radius (blocks)
 uniform vec4 HoleSpins[MAX_HOLES]; // x: spin a/M, signed (+ counter-clockwise about up, seen from above)
+uniform int VertexLensing; // 1: world geometry was already bent in the vertex shaders (VertexLens); lens only the sky
 
 in vec2 texCoord;
 out vec4 fragColor;
@@ -515,6 +516,19 @@ vec4 diskSample(vec3 dir, float sceneDist) {
     return vec4(0.0);
 }
 
+// Whether the view ray falls into the nearest hole (its shadow): the Kerr march if it ran, else the table.
+bool inShadow(vec3 dir, KerrRay first) {
+    if (first.status != 2) return first.status == 1;
+    vec3 toHole = Holes[0].xyz;
+    float rs = Holes[0].w;
+    float rc = length(toHole);
+    if (rc <= rs) return true;
+    vec3 e1 = -toHole / rc;
+    float cosPsi = clamp(-dot(dir, e1), -1.0, 1.0);
+    if (cosPsi < 0.0) return false;
+    return lookup(rs / rc, acos(cosPsi)).g > 0.5;
+}
+
 void main() {
     // With overscan the frame is wider than the screen: an output pixel's own content sits elsewhere in it.
     vec3 dir = displayRay(texCoord);
@@ -525,7 +539,14 @@ void main() {
     float sceneDist = sceneDistance(ownUv);
     // The nearest hole, if spinning, is marched once for both its lens and its disk.
     KerrRay first = kerrMarch(0, dir, sceneDist, true);
-    vec3 scene = lensedScene(dir, original, sceneDist, first);
+    vec3 scene;
+    if (VertexLensing == 1 && sceneDist < 1e29) {
+        // Geometry is already where its light appears; only the shadow can hide it (if it lies beyond the hole).
+        scene = original.rgb;
+        if (inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
+    } else {
+        scene = lensedScene(dir, original, sceneDist, first);
+    }
     vec4 disk = first.disk;
     if (first.status == 2) disk = diskSample(dir, sceneDist);
     fragColor = vec4(mix(scene, disk.rgb, disk.a), 1.0);

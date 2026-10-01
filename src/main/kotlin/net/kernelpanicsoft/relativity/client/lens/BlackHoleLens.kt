@@ -168,6 +168,7 @@ object BlackHoleLens {
 		pipeline.getUniformSafe("HoleCount").setInt(holes.size)
 		pipeline.getUniformSafe("Holes").setVectors(*holeUniforms)
 		pipeline.getUniformSafe("HoleSpins").setVectors(*spinUniforms)
+		pipeline.getUniformSafe("VertexLensing").setInt(if (VertexLens.activeThisFrame) 1 else 0)
 		val environmentReady = LensEnvironment.ready
 		pipeline.getUniformSafe("EnvironmentReady").setInt(if (environmentReady) 1 else 0)
 		if (environmentReady) {

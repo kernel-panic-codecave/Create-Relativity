@@ -120,6 +120,11 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.capture_distance.comment"),
 				min = 2, max = 16, default = 8,
 			)
+			val vertexLensing by boolean(
+				title = Component.translatable("config.create_relativity.render.vertex_lensing"),
+				comment = Component.translatable("config.create_relativity.render.vertex_lensing.comment"),
+				default = false,
+			)
 			val lightDelay by boolean(
 				title = Component.translatable("config.create_relativity.render.light_delay"),
 				comment = Component.translatable("config.create_relativity.render.light_delay.comment"),

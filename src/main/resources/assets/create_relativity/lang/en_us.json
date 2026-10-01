@@ -89,5 +89,7 @@
   "config.create_relativity.render.light_delay": "Light Delay",
   "config.create_relativity.render.light_delay.comment": "See distant things as they were when their light left them: block and entity updates are held for distance / c. At c = 64 b/s, something 64 blocks away is a second in the past.",
   "config.create_relativity.time.shaft_torsion": "Shaft Torsion (su per rpm)",
-  "config.create_relativity.time.shaft_torsion.comment": "Create networks spanning different clock rates twist: each block adds this × |its dτ/dt − the source's| stress per rpm. Long shafts down a gravity well overstress. 0 turns it off."
+  "config.create_relativity.time.shaft_torsion.comment": "Create networks spanning different clock rates twist: each block adds this × |its dτ/dt − the source's| stress per rpm. Long shafts down a gravity well overstress. 0 turns it off.",
+  "config.create_relativity.render.vertex_lensing": "Vertex Lensing (High Quality)",
+  "config.create_relativity.render.vertex_lensing.comment": "Bend nearby world geometry in the vertex shader instead of the screen: correct occlusion, no gaps where blocks were culled, no doubling. Heavier, and only vanilla rendering is bent (not Flywheel-instanced Create parts or shader packs); the screen-space lens stays the fallback."
 }
