@@ -452,7 +452,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M6** | **Spaghettification** | Tidal chains, deformation renderer, first-person stretch, death message. *Second wow point.* |
 | **M7** | Time dilation systems | Tick accumulator for BEs/mobs/kinetics. Singleplayer tick-rate scaling. MP ledger mode. |
 | **M8** | Sable/Aeronautics integration | Ships orbit, slingshot, get tidally ripped apart. Kinetic dilation overstress. |
-| **M9** | Kerr | Spin from accretion, frame dragging, ergosphere, Kerr ray marcher, Penrose power plant. |
+| **M9** | Kerr | Spin from accretion, frame dragging, ergosphere, Kerr ray marcher, Penrose power plant. **High-quality lens preset**: march the curved light path through the frame and capture depth so objects near the hole occlude and get uncovered correctly (screen-space lensing can't; see the parked `lens-experiments` branch for what was tried). |
 | **M10** | **Binary BHs + gravitational waves** | PN inspiral with radiation reaction, NR-fit remnant + kick, QNM ringdown, strain field, ship flexing, ripple shader, chirp audio, interferometer. *Third wow point.* |
 | **M11** | Special relativity | Speed cap c, 4-momentum thrust, SR post pass, retarded-time rendering / Terrell rotation. |
 | **M12** | Wormholes | Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. |
