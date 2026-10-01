@@ -1,6 +1,8 @@
 package net.kernelpanicsoft.relativity.client.lens
 
+import foundry.veil.api.client.render.VeilLevelPerspectiveRenderer
 import foundry.veil.api.client.render.VeilRenderSystem
+import org.lwjgl.opengl.GL11
 import foundry.veil.forge.event.ForgeVeilPostProcessingEvent
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.config.RelativityConfig
@@ -21,6 +23,7 @@ import java.util.concurrent.CompletableFuture
 object BlackHoleLens {
 	val PIPELINE = CreateRelativity.id("black_hole_lens")
 	val LOOKUP_TEXTURE = CreateRelativity.id("lens_lookup")
+	private val SHADER = CreateRelativity.id("black_hole_lens")
 
 	/** Must match LUT_SIZE in black_hole_lens.fsh. */
 	private const val LUT_WIDTH = 512
@@ -58,9 +61,17 @@ object BlackHoleLens {
 		else if (!wanted && post.isActive(PIPELINE)) post.remove(PIPELINE)
 	}
 
-	/** Uploads the nearest holes, relative to the camera, right before our pass runs. */
+	/**
+	 * Uploads the nearest holes, relative to the camera, right before our pass runs. The pass runs at the end
+	 * of level rendering ("after_level" in the pipeline), before the hand is drawn and while depth is intact.
+	 */
 	private fun onPrePostProcessing(event: ForgeVeilPostProcessingEvent.Pre) {
 		if (event.name != PIPELINE) return
+		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
+			// Veil runs stage passes inside perspective renders too; the environment capture must stay unlensed.
+			event.pipeline.getUniformSafe("HoleCount").setInt(0)
+			return
+		}
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
 		val camera = minecraft.gameRenderer.mainCamera.position
@@ -76,5 +87,17 @@ object BlackHoleLens {
 		val pipeline = event.pipeline
 		pipeline.getUniformSafe("HoleCount").setInt(holes.size)
 		pipeline.getUniformSafe("Holes").setVectors(*holeUniforms)
+		val environmentReady = LensEnvironment.ready
+		pipeline.getUniformSafe("EnvironmentReady").setInt(if (environmentReady) 1 else 0)
+		if (environmentReady) {
+			VeilRenderSystem.renderer().shaderManager.getShader(SHADER)?.let { shader ->
+				shader.setTexture("Environment", GL11.GL_TEXTURE_2D, LensEnvironment.atlasTexture)
+				shader.setTexture("EnvironmentDepth", GL11.GL_TEXTURE_2D, LensEnvironment.depthAtlasTexture)
+			}
+			val center = LensEnvironment.captureCenter
+			pipeline.getUniformSafe("CaptureCenter").setVector(
+				(center.x - camera.x).toFloat(), (center.y - camera.y).toFloat(), (center.z - camera.z).toFloat(),
+			)
+		}
 	}
 }

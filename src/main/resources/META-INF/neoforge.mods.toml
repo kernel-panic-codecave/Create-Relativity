@@ -11,6 +11,9 @@ license="${mod_license}"
     '''
     authors="${mod_authors}"
 
+[[mixins]]
+    config="create_relativity.mixins.json"
+
 [[dependencies.${mod_id}]]
     modId="neoforge"
     type="required"

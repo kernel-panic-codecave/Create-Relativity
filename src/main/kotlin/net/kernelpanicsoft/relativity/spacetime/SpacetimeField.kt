@@ -24,7 +24,7 @@ object SpacetimeField {
 	private const val SINGULARITY_CUTOFF = 0.1
 
 	fun blackHoles(level: Level): List<BlackHole> =
-		if (level is ServerLevel) SpacetimeAttachments.blackHoles.get(level) else clientHoles[level.dimension()].orEmpty()
+		if (level is ServerLevel) SpacetimeAttachments.blackHoles.get(level).holes else clientHoles[level.dimension()].orEmpty()
 
 	fun addBlackHole(level: ServerLevel, hole: BlackHole) = update(level) { it + hole }
 
@@ -39,8 +39,8 @@ object SpacetimeField {
 	}
 
 	private fun update(level: ServerLevel, change: (List<BlackHole>) -> List<BlackHole>) {
-		val updated = change(SpacetimeAttachments.blackHoles.get(level))
-		SpacetimeAttachments.blackHoles.set(level, updated)
+		val updated = change(SpacetimeAttachments.blackHoles.get(level).holes)
+		SpacetimeAttachments.blackHoles.set(level, BlackHoles(updated))
 		RelativityNetwork.syncToDimension(level, updated)
 	}
 

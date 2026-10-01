@@ -446,7 +446,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M0** ✅ | Scaffolding + **Sable API spike** | Mod loads with Create 6 + Aeronautics + Sable + Veil + KFF. [`docs/sable-spike.md`](docs/sable-spike.md) answers: how to apply force/torque to a sub-level, get mass/inertia, split a sub-level, teleport/move one across dimensions, and hook its rendering. |
 | **M1** ✅ | physics-core | All §2 tests green. A CLI/plot harness draws orbits and precession. |
 | **M2** ✅ | Spacetime layer + debug | `/relativity bh create`, synced sources, debug renderer for r_s / ISCO / photon sphere. |
-| **M3** | **Lensing shader** (Schwarzschild LUT + cubemap) | Static BH looks right: shadow size, Einstein ring. *First visual wow point.* |
+| **M3** ✅ | **Lensing shader** (Schwarzschild LUT + cubemap) | Static BH looks right: shadow size, Einstein ring. *First visual wow point.* Known limits: the 360° capture (256²/face, from the nearest hole) smears where strongly magnified and its fog is centred on the hole; spin ignored until M9. |
 | **M4** | Entity geodesics + horizon + proper time | Items and mobs orbit, precess, and fall in. Players die at the singularity. HUD chronometer. |
 | **M5** | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation. |
 | **M6** | **Spaghettification** | Tidal chains, deformation renderer, first-person stretch, death message. *Second wow point.* |

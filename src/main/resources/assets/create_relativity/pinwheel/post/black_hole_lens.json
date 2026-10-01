@@ -1,4 +1,5 @@
 {
+  "renderStage": "after_level",
   "stages": [
     {
       "type": "veil:blit",

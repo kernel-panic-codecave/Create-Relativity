@@ -39,6 +39,16 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.lensing.comment"),
 				default = true,
 			)
+			val environmentCapture by boolean(
+				title = Component.translatable("config.create_relativity.render.environment_capture"),
+				comment = Component.translatable("config.create_relativity.render.environment_capture.comment"),
+				default = true,
+			)
+			val captureDistance by intSlider(
+				title = Component.translatable("config.create_relativity.render.capture_distance"),
+				comment = Component.translatable("config.create_relativity.render.capture_distance.comment"),
+				min = 2, max = 16, default = 8,
+			)
 		}
 
 		object Debug : CategorySpec(Component.translatable("config.create_relativity.debug"), "debug") {

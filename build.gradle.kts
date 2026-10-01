@@ -141,3 +141,15 @@ tasks.processResources {
     inputs.properties(props)
     filesMatching("META-INF/neoforge.mods.toml") { expand(props) }
 }
+
+// Compiles our Veil shaders offline (needs glslangValidator on PATH; skipped otherwise).
+val checkShaders by tasks.registering(Exec::class) {
+    group = "verification"
+    description = "Compiles Veil shaders with glslangValidator and flags patterns Veil mangles."
+    val validatorPresent = System.getenv("PATH").orEmpty().split(File.pathSeparator)
+        .any { File(it, "glslangValidator").canExecute() }
+    onlyIf("glslangValidator is on PATH") { validatorPresent }
+    inputs.dir("src/main/resources/assets/create_relativity/pinwheel/shaders")
+    commandLine("tools/check-shaders.sh")
+}
+tasks.check { dependsOn(checkShaders) }

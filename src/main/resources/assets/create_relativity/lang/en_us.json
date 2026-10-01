@@ -18,5 +18,9 @@
   "commands.create_relativity.bh.none": "No black holes in this dimension",
   "config.create_relativity.render": "Rendering",
   "config.create_relativity.render.lensing": "Gravitational Lensing",
-  "config.create_relativity.render.lensing.comment": "Bend light around black holes (post-processing). Turn off if it clashes with a shader pack."
+  "config.create_relativity.render.lensing.comment": "Bend light around black holes (post-processing). Turn off if it clashes with a shader pack.",
+  "config.create_relativity.render.environment_capture": "Environment Capture",
+  "config.create_relativity.render.environment_capture.comment": "Render a low-res 360° view from the nearest black hole (one face per frame) so light bent from off-screen, like the photon ring, shows what's really there.",
+  "config.create_relativity.render.capture_distance": "Capture Distance (chunks)",
+  "config.create_relativity.render.capture_distance.comment": "How far the environment capture renders. Lower is cheaper."
 }

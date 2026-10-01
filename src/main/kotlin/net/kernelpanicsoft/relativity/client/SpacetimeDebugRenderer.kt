@@ -2,6 +2,7 @@ package net.kernelpanicsoft.relativity.client
 
 import com.mojang.blaze3d.vertex.PoseStack
 import com.mojang.blaze3d.vertex.VertexConsumer
+import foundry.veil.api.client.render.VeilLevelPerspectiveRenderer
 import net.kernelpanicsoft.archie.gui.util.extension.invoke
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
@@ -26,6 +27,7 @@ object SpacetimeDebugRenderer {
 	fun render(event: RenderLevelStageEvent) {
 		if (event.stage != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return
 		if (!RelativityConfig.Client.Debug.showRadii) return
+		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) return // keep gizmos out of the lens capture
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
 		val holes = SpacetimeField.blackHoles(level)
