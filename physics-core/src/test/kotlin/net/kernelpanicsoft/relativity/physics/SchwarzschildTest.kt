@@ -21,6 +21,12 @@ class SchwarzschildTest {
 	}
 
 	@Test
+	fun `unit radius mass gives one block radius for any c`() {
+		val u = SpacetimeUnits.withUnitRadiusMass(c = 20.0, unitRadiusMass = 500.0)
+		assertEquals(1.0, u.schwarzschildRadius(500.0), 1e-12)
+	}
+
+	@Test
 	fun `characteristic radii`() {
 		val bh = Schwarzschild(2.0, units)
 		assertEquals(3.0, bh.photonSphere, 1e-12)

@@ -3,7 +3,6 @@ package net.kernelpanicsoft.relativity.sable
 import dev.ryanhcode.sable.api.sublevel.SubLevelContainer
 import dev.ryanhcode.sable.neoforge.event.ForgeSablePrePhysicsTickEvent
 import net.kernelpanicsoft.relativity.physics.Schwarzschild
-import net.kernelpanicsoft.relativity.physics.SpacetimeUnits
 import net.minecraft.resources.ResourceKey
 import net.minecraft.world.level.Level
 import net.minecraft.world.phys.Vec3
@@ -18,8 +17,6 @@ object SpikeAttractor {
 
 	@Volatile
 	var active: Attractor? = null
-
-	val units = SpacetimeUnits()
 
 	fun onPrePhysicsTick(event: ForgeSablePrePhysicsTickEvent) {
 		val attractor = active ?: return

@@ -1,6 +1,7 @@
 package net.kernelpanicsoft.relativity.command
 
 import com.mojang.brigadier.arguments.DoubleArgumentType
+import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.physics.Schwarzschild
 import net.kernelpanicsoft.relativity.sable.SpikeAttractor
 import net.minecraft.commands.Commands
@@ -19,11 +20,12 @@ object RelativityCommands {
 								.executes { ctx ->
 									val pos = Vec3Argument.getVec3(ctx, "pos")
 									val rs = DoubleArgumentType.getDouble(ctx, "rs")
-									val hole = Schwarzschild(rs, SpikeAttractor.units)
+									val units = RelativityConfig.units(ctx.source.level.dimension())
+									val hole = Schwarzschild(rs, units)
 									SpikeAttractor.active = SpikeAttractor.Attractor(ctx.source.level.dimension(), pos, hole)
 									ctx.source.sendSuccess({
 										Component.literal("Spike attractor at %.1f %.1f %.1f, r_s=%.2f, M=%.0f".format(
-											pos.x, pos.y, pos.z, rs, SpikeAttractor.units.massForRadius(rs)))
+											pos.x, pos.y, pos.z, rs, units.massForRadius(rs)))
 									}, true)
 									1
 								})))

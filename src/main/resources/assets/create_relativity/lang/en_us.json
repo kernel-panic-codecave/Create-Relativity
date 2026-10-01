@@ -1,4 +1,11 @@
 {
   "force_group.create_relativity.spacetime_curvature": "Spacetime Curvature",
-  "force_group.create_relativity.spacetime_curvature.description": "Geodesic acceleration from nearby gravitational sources"
+  "force_group.create_relativity.spacetime_curvature.description": "Geodesic acceleration from nearby gravitational sources",
+  "config.create_relativity.physics": "Physics",
+  "config.create_relativity.physics.speed_of_light": "Default Speed of Light (blocks/s)",
+  "config.create_relativity.physics.speed_of_light.comment": "Used in every dimension without an override. Low values make special relativity reachable; real c would make every effect invisible.",
+  "config.create_relativity.physics.unit_radius_mass": "Mass of a 1-Block Black Hole",
+  "config.create_relativity.physics.unit_radius_mass.comment": "Sable mass whose Schwarzschild radius is one block; sets the gravitational constant. Default block mass is 1.0.",
+  "config.create_relativity.physics.speed_of_light_overrides": "Speed of Light per Dimension",
+  "config.create_relativity.physics.speed_of_light_overrides.comment": "Dimension id -> c in blocks/s. Planetoid space defaults higher so block planets aren't nearly black holes."
 }

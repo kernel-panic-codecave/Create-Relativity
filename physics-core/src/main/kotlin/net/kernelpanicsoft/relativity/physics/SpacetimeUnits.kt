@@ -21,7 +21,15 @@ data class SpacetimeUnits(val c: Double = DEFAULT_C, val g: Double = DEFAULT_G) 
 	companion object {
 		const val DEFAULT_C = 64.0
 
-		/** Chosen so 10k default-mass Sable blocks (1.0 each) collapse to r_s = 1 block. */
-		const val DEFAULT_G = DEFAULT_C * DEFAULT_C / (2.0 * 1.0e4)
+		/** Mass with a one-block Schwarzschild radius: 10k default-mass Sable blocks (1.0 each). */
+		const val DEFAULT_UNIT_RADIUS_MASS = 1.0e4
+
+		const val DEFAULT_G = DEFAULT_C * DEFAULT_C / (2.0 * DEFAULT_UNIT_RADIUS_MASS)
+
+		/** Units with speed of light [c] where a mass of [unitRadiusMass] has `r_s = 1` block. */
+		fun withUnitRadiusMass(c: Double, unitRadiusMass: Double): SpacetimeUnits {
+			require(unitRadiusMass > 0.0) { "unitRadiusMass must be positive, was $unitRadiusMass" }
+			return SpacetimeUnits(c, c * c / (2.0 * unitRadiusMass))
+		}
 	}
 }

@@ -3,6 +3,9 @@ pluginManagement {
         maven("https://maven.architectury.dev/")
         maven("https://maven.fabricmc.net/")
         maven("https://maven.neoforged.net/releases")
+        maven("https://maven.kernelpanicsoft.net/releases") { name = "KernelPanic Releases" }
+        maven("https://maven.kernelpanicsoft.net/snapshots") { name = "KernelPanic Snapshots" }
+        mavenLocal()
         gradlePluginPortal()
         mavenCentral()
     }

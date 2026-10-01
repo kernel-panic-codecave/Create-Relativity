@@ -1,6 +1,8 @@
 plugins {
     id("dev.architectury.loom") version "1.17.493"
     kotlin("jvm") version "2.4.20"
+    // Archie's build plugin: stamps Archie's library deps as FML game libraries so the dev runtime loads them
+    id("net.kernelpanicsoft.archie.archie-plugin") version "1.0.9-SNAPSHOT"
 }
 
 group   = property("mod_group").toString()
@@ -34,6 +36,15 @@ loom {
 
 repositories {
     mavenCentral()
+    google() // AndroidX libraries under Archie's Compose runtime
+    exclusiveContent { // Archie snapshots are published to mavenLocal from ~/IdeaProjects/Archie
+        forRepositories(
+            mavenLocal(),
+            maven("https://maven.kernelpanicsoft.net/releases") { name = "KernelPanic Releases" },
+            maven("https://maven.kernelpanicsoft.net/snapshots") { name = "KernelPanic Snapshots" },
+        )
+        filter { includeGroup("net.kernelpanicsoft.archie") }
+    }
     maven("https://maven.architectury.dev/")      { name = "Architectury" }
     maven("https://maven.neoforged.net/releases") { name = "NeoForged" }
     maven("https://maven.parchmentmc.org")        { name = "Parchment" }
@@ -45,6 +56,8 @@ repositories {
     maven("https://maven.ithundxr.dev/hidden")    { name = "IThundXr Hidden" }
     maven("https://maven.ithundxr.dev/mirror")    { name = "IThundXr Mirror" }
     maven("https://maven.blamejared.com")         { name = "BlameJared (Veil)" }
+    maven("https://maven.shedaniel.me")           { name = "Shedaniel (Cloth Config)" }
+    maven("https://maven.teamresourceful.com/repository/maven-public") { name = "Resourceful (Common Storage Lib)" }
     maven("https://repo.nyon.dev/releases")       { name = "Nyon" }
     exclusiveContent {
         forRepository { maven("https://maven.ryanhcode.dev/releases") { name = "RyanHCode (Sable)" } }
@@ -70,6 +83,14 @@ dependencies {
     "neoForge"("net.neoforged:neoforge:${property("neoforge_version")}")
 
     implementation("dev.nyon:KotlinLangForge:${property("klf_version")}+neoforge")
+
+    // Archie: config, networking, saved state. Transitive on purpose: Loom's remap drops its
+    // jar-in-jar metadata, so its libraries (patched by archie-plugin) must come in as dependencies.
+    // Brings Architectury API, Cloth Config and Common Storage Lib along.
+    modImplementation("net.kernelpanicsoft.archie:archie-core-neoforge:${property("archie_version")}") {
+        exclude(group = "dev.nyon", module = "KotlinLangForge")
+        exclude(group = "org.junit.jupiter")
+    }
 
     // Pure-Kotlin relativity math, shipped inside our jar
     implementation(project(":physics-core"))

@@ -33,6 +33,20 @@ license="${mod_license}"
     side="BOTH"
 
 [[dependencies.${mod_id}]]
+    modId="archie"
+    type="required"
+    versionRange="[0.1.0-SNAPSHOT,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="architectury"
+    type="required"
+    versionRange="[13.0.8,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
     modId="sable"
     type="required"
     versionRange="[2.0.5,3.0.0)"

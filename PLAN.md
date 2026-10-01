@@ -22,7 +22,10 @@ Solving the Einstein field equations live (numerical relativity) won't fit in a 
   ringdown (§8b). This is the real physics, just not a live numerical-relativity solve.
 
 ### Units (the most important design decision)
-1 block = 1 m, but the real c would make every effect invisible. **c is a config value, defaulting to 64 blocks/s.**
+1 block = 1 m, but the real c would make every effect invisible. **c is a per-dimension config value: 64 blocks/s by
+default, 512 in planetoid space.** Horizon-scale effects (redshift, tidal forces, lensing, horizons) depend on r_s/r and not
+on c. c sets how reachable special relativity is, how fast things orbit near a hole (c/2 at the ISCO), and how far a hole of
+a given size pulls (its mass scales with c²). Wormholes between dimensions keep β, not the raw velocity.
 
 - Elytra plus rockets, or fast Aeronautics ships, reach β ≈ 0.3–0.8, so γ becomes something you can see.
 - BHs are defined by their mass M in Sable mass units (default block = 1.0). From there: `GM = G·M`,
@@ -43,6 +46,7 @@ Solving the Einstein field equations live (numerical relativity) won't fit in a 
 | Physics host | **Sable** (rigid-body sub-levels), **Create Simulated** API, **Create Aeronautics** |
 | Rendering | **Veil** post-processing pipelines + custom GLSL; mixins for entity vertex warping |
 | Math | Own small double-precision lib (Vec3d/Vec4d/Mat4d, tensors as flat DoubleArrays) |
+| Library | **Archie** (Kernel Panic's lib): config with Cloth screens + server sync, `NetworkChannel` packets, NBT-backed saved state. Brings Architectury API + Cloth Config |
 | Tests | JUnit 5 on a pure-JVM `physics-core` module, which has no Minecraft classes |
 | Mixins | SpongePowered Mixin + MixinExtras |
 
@@ -356,6 +360,58 @@ Aberration + spectral Doppler + searchlight (§7), applied last, so lensing resu
 
 ---
 
+## 9b. Planetoid world type
+
+A `create_relativity:planetoid` world preset: an empty void dimension (Sable vacuum: `base_gravity` 0, `base_pressure` 0)
+holding a star system whose planets are **Sable sub-levels in orbit**, with gravity supplied by the spacetime layer.
+
+### Planets as curved cube-sphere grids
+- Sable sub-levels are rigid voxel grids, so a planet can't literally have curved blocks. Instead each planet is a
+  **cube-sphere**: six face regions, each a flat block grid in plot space, generated so its surface follows the sphere.
+- Each face has its own **local down** (the face normal in plot coordinates). Physics and collision use the true voxels.
+  A **curvature vertex warp** at render time bends each face's chunks onto the sphere (gnomonic cube→sphere map), so the
+  surface looks round and the seams between faces disappear.
+- Terrain is 3D noise sampled in sphere coordinates: core/mantle/crust layers, ores, caves, ocean shells to a sea radius,
+  and biomes by latitude and altitude. Seeded from the world seed per planet.
+- Generation is chunk by chunk inside the planet's plot, lazily, so a 128-radius planet doesn't stall world creation.
+
+### Orbits
+- The star and planets (and moons) are integrated as an **N-body system with the M10 integrator** (EIH 1PN). Same code as
+  binary black holes, so orbits precess correctly near massive stars or a black hole.
+- Planets are **kinematic** Sable bodies: their pose (orbit + axial spin) is set from the integrator every physics tick
+  instead of letting Rapier integrate a body of millions of blocks. Ships and entities still collide with them normally.
+- The orbital state lives in `SavedData` and advances even while a planet's plot is unloaded. Sable loading tickets
+  keep nearby planets loaded.
+- Day and night come from the planet's actual spin relative to the star. Seasons come from axial tilt.
+
+### Gravity and standing on a planet
+- Each planet is a gravitating source in the spacetime layer: weak-field (Newtonian + 1PN) outside, with uniform-density
+  interior gravity below the surface.
+- **Entity "up" follows the face you stand on**: the six cube-face directions, in the planet's local frame. Sable already
+  carries entities in a sub-level's local frame, so on a face the gravity is axis-aligned there. Movement, collision,
+  camera, and rendering need a gravity-direction layer (6 directions, smoothed camera roll on face transitions).
+  This is the biggest mixin surface in the mod, so it gets its own spike first.
+
+### Star and sky
+- The star is a gravitating source rendered as an emissive sphere (limb darkening, granulation noise, corona). Sky light
+  and block light follow the star direction. Heat damage up close.
+- Starfield skybox, other planets visible as lit discs/spheres, and eclipses for free from geometry.
+
+### Presets
+- **Sol-like**: a star, 3–5 rocky planets, a moon or two.
+- **Gargantua**: planets orbiting a spinning black hole instead of a star. The innermost one is a Miller's planet
+  (tick-ledger time dilation from M7, disk lighting from M5/M9). This ties the whole mod together.
+
+### Physics caveat (c and compactness)
+At c = 64 a block planet with Minecraft-like surface gravity is absurdly compact: `GM/(Rc²) = gR/c²` ≈ 0.5 for
+R = 100, g = 20 b/s². That's halfway to being a black hole. The planetoid dimension therefore gets its own **c = 512** (per-dimension c),
+which gives compactness under 1%. Planets then behave like planets, while the star (or Gargantua) still shows strong-field
+effects up close. Surface gravity and c are per-world config.
+
+### Travel
+Propellers and balloons don't work in vacuum, so interplanetary flight needs thrusters (the M11 Lorentz Drive, or
+a simpler rocket thruster added here). Launch windows and Hohmann transfers fall out of the real orbits.
+
 ## 10. Create / Aeronautics integration
 
 - **Kinetic time dilation**: a mixin on `KineticBlockEntity` speed / ticking scales the *visual and functional* RPM by the
@@ -394,6 +450,7 @@ Aberration + spectral Doppler + searchlight (§7), applied last, so lensing resu
 | **M11** | Special relativity | Speed cap c, 4-momentum thrust, SR post pass, retarded-time rendering / Terrell rotation. |
 | **M12** | Wormholes | Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. |
 | **M13** | Content and polish | Progression, recipes, Ponders, advancements, configs, Iris fallback, perf pass, MP testing. |
+| **M14** | **Planetoid world type** | Spike (Sable plot size limits, lazy plot generation, entity gravity direction). Cube-sphere generator + curvature warp, kinematic N-body orbits, face-relative gravity, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
 | Stretch | | Wormhole time machines + chronology protection, Neutronium-star mergers, GW energy harvesting, charged BHs, space dimension with starfield. |
 
 Order rationale: the visuals (M3) come early for motivation and to catch rendering-compat problems early. The Sable
@@ -412,14 +469,16 @@ spike (M0) comes first because it's the biggest unknown.
 | World-eating BHs kill servers | Per-tick block budget, max mass, gamerule, protected tags, evaporation |
 | Float precision in shaders at large coordinates | Camera-relative uniforms, double math on CPU only |
 | Superposition of sources isn't real GR | Documented. The dominant source is exact near itself. Mergers use PN + NR fits, not a live NR solve |
+| Planetoid: arbitrary entity gravity direction is a huge mixin surface; Sable plot size/lazy generation unknown | M14 starts with a spike. Gravity is limited to 6 cube-face directions per planet, not arbitrary vectors |
 | Binary lensing cost (no spherical symmetry) | Half-res ray march, adaptive steps, LOW preset falls back to two independent LUT lenses |
 | Scope | Milestones are shippable on their own: an M6 alpha (BHs + spaghetti) is already a fun mod |
 
 ---
 
 ## 13. Open decisions (defaults chosen; change if you disagree)
-1. **c = 64 blocks/s** default (configurable per world).
+1. **c = 64 blocks/s** default, overridable per dimension (see 6).
 2. **BH growth on by default** in survival, with evaporation keeping small ones in check.
 3. **Multiplayer time dilation = LEDGER_ONLY** default.
 4. **SR visuals = SEEN** (Terrell-correct) default.
 5. Package `net.kernelpanicsoft.relativity`, mod id `create_relativity`.
+6. ✅ **c is per dimension**: 64 by default, 512 in planetoid space so planets aren't near-black-holes (decided).
