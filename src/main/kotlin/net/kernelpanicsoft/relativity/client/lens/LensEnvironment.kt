@@ -4,7 +4,6 @@ import com.mojang.blaze3d.platform.GlStateManager
 import foundry.veil.api.client.render.VeilLevelPerspectiveRenderer
 import foundry.veil.api.client.render.framebuffer.AdvancedFbo
 import net.kernelpanicsoft.relativity.config.RelativityConfig
-import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.client.Minecraft
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent
 import org.joml.Matrix4f
@@ -75,7 +74,7 @@ object LensEnvironment {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
 		val camera = event.camera.position
-		val hole = SpacetimeField.blackHoles(level).minByOrNull { it.center.distanceToSqr(camera) } ?: return
+		val hole = BlackHoleLens.visibleHoles(level).minByOrNull { it.center.distanceToSqr(camera) } ?: return
 		if (hole.id != capturedHole || captureCenter.x != hole.x || captureCenter.y != hole.y || captureCenter.z != hole.z) {
 			capturedHole = hole.id
 			capturedFaces = 0

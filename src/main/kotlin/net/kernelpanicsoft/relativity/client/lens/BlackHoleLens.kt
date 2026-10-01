@@ -7,11 +7,15 @@ import foundry.veil.forge.event.ForgeVeilPostProcessingEvent
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.physics.lens.SchwarzschildLens
+import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
+import net.kernelpanicsoft.relativity.spacetime.BlackHole
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.client.Minecraft
+import net.minecraft.world.level.Level
 import net.neoforged.neoforge.client.event.ClientTickEvent
 import net.neoforged.neoforge.client.event.ViewportEvent
 import net.neoforged.neoforge.common.NeoForge
+import org.joml.Matrix4f
 import org.joml.Vector4f
 import java.util.concurrent.CompletableFuture
 
@@ -30,6 +34,12 @@ object BlackHoleLens {
 	private const val LUT_WIDTH = 512
 	private const val LUT_HEIGHT = 1024
 
+	/**
+	 * Holes bending light less than this (≈ r_s / distance, in radians: about a pixel) are skipped. With none left the
+	 * lens, its capture and overscan all switch off.
+	 */
+	private const val MIN_BENDING = 1e-3
+
 	/** Must match MAX_HOLES in black_hole_lens.fsh. */
 	private const val MAX_HOLES = 8
 
@@ -47,6 +57,7 @@ object BlackHoleLens {
 		table = CompletableFuture.supplyAsync { SchwarzschildLens.buildTable(LUT_WIDTH, LUT_HEIGHT) }
 		NeoForge.EVENT_BUS.addListener(ClientTickEvent.Post::class.java) { onClientTick() }
 		NeoForge.EVENT_BUS.addListener(ForgeVeilPostProcessingEvent.Pre::class.java, ::onPrePostProcessing)
+		NeoForge.EVENT_BUS.addListener(ForgeVeilPostProcessingEvent.Post::class.java, ::onPostPostProcessing)
 		NeoForge.EVENT_BUS.addListener(ViewportEvent.ComputeFov::class.java, ::onComputeFov)
 	}
 
@@ -79,10 +90,33 @@ object BlackHoleLens {
 		}
 
 		val level = minecraft.level
-		val wanted = level != null && RelativityConfig.Client.Render.lensing && SpacetimeField.blackHoles(level).isNotEmpty()
+		val wanted = level != null && RelativityConfig.Client.Render.lensing && visibleHoles(level).isNotEmpty()
 		val post = VeilRenderSystem.renderer().postProcessingManager
 		if (wanted && !post.isActive(PIPELINE)) post.add(PIPELINE)
 		else if (!wanted && post.isActive(PIPELINE)) post.remove(PIPELINE)
+	}
+
+	/** True while the lens pipeline is running this frame. */
+	val active: Boolean
+		get() = VeilRenderSystem.renderer().postProcessingManager.isActive(PIPELINE)
+
+	/** Right after our pass: undistorted debug gizmos on top, with the screen's real projection. */
+	private fun onPostPostProcessing(event: ForgeVeilPostProcessingEvent.Post) {
+		if (event.name != PIPELINE || VeilLevelPerspectiveRenderer.isRenderingPerspective()) return
+		val window = Minecraft.getInstance().window
+		val aspect = window.width.toFloat() / window.height
+		val projection = if (displayTanHalfFov > 0.0) {
+			Matrix4f().setPerspective((2.0 * kotlin.math.atan(displayTanHalfFov)).toFloat(), aspect, 0.05f, 4096f)
+		} else {
+			Matrix4f(com.mojang.blaze3d.systems.RenderSystem.getProjectionMatrix())
+		}
+		SpacetimeDebugRenderer.renderAfterLens(projection)
+	}
+
+	/** Holes close enough to bend light noticeably as seen from the camera. */
+	fun visibleHoles(level: Level): List<BlackHole> {
+		val camera = Minecraft.getInstance().gameRenderer.mainCamera.position
+		return SpacetimeField.blackHoles(level).filter { it.schwarzschildRadius > MIN_BENDING * it.center.distanceTo(camera) }
 	}
 
 	/**
@@ -100,9 +134,7 @@ object BlackHoleLens {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
 		val camera = minecraft.gameRenderer.mainCamera.position
-		val holes = SpacetimeField.blackHoles(level)
-			.sortedBy { it.center.distanceToSqr(camera) }
-			.take(MAX_HOLES)
+		val holes = visibleHoles(level).sortedBy { it.center.distanceToSqr(camera) }.take(MAX_HOLES)
 		for ((i, hole) in holes.withIndex()) {
 			holeUniforms[i].set(
 				(hole.x - camera.x).toFloat(), (hole.y - camera.y).toFloat(), (hole.z - camera.z).toFloat(),

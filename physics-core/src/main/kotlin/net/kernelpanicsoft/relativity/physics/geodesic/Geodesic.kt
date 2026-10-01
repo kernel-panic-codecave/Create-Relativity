@@ -43,6 +43,17 @@ class Geodesic(val spacetime: Spacetime, rtol: Double = 1e-9, atol: Double = 1e-
 			return sum
 		}
 
+		/**
+		 * Proper-time rate `dτ/dt = √(−g_{μν} v^μ v^ν)` of something at [x] moving with coordinate 3-velocity [v]
+		 * (`v^μ = (1, v)`, c = 1): how fast its clock runs against coordinate time. 0 if that motion isn't timelike
+		 * there (at or past light speed, or "at rest" inside a horizon).
+		 */
+		fun properTimeRate(spacetime: Spacetime, x: DoubleArray, v: DoubleArray): Double {
+			val dir = doubleArrayOf(1.0, v[0], v[1], v[2])
+			val n = dot(spacetime, x, dir, 0, dir, 0)
+			return if (n < 0.0) sqrt(-n) else 0.0
+		}
+
 		/** `g(u, u)` of a state: −1 for a normalised timelike geodesic, 0 for a null one. */
 		fun norm(spacetime: Spacetime, state: DoubleArray): Double = dot(spacetime, state, state, 4, state, 4)
 

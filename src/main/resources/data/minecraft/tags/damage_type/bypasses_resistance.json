@@ -1,0 +1,13 @@
+{
+  "replace": false,
+  "values": [
+    "create_relativity:singularity",
+    "create_relativity:singularity_density",
+    "create_relativity:singularity_divide",
+    "create_relativity:singularity_future",
+    "create_relativity:singularity_rounding",
+    "create_relativity:singularity_information",
+    "create_relativity:singularity_bottom",
+    "create_relativity:singularity_entropy"
+  ]
+}

@@ -1,6 +1,7 @@
 package net.kernelpanicsoft.relativity.physics.lens
 
 import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -51,7 +52,10 @@ object SchwarzschildLens {
 			val uNext = u + h / 6.0 * (k1u + 2 * k2u + 2 * k3u + k4u)
 			val duNext = du + h / 6.0 * (k1d + 2 * k2d + 2 * k3d + k4d)
 			if (uNext >= 1.0) return Double.NaN // through the horizon
-			if (uNext <= 0.0) return phi + h * u / (u - uNext) // reached infinity: interpolate the crossing
+			// About to reach infinity. Out here gravity is negligible, so finish along the straight line through the
+			// current state: u = A sin(φ∞ − φ), u' = −A cos(φ∞ − φ). Unlike interpolating across the step, this is
+			// continuous in the initial conditions, so rays escaping in the first step and in later ones agree.
+			if (uNext <= 0.0) return phi + atan2(u, -du)
 			u = uNext
 			du = duNext
 			phi += h

@@ -4,6 +4,7 @@ import dev.architectury.platform.Platform
 import net.kernelpanicsoft.relativity.client.RelativityClient
 import net.kernelpanicsoft.relativity.command.RelativityCommands
 import net.kernelpanicsoft.relativity.config.RelativityConfig
+import net.kernelpanicsoft.relativity.entity.EntitySpacetime
 import net.kernelpanicsoft.relativity.network.RelativityNetwork
 import net.kernelpanicsoft.relativity.sable.RelativityForceGroups
 import net.kernelpanicsoft.relativity.sable.SableSpacetimeForces
@@ -34,6 +35,7 @@ object CreateRelativity {
 		RelativityForceGroups.register()
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onPrePhysicsTick)
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onLevelTick)
+		NeoForge.EVENT_BUS.addListener(EntitySpacetime::onEntityTick)
 		NeoForge.EVENT_BUS.addListener(RelativityCommands::register)
 		if (FMLEnvironment.dist.isClient) RelativityClient.init()
 		LOGGER.info("Create: Relativity initialized")

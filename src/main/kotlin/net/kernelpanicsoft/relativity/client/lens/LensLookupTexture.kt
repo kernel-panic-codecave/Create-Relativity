@@ -17,6 +17,12 @@ class LensLookupTexture(private val width: Int, private val height: Int, private
 	fun upload() {
 		RenderSystem.assertOnRenderThreadOrInit()
 		bind()
+		// Minecraft leaves its own unpack state behind from texture uploads; a stale row length or skip would
+		// read our rows with the wrong stride and leave the last ones (rays looking away from the hole) as zeros.
+		GlStateManager._pixelStore(GL11.GL_UNPACK_ROW_LENGTH, 0)
+		GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_ROWS, 0)
+		GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_PIXELS, 0)
+		GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4)
 		val buffer = MemoryUtil.memAllocFloat(data.size)
 		try {
 			buffer.put(data).flip()

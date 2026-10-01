@@ -2,6 +2,7 @@ package net.kernelpanicsoft.relativity.physics
 
 import net.kernelpanicsoft.relativity.physics.lens.SchwarzschildLens
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.sqrt
 import kotlin.test.Test
@@ -40,6 +41,19 @@ class SchwarzschildLensTest {
 	fun `looking away from the hole barely bends anything`() {
 		val phi = SchwarzschildLens.escapeAngle(0.01, 0.9 * PI)
 		assertTrue(kotlin.math.abs(phi - 0.1 * PI) < 0.02, "outward ray at 100 r_s, got ${phi - 0.1 * PI}")
+	}
+
+	@Test
+	fun `escape angle is smooth looking away from the hole`() {
+		// A seam here shows up on screen as a disc around the point directly opposite the hole.
+		val u0 = 2.0 / 118.0
+		val step = 0.0005
+		val psis = generateSequence(0.85 * PI) { it + step }.takeWhile { it < PI - step }.toList()
+		val bends = psis.map { SchwarzschildLens.escapeAngle(u0, it) - (PI - it) }
+		for (i in 1 until bends.size - 1) {
+			val curvature = abs(bends[i + 1] - 2 * bends[i] + bends[i - 1])
+			assertTrue(curvature < 1e-7, "bend jumps near psi=${psis[i]}: second difference $curvature")
+		}
 	}
 
 	@Test

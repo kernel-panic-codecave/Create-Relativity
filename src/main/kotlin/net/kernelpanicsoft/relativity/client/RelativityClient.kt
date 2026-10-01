@@ -12,6 +12,7 @@ object RelativityClient {
 	fun init() {
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, SpacetimeDebugRenderer::render)
 		BlackHoleLens.init()
+		dev.nyon.klf.MOD_BUS.addListener(ProperTimeHud::register)
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, LensEnvironment::render)
 		NeoForge.EVENT_BUS.addListener(ClientPlayerNetworkEvent.LoggingOut::class.java) { SpacetimeField.clearClient() }
 	}

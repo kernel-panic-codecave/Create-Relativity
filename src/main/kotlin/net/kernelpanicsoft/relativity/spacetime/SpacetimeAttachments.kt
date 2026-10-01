@@ -8,6 +8,9 @@ import net.kernelpanicsoft.relativity.CreateRelativity
 /** Level-scoped persistent state. Archie can't sync level attachments, so [RelativityNetwork] pushes them. */
 object SpacetimeAttachments : AttachmentRegistry(CreateRelativity.MOD_ID) {
 	val blackHoles by attachment<BlackHoles> { BlackHoles() }
+
+	/** Seconds a player's own clock has fallen behind world time (proper time vs coordinate time). Synced for the HUD. */
+	val properTimeLag by doubleAttachment(sync = true)
 }
 
 /**
