@@ -18,6 +18,8 @@ uniform sampler2D Environment;      // 3x2 cube-face colour atlas
 uniform sampler2D EnvironmentDepth; // matching raw depth
 uniform int EnvironmentReady;
 uniform vec3 CaptureCenter;         // where the cube was captured, relative to the camera
+uniform float DisplayTanHalfFov;    // > 0: the frame was rendered wider than the screen (overscan); this is the
+                                    // screen's tan(vertical FOV / 2), and output pixels are cropped back to it
 
 #define MAX_HOLES 8
 uniform int HoleCount;
@@ -48,6 +50,21 @@ vec3 viewRay(vec2 uv) {
 }
 
 // Distance to the surface at uv; the sky (nothing drawn) counts as infinitely far.
+// Ray through an output pixel: the screen's own FOV when overscanning, otherwise the frame's.
+vec3 displayRay(vec2 uv) {
+    if (DisplayTanHalfFov <= 0.0) return viewRay(uv);
+    float aspect = VeilCamera.ProjMat[1][1] / VeilCamera.ProjMat[0][0];
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec3 view = vec3(ndc.x * DisplayTanHalfFov * aspect, ndc.y * DisplayTanHalfFov, -1.0);
+    return normalize((VeilCamera.IViewMat * vec4(view, 0.0)).xyz);
+}
+
+// Where a world direction lands in the (possibly overscanned) frame.
+vec2 frameUv(vec3 dir) {
+    vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(dir, 0.0));
+    return clip.xy / clip.w * 0.5 + 0.5;
+}
+
 float sceneDistance(vec2 uv) {
     float depth = texture(DiffuseDepthSampler, uv).r;
     if (depth >= SKY_DEPTH) return 1e30;
@@ -110,10 +127,13 @@ vec3 traceEnvironment(vec3 origin, vec3 dir, out bool hit) {
 }
 
 void main() {
-    vec4 original = texture(DiffuseSampler0, texCoord);
+    // With overscan the frame is wider than the screen: an output pixel's own content sits elsewhere in it.
+    vec3 dir = displayRay(texCoord);
+    vec2 ownUv = texCoord;
+    if (DisplayTanHalfFov > 0.0) ownUv = frameUv(dir);
+    vec4 original = texture(DiffuseSampler0, ownUv);
     if (HoleCount == 0) { fragColor = original; return; }
-    vec3 dir = viewRay(texCoord);
-    float sceneDist = sceneDistance(texCoord);
+    float sceneDist = sceneDistance(ownUv);
     vec3 origin = vec3(0.0); // start of the current straight leg, camera-relative
     bool bent = false;
     float bendDistance = 0.0; // distance from the camera to the last bend point

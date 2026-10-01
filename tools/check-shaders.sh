@@ -20,6 +20,14 @@ for shader in src/main/resources/assets/create_relativity/pinwheel/shaders/progr
 		status=1
 		continue
 	fi
+	# A standalone postfix increment/decrement statement loses its semicolon in Veil's re-print
+	# (seen: "unexpected IF, expecting ',' or ';'" after `n++;`). Use `n += 1;`; for-loop headers are fine.
+	if perl -ne 'print "$.: $_" if /^\s*\w+(\[[^\]]*\])?\s*(\+\+|--)\s*;/' "$shader" | tee "$tmp/postfix" | grep -q .; then
+		echo "FAIL  $shader: standalone postfix ++/-- statement (Veil drops the semicolon)"
+		sed 's/^/      /' "$tmp/postfix"
+		status=1
+		continue
+	fi
 	if glslangValidator "$out" > "$tmp/log" 2>&1; then
 		echo "ok    $shader"
 	else

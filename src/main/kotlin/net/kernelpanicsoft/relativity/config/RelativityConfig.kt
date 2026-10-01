@@ -44,6 +44,11 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.environment_capture.comment"),
 				default = true,
 			)
+			val overscan by intSlider(
+				title = Component.translatable("config.create_relativity.render.overscan"),
+				comment = Component.translatable("config.create_relativity.render.overscan.comment"),
+				min = 0, max = 50, default = 15,
+			)
 			val captureDistance by intSlider(
 				title = Component.translatable("config.create_relativity.render.capture_distance"),
 				comment = Component.translatable("config.create_relativity.render.capture_distance.comment"),

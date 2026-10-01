@@ -10,6 +10,7 @@ import net.kernelpanicsoft.relativity.physics.lens.SchwarzschildLens
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.client.Minecraft
 import net.neoforged.neoforge.client.event.ClientTickEvent
+import net.neoforged.neoforge.client.event.ViewportEvent
 import net.neoforged.neoforge.common.NeoForge
 import org.joml.Vector4f
 import java.util.concurrent.CompletableFuture
@@ -36,10 +37,33 @@ object BlackHoleLens {
 	private var textureReady = false
 	private val holeUniforms = Array(MAX_HOLES) { Vector4f() }
 
+	/**
+	 * tan(½ vertical FOV) of what the player actually sees, while the level is being rendered wider than that
+	 * (overscan) so lensed rays near the screen edges still find rendered pixels; 0 when not overscanning.
+	 */
+	private var displayTanHalfFov = 0.0
+
 	fun init() {
 		table = CompletableFuture.supplyAsync { SchwarzschildLens.buildTable(LUT_WIDTH, LUT_HEIGHT) }
 		NeoForge.EVENT_BUS.addListener(ClientTickEvent.Post::class.java) { onClientTick() }
 		NeoForge.EVENT_BUS.addListener(ForgeVeilPostProcessingEvent.Pre::class.java, ::onPrePostProcessing)
+		NeoForge.EVENT_BUS.addListener(ViewportEvent.ComputeFov::class.java, ::onComputeFov)
+	}
+
+	/**
+	 * Widens the level's field of view by the configured margin while the lens is active; the lens pass crops back
+	 * to the real FOV. The hand (which doesn't use the configured FOV) and perspective captures are left alone.
+	 */
+	private fun onComputeFov(event: ViewportEvent.ComputeFov) {
+		if (!event.usedConfiguredFov() || VeilLevelPerspectiveRenderer.isRenderingPerspective()) return
+		val margin = RelativityConfig.Client.Render.overscan / 100.0
+		if (margin <= 0.0 || !VeilRenderSystem.renderer().postProcessingManager.isActive(PIPELINE)) {
+			displayTanHalfFov = 0.0
+			return
+		}
+		val tanHalf = kotlin.math.tan(Math.toRadians(event.fov / 2.0))
+		displayTanHalfFov = tanHalf
+		event.fov = minOf(Math.toDegrees(2.0 * kotlin.math.atan(tanHalf * (1.0 + margin))), 170.0)
 	}
 
 	private fun onClientTick() {
@@ -70,6 +94,7 @@ object BlackHoleLens {
 		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
 			// Veil runs stage passes inside perspective renders too; the environment capture must stay unlensed.
 			event.pipeline.getUniformSafe("HoleCount").setInt(0)
+			event.pipeline.getUniformSafe("DisplayTanHalfFov").setFloat(0f)
 			return
 		}
 		val minecraft = Minecraft.getInstance()
@@ -85,6 +110,7 @@ object BlackHoleLens {
 			)
 		}
 		val pipeline = event.pipeline
+		pipeline.getUniformSafe("DisplayTanHalfFov").setFloat(displayTanHalfFov.toFloat())
 		pipeline.getUniformSafe("HoleCount").setInt(holes.size)
 		pipeline.getUniformSafe("Holes").setVectors(*holeUniforms)
 		val environmentReady = LensEnvironment.ready
