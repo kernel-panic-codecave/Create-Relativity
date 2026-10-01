@@ -85,6 +85,9 @@ object Accretion {
 		val eddington = RelativityConfig.eddingtonRate(hole.schwarzschildRadius)
 		val ratio = if (eddington > 0.0) hole.accretionRate / eddington else 0.0
 
+		// Matter swallowed straight through the horizon adds mass but radiates nothing (no disk to heat); only what
+		// arrives from orbit (captured debris, entities, ships, the feed) counts toward the disk's luminosity.
+		val luminous = eaten.mass
 		if (growth) {
 			eaten.mass += eatInsideHorizon(level, hole, config.eatBudget)
 			if (ratio < 1.0) ripLooseGround(level, hole, units, (config.ripBudget * (1.0 - ratio)).toInt())
@@ -116,7 +119,7 @@ object Accretion {
 
 		val rs = min(2.0 * m, config.maxSchwarzschildRadius)
 		val spin = (j / (m * m)).coerceIn(-BlackHole.MAX_SPIN, BlackHole.MAX_SPIN)
-		val rate = (eaten.mass + fed) * TICKS_PER_SECOND
+		val rate = (luminous + fed) * TICKS_PER_SECOND
 		val alpha = 1.0 / (RATE_SMOOTHING_SECONDS * TICKS_PER_SECOND)
 		val smoothed = hole.accretionRate + (rate - hole.accretionRate) * alpha
 		if (rs == hole.schwarzschildRadius && spin == hole.spin && abs(smoothed - hole.accretionRate) < 1e-9) return

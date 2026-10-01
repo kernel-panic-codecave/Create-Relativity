@@ -54,7 +54,7 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 			val eddingtonRatePerBlock by double(
 				title = Component.translatable("config.create_relativity.black_holes.eddington_rate"),
 				comment = Component.translatable("config.create_relativity.black_holes.eddington_rate.comment"),
-				default = 20.0,
+				default = 100.0,
 			)
 			val maxSchwarzschildRadius by double(
 				title = Component.translatable("config.create_relativity.black_holes.max_radius"),

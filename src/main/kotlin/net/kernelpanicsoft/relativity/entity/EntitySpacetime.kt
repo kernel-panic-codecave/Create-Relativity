@@ -86,8 +86,11 @@ object EntitySpacetime {
 		val motion = entity.deltaMovement
 		val velocity = Vector3d(motion.x, motion.y, motion.z).mul(TICKS_PER_SECOND)
 		if (velocity.length() > MAX_FIELD_SPEED * c) velocity.normalize(MAX_FIELD_SPEED * c)
-		val accel = SpacetimeField.acceleration(level, center, velocity, Vector3d())
-		accel.add(SpacetimeField.radiationAcceleration(level, center, couplingOf(entity), Vector3d()))
+		// Leapfrog: take the pull at the middle of this tick's motion, not its start. One kick per tick from the start
+		// point pumps energy into tight orbits near a hole and flings debris out; the midpoint conserves it.
+		val midpoint = Vector3d(velocity).mul(0.5 / TICKS_PER_SECOND).add(center)
+		val accel = SpacetimeField.acceleration(level, midpoint, velocity, Vector3d())
+		accel.add(SpacetimeField.radiationAcceleration(level, midpoint, couplingOf(entity), Vector3d()))
 		if (accel.lengthSquared() == 0.0) return
 		// blocks/s² over one tick, expressed in blocks/tick per tick.
 		val perTick = 1.0 / (TICKS_PER_SECOND * TICKS_PER_SECOND)

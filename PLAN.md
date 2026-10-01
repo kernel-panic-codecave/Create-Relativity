@@ -496,7 +496,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M2** ✅ | Spacetime layer + debug | `/relativity bh create`, synced sources, debug renderer for r_s / ISCO / photon sphere. |
 | **M3** ✅ | **Lensing shader** (Schwarzschild LUT + cubemap) | Static BH looks right: shadow size, Einstein ring. *First visual wow point.* Known limits: the 360° capture (256²/face, from the nearest hole) smears where strongly magnified and its fog is centred on the hole; spin ignored until M9. |
 | **M4** ✅ | Entity geodesics + horizon + proper time | Items and mobs orbit, precess, and fall in. Players die at the singularity. HUD chronometer. |
-| **M5** | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation from a game Planck length; holes vanish in a final burst at r_s = l_P. |
+| **M5** ✅ | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation from a game Planck length; holes vanish in a final burst at r_s = l_P. Still open: Hawking glow on micro-holes; debris clumps feeding the disk's look. |
 | **M6** | **Spaghettification** | Tidal chains, deformation renderer, first-person stretch, death message. *Second wow point.* |
 | **M7** | Time dilation systems | Proper-time local tick rates for BEs, entities, sections and Sable sub-levels (scheduled + random ticks too), per-region render interpolation, light-delay presentation queue on clients, SP reference frame follows the player, MP `SLOW_PLAYER`/`LEDGER_ONLY`. |
 | **M8** | Sable/Aeronautics integration | Ships orbit, slingshot, get tidally ripped apart. Kinetic dilation overstress. |

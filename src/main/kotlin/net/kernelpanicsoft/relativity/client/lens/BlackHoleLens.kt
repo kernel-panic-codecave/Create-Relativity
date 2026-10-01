@@ -113,6 +113,25 @@ object BlackHoleLens {
 		SpacetimeDebugRenderer.renderAfterLens(projection)
 	}
 
+	/**
+	 * The nearest hole's accretion disk: brightness from its Eddington ratio (none if it isn't feeding), inner edge
+	 * at its ISCO, outer edge four times that, which way it turns, and time for the disk's rotating turbulence.
+	 */
+	private fun uploadDisk(pipeline: foundry.veil.api.client.render.post.PostPipeline, level: Level, hole: BlackHole?, minecraft: Minecraft) {
+		if (hole == null || hole.accretionRate <= 0.0) {
+			pipeline.getUniformSafe("Disk").setVector(0f, 0f, 0f, 0f)
+			return
+		}
+		val ratio = hole.accretionRate / RelativityConfig.eddingtonRate(hole.schwarzschildRadius)
+		val inner = hole.equatorialExtent(hole.isco(prograde = true))
+		pipeline.getUniformSafe("Disk").setVector(
+			ratio.coerceIn(0.05, 2.0).toFloat(), inner.toFloat(), (4.0 * inner).toFloat(), if (hole.spin < 0.0) -1f else 1f,
+		)
+		val c = RelativityConfig.speedOfLight(level.dimension())
+		val seconds = (level.gameTime % 72000L + minecraft.timer.getGameTimeDeltaPartialTick(false)) / 20.0
+		pipeline.getUniformSafe("DiskTime").setFloat((seconds * c).toFloat())
+	}
+
 	/** Holes close enough to bend light noticeably as seen from the camera. */
 	fun visibleHoles(level: Level): List<BlackHole> {
 		val camera = Minecraft.getInstance().gameRenderer.mainCamera.position
@@ -143,6 +162,7 @@ object BlackHoleLens {
 		}
 		val pipeline = event.pipeline
 		pipeline.getUniformSafe("DisplayTanHalfFov").setFloat(displayTanHalfFov.toFloat())
+		uploadDisk(pipeline, level, holes.firstOrNull(), minecraft)
 		pipeline.getUniformSafe("HoleCount").setInt(holes.size)
 		pipeline.getUniformSafe("Holes").setVectors(*holeUniforms)
 		val environmentReady = LensEnvironment.ready
