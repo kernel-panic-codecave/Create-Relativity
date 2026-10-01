@@ -180,8 +180,12 @@ multiplayer would mean showing events that haven't happened yet. So:
   from a spinning ship turns into a Kerr BH.
 - **Energy budget**: radiative efficiency η(a) from the ISCO (5.7% for Schwarzschild → 32% for maximal Kerr) becomes
   disk luminosity → light level, heat damage, and fire spread near an actively feeding BH.
-- **Hawking evaporation** (config, on by default): `dM/dt ∝ −1/M²`. Tiny BHs blow up (a scripted explosion scaled by the
-  mass left), which keeps players from spawning micro-BHs everywhere. Big ones are effectively permanent.
+- **Hawking evaporation** (config, on by default), from a game **Planck length** `l_P` (per-dimension config,
+  default 1/64 block, barely visible). It fixes ħ through `l_P = √(ħG/c³)`, so temperature, luminosity and lifetime
+  all follow from the real formulas: `dM/dt = −ħc⁴/(15360πG²M²)`, lifetime `t = 5120π·M³/(l_P²·c)` (M = r_s/2 in
+  blocks). At c = 64, l_P = 1/64: r_s = 2 lasts ~12 days of real time, r_s = 0.2 ~17 min, r_s = 0.1 ~2 min.
+  When **r_s reaches l_P** the hole is gone: a final burst of the remaining energy (light, heat, an explosion scaled
+  by what's left) and the source is removed. Shrinking holes get hotter and brighter, as they should.
 - **Griefing guards**: gamerule `relativityBlackHoleGrowth`, a max-mass config, protected-block tag, claim-mod hooks.
 
 ### Exotic gameplay
@@ -492,7 +496,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M2** ✅ | Spacetime layer + debug | `/relativity bh create`, synced sources, debug renderer for r_s / ISCO / photon sphere. |
 | **M3** ✅ | **Lensing shader** (Schwarzschild LUT + cubemap) | Static BH looks right: shadow size, Einstein ring. *First visual wow point.* Known limits: the 360° capture (256²/face, from the nearest hole) smears where strongly magnified and its fog is centred on the hole; spin ignored until M9. |
 | **M4** ✅ | Entity geodesics + horizon + proper time | Items and mobs orbit, precess, and fall in. Players die at the singularity. HUD chronometer. |
-| **M5** | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation. |
+| **M5** | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation from a game Planck length; holes vanish in a final burst at r_s = l_P. |
 | **M6** | **Spaghettification** | Tidal chains, deformation renderer, first-person stretch, death message. *Second wow point.* |
 | **M7** | Time dilation systems | Proper-time local tick rates for BEs, entities, sections and Sable sub-levels (scheduled + random ticks too), per-region render interpolation, light-delay presentation queue on clients, SP reference frame follows the player, MP `SLOW_PLAYER`/`LEDGER_ONLY`. |
 | **M8** | Sable/Aeronautics integration | Ships orbit, slingshot, get tidally ripped apart. Kinetic dilation overstress. |
