@@ -1,0 +1,4 @@
+{
+  "force_group.create_relativity.spacetime_curvature": "Spacetime Curvature",
+  "force_group.create_relativity.spacetime_curvature.description": "Geodesic acceleration from nearby gravitational sources"
+}

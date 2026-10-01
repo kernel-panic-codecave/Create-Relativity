@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+out/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Minecraft / mod dev
+run/
+runs/
+*.log
+*.hprof
+
+# Generated sources (architectury / multisource)
+src/*/generatedSources/
