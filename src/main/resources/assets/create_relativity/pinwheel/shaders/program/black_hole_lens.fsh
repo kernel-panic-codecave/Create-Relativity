@@ -140,6 +140,65 @@ vec3 traceEnvironment(vec3 origin, vec3 dir, out bool hit) {
     return texture(Environment, cubeUv(dir).xy).rgb; // sky at infinity
 }
 
+// Blackbody colour (approximate sRGB, brightest channel ~1) at [kelvin]; Tanner Helland's fit.
+vec3 blackbody(float kelvin) {
+    float t = clamp(kelvin, 1000.0, 40000.0) / 100.0;
+    float r = 1.0;
+    float g = clamp(0.39008158 * log(t) - 0.63184144, 0.0, 1.0);
+    float b = 0.0;
+    if (t > 66.0) {
+        r = clamp(1.29293619 * pow(t - 60.0, -0.1332048), 0.0, 1.0);
+        g = clamp(1.12989086 * pow(t - 60.0, -0.0755148), 0.0, 1.0);
+    }
+    if (t >= 66.0) {
+        b = 1.0;
+    } else if (t > 19.0) {
+        b = clamp(0.54320679 * log(t - 10.0) - 1.19625409, 0.0, 1.0);
+    }
+    return vec3(r, g, b);
+}
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float valueNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 w = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), w.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), w.x), w.y);
+}
+
+float turbulence(vec2 p) {
+    float sum = 0.0;
+    float amplitude = 0.5;
+    for (int i = 0; i < 4; i += 1) {
+        sum += amplitude * valueNoise(p);
+        p *= 2.03;
+        amplitude *= 0.5;
+    }
+    return sum;
+}
+
+// Thin-disk flux shape (1 - sqrt(r_in/r)) (r_in/r)^3, normalised to peak at 1 (peak 0.05667 at r = 1.36 r_in).
+float diskFlux(float r, float rIn) {
+    float x = rIn / r;
+    return max((1.0 - sqrt(x)) * x * x * x, 0.0) / 0.05667;
+}
+
+// Disk colour and opacity at radius r, with frequency shift g (observed / emitted), azimuth angle (for the
+// turbulence) and signed angular velocity omega (radians per block of light travel).
+vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega) {
+    float flux = diskFlux(r, rIn);
+    float turning = angle - omega * DiskTime;
+    float swirl = 0.55 + 0.9 * turbulence(vec2(cos(turning), sin(turning)) * (2.0 + 6.0 * log(r / rIn + 1.0)));
+    float temperature = mix(2500.0, 11000.0, clamp(Disk.x, 0.0, 1.5) / 1.5) * pow(flux, 0.25);
+    vec3 light = blackbody(temperature * g) * (flux * g * g * g * g) * swirl * (1.5 + 2.0 * Disk.x);
+    vec3 color = vec3(1.0) - exp(-light);
+    float alpha = clamp(flux * 3.0, 0.0, 1.0) * smoothstep(rOut, 0.8 * rOut, r);
+    return vec4(color, alpha);
+}
+
 // ---- Kerr ----
 // Kerr-Schild coordinates on a local frame L = (game z, game x, game y): spin axis L.z (game up), and positive spin
 // turns L.x toward L.y (game z toward game x), matching the physics core. The inverse metric is
@@ -192,8 +251,6 @@ struct KerrRay {
     vec3 exitDir;
     vec4 disk;      // disk colour and opacity where the ray crossed it (0 if not)
 };
-
-vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega);
 
 // Marches the view ray along dir past hole i (camera-relative centre, signed spin). The light reaching the camera is
 // followed backwards; reversing time also reverses the spin, so the march runs in a hole of spin -a.
@@ -384,65 +441,6 @@ vec3 lensedScene(vec3 dir, vec4 original, float sceneDist, KerrRay first) {
     float toCapture = smoothstep(0.0, EDGE_BLEND, overshoot);
     if (foreground) toCapture = 1.0;
     return mix(frameColor, traced, toCapture);
-}
-
-// Blackbody colour (approximate sRGB, brightest channel ~1) at [kelvin]; Tanner Helland's fit.
-vec3 blackbody(float kelvin) {
-    float t = clamp(kelvin, 1000.0, 40000.0) / 100.0;
-    float r = 1.0;
-    float g = clamp(0.39008158 * log(t) - 0.63184144, 0.0, 1.0);
-    float b = 0.0;
-    if (t > 66.0) {
-        r = clamp(1.29293619 * pow(t - 60.0, -0.1332048), 0.0, 1.0);
-        g = clamp(1.12989086 * pow(t - 60.0, -0.0755148), 0.0, 1.0);
-    }
-    if (t >= 66.0) {
-        b = 1.0;
-    } else if (t > 19.0) {
-        b = clamp(0.54320679 * log(t - 10.0) - 1.19625409, 0.0, 1.0);
-    }
-    return vec3(r, g, b);
-}
-
-float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-
-float valueNoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 w = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), w.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), w.x), w.y);
-}
-
-float turbulence(vec2 p) {
-    float sum = 0.0;
-    float amplitude = 0.5;
-    for (int i = 0; i < 4; i += 1) {
-        sum += amplitude * valueNoise(p);
-        p *= 2.03;
-        amplitude *= 0.5;
-    }
-    return sum;
-}
-
-// Thin-disk flux shape (1 - sqrt(r_in/r)) (r_in/r)^3, normalised to peak at 1 (peak 0.05667 at r = 1.36 r_in).
-float diskFlux(float r, float rIn) {
-    float x = rIn / r;
-    return max((1.0 - sqrt(x)) * x * x * x, 0.0) / 0.05667;
-}
-
-// Disk colour and opacity at radius r, with frequency shift g (observed / emitted), azimuth angle (for the
-// turbulence) and signed angular velocity omega (radians per block of light travel).
-vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega) {
-    float flux = diskFlux(r, rIn);
-    float turning = angle - omega * DiskTime;
-    float swirl = 0.55 + 0.9 * turbulence(vec2(cos(turning), sin(turning)) * (2.0 + 6.0 * log(r / rIn + 1.0)));
-    float temperature = mix(2500.0, 11000.0, clamp(Disk.x, 0.0, 1.5) / 1.5) * pow(flux, 0.25);
-    vec3 light = blackbody(temperature * g) * (flux * g * g * g * g) * swirl * (1.5 + 2.0 * Disk.x);
-    vec3 color = vec3(1.0) - exp(-light);
-    float alpha = clamp(flux * 3.0, 0.0, 1.0) * smoothstep(rOut, 0.8 * rOut, r);
-    return vec4(color, alpha);
 }
 
 // The nearest feeding hole's accretion disk along this view ray, lensed: the photon's orbit is marched back from

@@ -28,6 +28,14 @@ for shader in src/main/resources/assets/create_relativity/pinwheel/shaders/progr
 		status=1
 		continue
 	fi
+	# Function prototypes (a declaration ending in `);` at top level) crash Veil's processor: it re-prints the
+	# function node and dereferences its missing body. Define functions before their first use instead.
+	if perl -ne 'print "$.: $_" if /^[A-Za-z_]\w*\s+[A-Za-z_]\w*\s*\([^;{]*\)\s*;\s*$/' "$shader" | tee "$tmp/prototype" | grep -q .; then
+		echo "FAIL  $shader: function prototype (crashes Veil's GLSL processor)"
+		sed 's/^/      /' "$tmp/prototype"
+		status=1
+		continue
+	fi
 	if glslangValidator "$out" > "$tmp/log" 2>&1; then
 		echo "ok    $shader"
 	else
