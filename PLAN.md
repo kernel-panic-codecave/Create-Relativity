@@ -366,8 +366,15 @@ A `create_relativity:planetoid` world preset: an empty void dimension (Sable vac
 holding a star system whose planets are **Sable sub-levels in orbit**, with gravity supplied by the spacetime layer.
 
 ### Planets as curved cube-sphere grids
-- Sable sub-levels are rigid voxel grids, so a planet can't literally have curved blocks. Instead each planet is a
-  **cube-sphere**: six face regions, each a flat block grid in plot space, generated so its surface follows the sphere.
+- **One planet = one Sable sub-level** (a single plot and rigid body). A single *seamless* square grid can't wrap a sphere:
+  the sphere's Euler characteristic is 2, while an all-4-neighbor grid needs 0 (a torus). Every sphere grid has defects.
+  Lat-long puts two at the poles, where cells collapse into slivers. The **cube-sphere** spreads eight mild ones over
+  the cube corners (3 faces meet instead of 4) and keeps cells nearly uniform everywhere else. So the planet's grid is a
+  cube-sphere laid out inside its one plot, with our code joining face edges.
+- Each face region is a flat block grid in plot space, generated so its surface follows the sphere.
+- **Face seams** are where the grid bends. Block-neighbor queries across a seam (fluids, redstone, Create shafts and belts,
+  neighbor updates) are remapped to the adjacent face with the right rotation. That's the main engineering cost of the
+  single-grid design, so the M14 spike prototypes it with redstone and a shaft line across a seam.
 - Each face has its own **local down** (the face normal in plot coordinates). Physics and collision use the true voxels.
   A **curvature vertex warp** at render time bends each face's chunks onto the sphere (gnomonic cube→sphere map), so the
   surface looks round and the seams between faces disappear.
@@ -450,7 +457,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M11** | Special relativity | Speed cap c, 4-momentum thrust, SR post pass, retarded-time rendering / Terrell rotation. |
 | **M12** | Wormholes | Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. |
 | **M13** | Content and polish | Progression, recipes, Ponders, advancements, configs, Iris fallback, perf pass, MP testing. |
-| **M14** | **Planetoid world type** | Spike (Sable plot size limits, lazy plot generation, entity gravity direction). Cube-sphere generator + curvature warp, kinematic N-body orbits, face-relative gravity, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
+| **M14** | **Planetoid world type** | Spike (Sable plot size limits, lazy plot generation, entity gravity direction, cross-seam block adjacency). Cube-sphere generator + curvature warp, kinematic N-body orbits, face-relative gravity, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
 | Stretch | | Wormhole time machines + chronology protection, Neutronium-star mergers, GW energy harvesting, charged BHs, space dimension with starfield. |
 
 Order rationale: the visuals (M3) come early for motivation and to catch rendering-compat problems early. The Sable
