@@ -22,6 +22,10 @@ object ReferenceFrame {
 	var playerRate = 1.0
 		private set
 
+	/**
+	 * Server players' clocks (server thread only). Entity equality is by id, and in singleplayer the client and server
+	 * player share one, so the local player's clock must not live in the same map.
+	 */
 	private val clocks = WeakHashMap<Entity, LocalClocks.Clock>()
 
 	fun onServerTick(event: ServerTickEvent.Post) {
@@ -52,19 +56,56 @@ object ReferenceFrame {
 		return clocks.getOrPut(player, LocalClocks::Clock).advance(playerRate)
 	}
 
+	/** The local player's position and rotation at the start of their last own tick, kept across skipped ticks. */
+	private class Pose(val x: Double, val y: Double, val z: Double, val xRot: Float, val yRot: Float, val bodyRot: Float, val headRot: Float)
+
+	private var lastOwnPose: Pose? = null
+
+	/** The local player's clock (client thread only). */
+	private var localClock: LocalClocks.Clock? = null
+
+	/**
+	 * Client side, the local player's tick (old position already stepped by vanilla): on their own ticks remember where
+	 * they started; on skipped ticks put that back, so the render interpolates across the whole of their (longer) tick.
+	 */
+	fun localPlayerTick(player: net.minecraft.world.entity.LivingEntity): Boolean {
+		val due = localPlayerTicks(player)
+		if (due) {
+			lastOwnPose = Pose(player.xo, player.yo, player.zo, player.xRotO, player.yRotO, player.yBodyRotO, player.yHeadRotO)
+		} else {
+			lastOwnPose?.let {
+				player.xo = it.x; player.yo = it.y; player.zo = it.z
+				player.xOld = it.x; player.yOld = it.y; player.zOld = it.z
+				player.xRotO = it.xRot; player.yRotO = it.yRot
+				player.yBodyRotO = it.bodyRot; player.yHeadRotO = it.headRot
+			}
+		}
+		return due
+	}
+
+	/** Partial tick for drawing the local player (camera, body, hand): progress across their own tick. */
+	@JvmStatic
+	fun playerPartial(partialTick: Float): Float {
+		val clock = localClock ?: return partialTick
+		if (clock.rate >= 1.0) return partialTick
+		// Past 1 extrapolates until the player's own tick arrives, so steady motion carries on instead of holding.
+		return (clock.fraction + partialTick * clock.rate).coerceAtMost(RenderTime.MAX_PARTIAL).toFloat()
+	}
+
 	/**
 	 * Client side: whether the local player ticks this client tick. The client runs at the server's tick rate, so
 	 * the player's rate is just 20 / that rate; only in singleplayer, where the server set it for the frame.
 	 */
-	fun localPlayerTicks(player: Entity): Boolean {
+	private fun localPlayerTicks(player: Entity): Boolean {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return true
 		if (!minecraft.hasSingleplayerServer()) return true
 		val rate = NORMAL_RATE / level.tickRateManager().tickrate()
 		if (rate >= 0.9999) {
-			clocks.remove(player)
+			localClock = null
 			return true
 		}
-		return clocks.getOrPut(player, LocalClocks::Clock).advance(rate.toDouble())
+		val clock = localClock ?: LocalClocks.Clock().also { localClock = it }
+		return clock.advance(rate.toDouble())
 	}
 }

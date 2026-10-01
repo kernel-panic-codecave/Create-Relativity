@@ -33,8 +33,16 @@ object LocalClocks {
 	class Clock {
 		private var accumulated = 1.0
 
+		/** The rate of the last advance. */
+		var rate = 1.0
+			private set
+
+		/** Progress toward the next local tick, 0…1. */
+		val fraction: Double get() = accumulated.coerceIn(0.0, 1.0)
+
 		/** Advances by one server tick at [rate]; true if a local tick is due. */
 		fun advance(rate: Double): Boolean {
+			this.rate = rate
 			accumulated += rate
 			if (accumulated < 1.0) return false
 			accumulated = minOf(accumulated - 1.0, 1.0)
@@ -42,13 +50,20 @@ object LocalClocks {
 		}
 	}
 
-	private val blockEntityClocks = WeakHashMap<BlockEntity, Clock>()
+	/** Client block entities waiting for the main thread to check whether they need a clock (seen off-thread). */
+	val pendingChecks = java.util.concurrent.ConcurrentLinkedQueue<BlockEntity>()
+
+	/** Client block entities with clocks, kept in step with world time each client tick (main thread only). */
+	val clientClocked: MutableSet<BlockEntity> = java.util.Collections.newSetFromMap(WeakHashMap())
+
+	private const val RECHECK_TICKS = 20L
 	private val sectionClocks = WeakHashMap<LevelChunkSection, Clock>()
 	private val ticksOwners = WeakHashMap<LevelTicks<*>, ServerLevel>()
 
 	private class ShipRate(val gameTime: Long, val rate: Double)
 
-	private val shipRates = HashMap<UUID, ShipRate>()
+	/** Shared by the client and server threads in singleplayer. */
+	private val shipRates = java.util.concurrent.ConcurrentHashMap<UUID, ShipRate>()
 
 	/** Block-entity ticks skipped so far (both sides), for `/relativity clock`. */
 	var skippedBlockEntityTicks = 0L
@@ -96,17 +111,46 @@ object LocalClocks {
 		else -> rate.coerceAtLeast(0.0)
 	}
 
+	private fun holder(blockEntity: BlockEntity) = blockEntity as ProperTimeHolder
+
+	/** Main thread: [blockEntity]'s clock, created if it's dilated (it then keeps it: its lag is real). */
+	fun clockFor(blockEntity: BlockEntity, level: Level): LocalTime? {
+		val holder = holder(blockEntity)
+		holder.`create_relativity$getLocalTime`()?.let { return it }
+		val rate = rateAt(level, blockEntity.blockPos)
+		if (rate >= 1.0) return null
+		val time = LocalTime(level.gameTime, rate)
+		holder.`create_relativity$setLocalTime`(time)
+		if (level.isClientSide) clientClocked.add(blockEntity)
+		return time
+	}
+
+	/**
+	 * Any thread: [blockEntity]'s clock if it has one. Render workers can't compute rates (the field caches aren't
+	 * thread-safe), so a block without one is queued for the main thread to check, at most once a second.
+	 */
+	fun localTimeOf(blockEntity: BlockEntity, level: Level): LocalTime? {
+		if (!enabled) return null
+		val holder = holder(blockEntity)
+		holder.`create_relativity$getLocalTime`()?.let { return it }
+		val now = level.gameTime
+		if (now - holder.`create_relativity$getCheckedAt`() >= RECHECK_TICKS) {
+			holder.`create_relativity$setCheckedAt`(now)
+			pendingChecks.add(blockEntity)
+		}
+		return null
+	}
+
 	/** Whether [blockEntity] ticks this server (or client) tick. */
 	@JvmStatic
 	fun shouldTick(blockEntity: BlockEntity): Boolean {
 		val level = blockEntity.level ?: return true
 		if (!enabled) return true
-		val rate = rateAt(level, blockEntity.blockPos)
-		if (rate >= 1.0) {
-			blockEntityClocks.remove(blockEntity)
-			return true
-		}
-		val due = blockEntityClocks.getOrPut(blockEntity, ::Clock).advance(rate)
+		val time = clockFor(blockEntity, level) ?: return true
+		// The client ticks block entities before advancing game time (the server after), so it's a tick behind here.
+		val now = if (level.isClientSide) level.gameTime + 1 else level.gameTime
+		time.sync(now, rateAt(level, blockEntity.blockPos))
+		val due = time.tickDue()
 		if (!due) skippedBlockEntityTicks++
 		return due
 	}

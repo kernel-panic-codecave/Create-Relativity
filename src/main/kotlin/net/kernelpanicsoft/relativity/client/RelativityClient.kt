@@ -18,6 +18,7 @@ object RelativityClient {
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, LensEnvironment::render)
 		BlackHoleLens.init()
 		NeoForge.EVENT_BUS.addListener(RenderLivingEvent.Pre::class.java, NoodleRenderer::onRenderLiving)
+		NeoForge.EVENT_BUS.addListener(ClientClocks::onClientTick)
 		MOD_BUS.addListener(ProperTimeHud::register)
 		MOD_BUS.addListener(EntityRenderersEvent.RegisterRenderers::class.java) {
 			// Holes draw nothing themselves: the lens and disk passes show them.

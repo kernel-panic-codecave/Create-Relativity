@@ -58,7 +58,7 @@ object EntitySpacetime {
 		// Singleplayer frame: the player's own ticks follow their clock while the world runs faster around them.
 		if (entity is Player) {
 			val due = if (level.isClientSide) {
-				!entity.isLocalPlayer || ReferenceFrame.localPlayerTicks(entity)
+				!entity.isLocalPlayer || ReferenceFrame.localPlayerTick(entity)
 			} else {
 				ReferenceFrame.playerTicks(entity)
 			}
@@ -137,7 +137,14 @@ object EntitySpacetime {
 	/** Where an entity should be after this tick, and velocity carried into the next one (blocks/s). */
 	private class Trajectory(val expected: Vec3, val velocity: Vector3d)
 
-	private val trajectories = WeakHashMap<Entity, Trajectory>()
+	/**
+	 * Per side: entity equality is by id, and in singleplayer the client and server copies share one, so one map would
+	 * mix them up (and be touched from two threads at once).
+	 */
+	private val serverTrajectories = WeakHashMap<Entity, Trajectory>()
+	private val clientTrajectories = WeakHashMap<Entity, Trajectory>()
+
+	private fun trajectories(entity: Entity) = if (entity.level().isClientSide) clientTrajectories else serverTrajectories
 
 	/** Debris drag inside a hole's disk region (1/s): stands in for disk viscosity, so orbits decay and spiral in. */
 	private const val DISK_DRAG = 0.4
@@ -201,7 +208,7 @@ object EntitySpacetime {
 	 * velocity is carried into the next tick unless a collision moved the entity elsewhere.
 	 */
 	private fun drift(entity: Entity, center: Vector3d) {
-		val carried = trajectories[entity]
+		val carried = trajectories(entity)[entity]
 		val velocity = if (onTrack(entity, carried)) Vector3d(carried!!.velocity) else motionPerSecond(entity)
 		val end = integrateTick(entity, center, velocity, diskDrag = true)
 		val displacement = end.sub(center)
@@ -209,7 +216,7 @@ object EntitySpacetime {
 		val vanillaGravity = if (entity.isNoGravity) 0.0 else entity.gravity
 		entity.deltaMovement = Vec3(displacement.x, displacement.y + vanillaGravity, displacement.z)
 		entity.hasImpulse = true
-		trajectories[entity] = Trajectory(entity.position().add(displacement.x, displacement.y, displacement.z), velocity)
+		trajectories(entity)[entity] = Trajectory(entity.position().add(displacement.x, displacement.y, displacement.z), velocity)
 	}
 
 	/**
@@ -220,7 +227,7 @@ object EntitySpacetime {
 	 * something, was knocked back or teleported).
 	 */
 	private fun fall(entity: Entity, center: Vector3d) {
-		val carried = trajectories[entity]
+		val carried = trajectories(entity)[entity]
 		val start = motionPerSecond(entity)
 		if (onTrack(entity, carried)) start.add(carried!!.velocity)
 		val velocity = Vector3d(start)
@@ -229,7 +236,7 @@ object EntitySpacetime {
 		entity.deltaMovement = Vec3(chord.x, chord.y, chord.z)
 		entity.hasImpulse = true
 		val leftover = Vector3d(velocity).sub(Vector3d(chord).mul(TICKS_PER_SECOND))
-		trajectories[entity] = Trajectory(entity.position().add(chord.x, chord.y, chord.z), leftover)
+		trajectories(entity)[entity] = Trajectory(entity.position().add(chord.x, chord.y, chord.z), leftover)
 	}
 
 	private fun motionPerSecond(entity: Entity) =

@@ -19,11 +19,12 @@ import org.joml.Vector3dc
  */
 object SpacetimeField {
 	/** Live black-hole entities per level (both sides), kept by entity join/leave events. */
-	private val index = java.util.WeakHashMap<Level, MutableSet<BlackHoleEntity>>()
+	// Both maps are shared by the client and server threads in singleplayer (each level's entry by only one of them).
+	private val index: MutableMap<Level, MutableSet<BlackHoleEntity>> = java.util.Collections.synchronizedMap(java.util.WeakHashMap())
 
 	/** Snapshots for the current tick, rebuilt when a tick passes or a hole is added, removed or changed. */
-	private val cache = java.util.WeakHashMap<Level, Pair<Long, List<BlackHole>>>()
-	private var generation = 0L
+	private val cache: MutableMap<Level, Pair<Long, List<BlackHole>>> = java.util.Collections.synchronizedMap(java.util.WeakHashMap())
+	@Volatile private var generation = 0L
 
 	/**
 	 * Inside this fraction of `r_s` the field isn't evaluated: the point is well inside the horizon, where
