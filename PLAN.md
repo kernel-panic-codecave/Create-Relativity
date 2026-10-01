@@ -252,6 +252,35 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
 
 ---
 
+## 8a. Alcubierre warp drive
+
+The other thing exotic matter is good for. The ship sits in a flat bubble that spacetime itself carries along:
+`ds² = −dt² + (dx − v_s f(r_s) dt)² + dy² + dz²`, where `f` is a smooth top-hat shape function of the distance
+`r_s` from the bubble centre (wall thickness σ, radius R).
+
+### Physics (`physics-core/spacetime/Alcubierre`)
+- An exact metric with closed-form Christoffels (same `Spacetime` interface as Kerr and Ellis). The bubble can
+  move faster than the dimension's c relative to the outside, because nothing moves through space locally.
+- **Tests:** a geodesic at the bubble centre rides along at v_s with **dτ = dt** (no time dilation, no
+  acceleration felt inside), the interior is flat, and a free particle outside is left behind. Energy density in
+  the wall is negative (the exotic-matter requirement), and the cost scales with v_s² and the bubble size.
+
+### Gameplay
+- **Warp Field Generator**: a Sable ship component that wraps the ship's bounding sphere in a bubble. Exotic matter
+  is consumed by bubble size, wall thinness and speed, and the generator spins up and down over seconds.
+- The ship moves **kinematically**: its Sable pose is advanced with the bubble, not pushed by forces. Crew and loose
+  entities inside ride along untouched, and anything straddling the wall gets torn by the tidal shear.
+- **No steering from inside at superluminal speed**: the front wall is causally cut off from the crew (a horizon).
+  Course and stop point are set before engaging. That's real physics, and it's a good gameplay constraint.
+- **The arrival hazard** (McMonigal, Lewis & O'Byrne 2012): particles swept up at the front wall pile up as
+  blueshifted energy and blast out ahead when the bubble stops. Arriving at a base nose-first damages it, scaled
+  with trip length and speed.
+
+### Visuals
+- From inside, starlight piles up ahead and is strongly blueshifted, the view behind goes dark and red, and the
+  bubble wall shimmers. That's the lensing post pass driven by the Alcubierre metric (ray-marched, like Kerr in M9).
+- From outside, the ship appears and vanishes abruptly, since its light reaches observers in a burst.
+
 ## 8b. Binary black holes, mergers and gravitational waves
 
 ### Why not full numerical relativity
@@ -455,7 +484,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M9** | Kerr | Spin from accretion, frame dragging, ergosphere, Kerr ray marcher, Penrose power plant. **High-quality lens preset**: march the curved light path through the frame and capture depth so objects near the hole occlude and get uncovered correctly (screen-space lensing can't; see the parked `lens-experiments` branch for what was tried). |
 | **M10** | **Binary BHs + gravitational waves** | PN inspiral with radiation reaction, NR-fit remnant + kick, QNM ringdown, strain field, ship flexing, ripple shader, chirp audio, interferometer. *Third wow point.* |
 | **M11** | Special relativity | Speed cap c, 4-momentum thrust, SR post pass, retarded-time rendering / Terrell rotation. |
-| **M12** | Wormholes | Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. |
+| **M12** | Wormholes + warp drive | Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. **Alcubierre warp drive** (§8a): metric + tests, Warp Field Generator, kinematic bubble travel, arrival blast, warp view shader. |
 | **M13** | Content and polish | Progression, recipes, Ponders, advancements, configs, Iris fallback, perf pass, MP testing. |
 | **M14** | **Planetoid world type** | Spike (Sable plot size limits, lazy plot generation, entity gravity direction, cross-seam block adjacency). Cube-sphere generator + curvature warp, kinematic N-body orbits, face-relative gravity, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
 | Stretch | | Wormhole time machines + chronology protection, Neutronium-star mergers, GW energy harvesting, charged BHs, space dimension with starfield. |
