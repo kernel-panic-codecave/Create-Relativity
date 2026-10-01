@@ -29,6 +29,7 @@ internal object RelativityGameTest : AGameTestEventObject(CreateRelativity.MOD) 
 			register<CreateTorsionGameTest>()
 			register<ShipGameTest>()
 			register<KerrGameTest>()
+			register<PickGameTest>()
 		}
 	}
 }

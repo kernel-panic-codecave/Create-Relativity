@@ -19,7 +19,8 @@
     "client.network.PacketEntityIdAccessors$MoveEntity",
     "client.network.PacketEntityIdAccessors$RotateHead",
     "client.network.PacketEntityIdAccessors$EntityEvent",
-    "client.network.PacketEntityIdAccessors$SectionBlocks"
+    "client.network.PacketEntityIdAccessors$SectionBlocks",
+    "client.GameRendererPickMixin"
   ],
   "injectors": {
     "defaultRequire": 1
