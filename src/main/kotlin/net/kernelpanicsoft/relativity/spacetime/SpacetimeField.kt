@@ -39,9 +39,19 @@ object SpacetimeField {
 
 	fun addBlackHole(level: ServerLevel, hole: BlackHole) = update(level) { it + hole }
 
-	/** Replaces the hole with [id], if it still exists, by [change] applied to it. */
-	fun updateBlackHole(level: ServerLevel, id: String, change: (BlackHole) -> BlackHole) =
-		update(level) { holes -> holes.map { if (it.id == id) change(it) else it } }
+	/**
+	 * Replaces the hole with [id], if it still exists, by [change] applied to it. With [sync] false the change is
+	 * saved but clients only hear about it on the next [syncDirty] (for per-tick changes like growth).
+	 */
+	fun updateBlackHole(level: ServerLevel, id: String, sync: Boolean = true, change: (BlackHole) -> BlackHole) =
+		update(level, sync) { holes -> holes.map { if (it.id == id) change(it) else it } }
+
+	private val dirty = java.util.Collections.newSetFromMap(java.util.WeakHashMap<ServerLevel, Boolean>())
+
+	/** Sends levels with unsynced changes to their players. */
+	fun syncDirty(level: ServerLevel) {
+		if (dirty.remove(level)) RelativityNetwork.syncToDimension(level, blackHoles(level))
+	}
 
 	fun removeBlackHoles(level: ServerLevel, predicate: (BlackHole) -> Boolean): Int {
 		var removed = 0
@@ -49,10 +59,15 @@ object SpacetimeField {
 		return removed
 	}
 
-	private fun update(level: ServerLevel, change: (List<BlackHole>) -> List<BlackHole>) {
+	private fun update(level: ServerLevel, sync: Boolean = true, change: (List<BlackHole>) -> List<BlackHole>) {
 		val updated = change(SpacetimeAttachments.blackHoles.get(level).holes)
 		SpacetimeAttachments.blackHoles.set(level, BlackHoles(updated))
-		RelativityNetwork.syncToDimension(level, updated)
+		if (sync) {
+			dirty.remove(level)
+			RelativityNetwork.syncToDimension(level, updated)
+		} else {
+			dirty.add(level)
+		}
 	}
 
 	internal fun setClientHoles(dimension: ResourceKey<Level>, holes: List<BlackHole>) {
@@ -122,6 +137,27 @@ object SpacetimeField {
 			rate *= holeRate
 		}
 		return rate
+	}
+
+	/**
+	 * Outward radiation-pressure acceleration (blocks/s²) at [position] from every feeding hole: the hole's pull
+	 * scaled by its Eddington ratio λ = Ṁ/Ṁ_Edd and the matter's [coupling]. At λ·coupling = 1 it cancels gravity.
+	 */
+	fun radiationAcceleration(level: Level, position: Vector3dc, coupling: Double, dest: Vector3d): Vector3d {
+		dest.zero()
+		val c = RelativityConfig.speedOfLight(level.dimension())
+		val rel = Vector3d()
+		for (hole in blackHoles(level)) {
+			if (hole.accretionRate <= 0.0) continue
+			val ratio = hole.accretionRate / RelativityConfig.eddingtonRate(hole.schwarzschildRadius)
+			position.sub(hole.x, hole.y, hole.z, rel)
+			val r2 = rel.lengthSquared()
+			if (r2 < 1e-6) continue
+			val push = ratio * coupling * c * c * hole.mass / r2
+			if (push < MIN_ACCELERATION) continue
+			dest.add(rel.normalize(push))
+		}
+		return dest
 	}
 
 	/** The hole whose horizon [position] is inside, if any. */

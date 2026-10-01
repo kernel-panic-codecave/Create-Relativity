@@ -43,5 +43,22 @@
   "death.attack.create_relativity.singularity_bottom": "%1$s found out what's at the bottom",
   "death.attack.create_relativity.singularity_bottom.player": "%1$s found out what's at the bottom while running from %2$s",
   "death.attack.create_relativity.singularity_entropy": "%1$s contributed to the black hole's entropy",
-  "death.attack.create_relativity.singularity_entropy.player": "%1$s and %2$s contributed to the black hole's entropy. Mostly %1$s"
+  "death.attack.create_relativity.singularity_entropy.player": "%1$s and %2$s contributed to the black hole's entropy. Mostly %1$s",
+  "config.create_relativity.physics.planck_length": "Planck Length (blocks)",
+  "config.create_relativity.physics.planck_length.comment": "Sets ħ, and with it Hawking evaporation: a hole evaporates in 5120π·M³/(l_P²·c) seconds (M = r_s/2) and vanishes in a burst when r_s reaches this.",
+  "config.create_relativity.black_holes": "Black Holes",
+  "config.create_relativity.black_holes.eat_budget": "Blocks Eaten per Tick",
+  "config.create_relativity.black_holes.eat_budget.comment": "Most blocks inside a horizon removed per tick, per hole (their mass is swallowed). Growth needs the relativityBlackHoleGrowth gamerule.",
+  "config.create_relativity.black_holes.rip_budget": "Blocks Ripped per Tick",
+  "config.create_relativity.black_holes.rip_budget.comment": "Most blocks per tick, per hole, torn loose by tides into falling debris that spirals in. Scales down as the hole nears its Eddington limit.",
+  "config.create_relativity.black_holes.rip_acceleration": "Ground Hold Strength (blocks/s²)",
+  "config.create_relativity.black_holes.rip_acceleration.comment": "A block tears loose when the hole's pull plus the world's gravity exceeds this × (1 + hardness). Dirt goes early, stone later, obsidian barely; unbreakable blocks never.",
+  "config.create_relativity.black_holes.eddington_rate": "Eddington Rate (mass/s per block of r_s)",
+  "config.create_relativity.black_holes.eddington_rate.comment": "Feeding faster than this makes the disk's radiation push loose matter away.",
+  "config.create_relativity.black_holes.max_radius": "Maximum Schwarzschild Radius",
+  "config.create_relativity.black_holes.max_radius.comment": "Holes stop growing here.",
+  "config.create_relativity.black_holes.hawking": "Hawking Evaporation",
+  "config.create_relativity.black_holes.hawking.comment": "Small holes evaporate (lifetime grows with mass cubed) and pop at the Planck length.",
+  "gamerule.relativityBlackHoleGrowth": "Black holes eat blocks and grow",
+  "commands.create_relativity.bh.feed": "Feeding the nearest black hole at %s mass/s (Eddington limit %s mass/s; anything above is blown away)"
 }

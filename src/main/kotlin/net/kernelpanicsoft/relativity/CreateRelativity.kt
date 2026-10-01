@@ -1,6 +1,8 @@
 package net.kernelpanicsoft.relativity
 
 import dev.architectury.platform.Platform
+import net.kernelpanicsoft.archie.util.onClient
+import net.kernelpanicsoft.relativity.accretion.Accretion
 import net.kernelpanicsoft.relativity.client.RelativityClient
 import net.kernelpanicsoft.relativity.command.RelativityCommands
 import net.kernelpanicsoft.relativity.config.RelativityConfig
@@ -36,8 +38,10 @@ object CreateRelativity {
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onPrePhysicsTick)
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(EntitySpacetime::onEntityTick)
+		Accretion.init()
+		NeoForge.EVENT_BUS.addListener(Accretion::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(RelativityCommands::register)
-		if (FMLEnvironment.dist.isClient) RelativityClient.init()
+		onClient { RelativityClient.init() }
 		LOGGER.info("Create: Relativity initialized")
 	}
 }

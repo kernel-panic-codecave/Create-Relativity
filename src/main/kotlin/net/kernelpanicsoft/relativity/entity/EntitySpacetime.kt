@@ -1,6 +1,8 @@
 package net.kernelpanicsoft.relativity.entity
 
+import dev.ryanhcode.sable.physics.config.block_properties.PhysicsBlockPropertyHelper
 import net.kernelpanicsoft.relativity.CreateRelativity
+import net.kernelpanicsoft.relativity.accretion.Accretion
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.core.registries.Registries
@@ -10,6 +12,8 @@ import net.minecraft.world.damagesource.DamageSource
 import net.minecraft.world.damagesource.DamageType
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.item.FallingBlockEntity
+import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
 import net.neoforged.neoforge.event.tick.EntityTickEvent
 import net.minecraft.world.phys.Vec3
@@ -60,6 +64,8 @@ object EntitySpacetime {
 				val longestFall = PI * hole.mass / c // seconds of proper time, horizon to singularity
 				if (SpacetimeField.atSingularity(level, center) != null || ticks / TICKS_PER_SECOND >= longestFall) {
 					ticksInside.remove(entity)
+					val velocity = Vector3d(entity.x - entity.xo, entity.y - entity.yo, entity.z - entity.zo).mul(TICKS_PER_SECOND)
+					Accretion.capture(level, hole, massOf(entity), center, velocity)
 					crush(entity)
 					return
 				}
@@ -81,6 +87,7 @@ object EntitySpacetime {
 		val velocity = Vector3d(motion.x, motion.y, motion.z).mul(TICKS_PER_SECOND)
 		if (velocity.length() > MAX_FIELD_SPEED * c) velocity.normalize(MAX_FIELD_SPEED * c)
 		val accel = SpacetimeField.acceleration(level, center, velocity, Vector3d())
+		accel.add(SpacetimeField.radiationAcceleration(level, center, couplingOf(entity), Vector3d()))
 		if (accel.lengthSquared() == 0.0) return
 		// blocks/s² over one tick, expressed in blocks/tick per tick.
 		val perTick = 1.0 / (TICKS_PER_SECOND * TICKS_PER_SECOND)
@@ -104,6 +111,17 @@ object EntitySpacetime {
 		val lag = SpacetimeAttachments.properTimeLag
 		lag.set(player, lag.get(player) + (1.0 - rate) / TICKS_PER_SECOND)
 	}
+
+	/** Mass swallowed with [entity], in Sable units: its block's for debris, a little per item, body volume otherwise. */
+	private fun massOf(entity: Entity): Double = when (entity) {
+		is FallingBlockEntity -> PhysicsBlockPropertyHelper.getMass(entity.level(), entity.blockPosition(), entity.blockState)
+		is ItemEntity -> 0.05 * entity.item.count
+		else -> (entity.bbWidth * entity.bbWidth * entity.bbHeight).toDouble()
+	}
+
+	/** How strongly radiation pushes [entity] compared with how gravity pulls it. */
+	private fun couplingOf(entity: Entity): Double =
+		if (entity is FallingBlockEntity || entity is ItemEntity) Accretion.DEBRIS_COUPLING else Accretion.CREATURE_COUPLING
 
 	private fun crush(entity: Entity) {
 		if (entity is LivingEntity) {

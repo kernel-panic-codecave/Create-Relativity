@@ -28,6 +28,44 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.physics.unit_radius_mass.comment"),
 				default = SpacetimeUnits.DEFAULT_UNIT_RADIUS_MASS,
 			)
+			val planckLength by double(
+				title = Component.translatable("config.create_relativity.physics.planck_length"),
+				comment = Component.translatable("config.create_relativity.physics.planck_length.comment"),
+				default = 1.0 / 64.0,
+			)
+		}
+
+		object BlackHoles : CategorySpec(Component.translatable("config.create_relativity.black_holes"), "black_holes") {
+			val eatBudget by intSlider(
+				title = Component.translatable("config.create_relativity.black_holes.eat_budget"),
+				comment = Component.translatable("config.create_relativity.black_holes.eat_budget.comment"),
+				min = 0, max = 4096, default = 64,
+			)
+			val ripBudget by intSlider(
+				title = Component.translatable("config.create_relativity.black_holes.rip_budget"),
+				comment = Component.translatable("config.create_relativity.black_holes.rip_budget.comment"),
+				min = 0, max = 256, default = 4,
+			)
+			val ripAcceleration by double(
+				title = Component.translatable("config.create_relativity.black_holes.rip_acceleration"),
+				comment = Component.translatable("config.create_relativity.black_holes.rip_acceleration.comment"),
+				default = 32.0,
+			)
+			val eddingtonRatePerBlock by double(
+				title = Component.translatable("config.create_relativity.black_holes.eddington_rate"),
+				comment = Component.translatable("config.create_relativity.black_holes.eddington_rate.comment"),
+				default = 20.0,
+			)
+			val maxSchwarzschildRadius by double(
+				title = Component.translatable("config.create_relativity.black_holes.max_radius"),
+				comment = Component.translatable("config.create_relativity.black_holes.max_radius.comment"),
+				default = 32.0,
+			)
+			val hawking by boolean(
+				title = Component.translatable("config.create_relativity.black_holes.hawking"),
+				comment = Component.translatable("config.create_relativity.black_holes.hawking.comment"),
+				default = true,
+			)
 		}
 	}
 
@@ -72,6 +110,9 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 	/** Speed of light in [dimension]: its override if one is set, otherwise the default. */
 	fun speedOfLight(dimension: ResourceKey<Level>): Double =
 		Server.Physics.speedOfLightOverrides[dimension.location().toString()] ?: Server.Physics.speedOfLight
+
+	/** Ṁ_Edd for a hole of Schwarzschild radius [rs] (blocks): the feeding rate (mass/s) where radiation balances gravity. */
+	fun eddingtonRate(rs: Double): Double = Server.BlackHoles.eddingtonRatePerBlock * rs
 
 	/** Units for [dimension] from the current server config. */
 	fun units(dimension: ResourceKey<Level>): SpacetimeUnits =

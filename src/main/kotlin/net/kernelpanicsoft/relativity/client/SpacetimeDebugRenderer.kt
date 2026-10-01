@@ -102,7 +102,7 @@ object SpacetimeDebugRenderer {
 			ring(lines, pose, horizon, Plane.ZY, HORIZON, 255)
 			ring(lines, pose, hole.equatorialExtent(hole.photonOrbit(prograde = true)), Plane.XZ, PHOTON, 255)
 			ring(lines, pose, hole.equatorialExtent(hole.isco(prograde = true)), Plane.XZ, ISCO, 255)
-			if (hole.spin > 0.0) {
+			if (hole.spin != 0.0) {
 				ring(lines, pose, hole.equatorialExtent(hole.photonOrbit(prograde = false)), Plane.XZ, PHOTON, 110)
 				ring(lines, pose, hole.equatorialExtent(hole.isco(prograde = false)), Plane.XZ, ISCO, 110)
 			}

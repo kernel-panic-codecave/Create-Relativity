@@ -5,6 +5,7 @@ import dev.ryanhcode.sable.neoforge.event.ForgeSablePrePhysicsTickEvent
 import dev.ryanhcode.sable.sublevel.ServerSubLevel
 import dev.ryanhcode.sable.sublevel.storage.SubLevelRemovalReason
 import net.kernelpanicsoft.relativity.CreateRelativity
+import net.kernelpanicsoft.relativity.accretion.Accretion
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
 import net.kernelpanicsoft.relativity.spacetime.GameFrame
@@ -28,7 +29,7 @@ object SableSpacetimeForces {
 	 */
 	private const val MAX_FIELD_SPEED = 0.95
 
-	private class Capture(val subLevel: ServerSubLevel, val holeId: String, val mass: Double)
+	private class Capture(val subLevel: ServerSubLevel, val hole: BlackHole, val mass: Double, val position: Vector3d, val velocity: Vector3d)
 
 	private val captures = ConcurrentLinkedQueue<Capture>()
 
@@ -51,15 +52,18 @@ object SableSpacetimeForces {
 			val pose = subLevel.logicalPose()
 			val worldCom = pose.transformPosition(Vector3d(com))
 
+			system.getPhysicsHandle(subLevel).getLinearVelocity(velocity)
 			val swallowedBy = holes.firstOrNull { insideHorizon(it, worldCom) }
 			if (swallowedBy != null) {
-				if (captures.none { it.subLevel === subLevel }) captures += Capture(subLevel, swallowedBy.id, mass.mass)
+				if (captures.none { it.subLevel === subLevel }) {
+					captures += Capture(subLevel, swallowedBy, mass.mass, Vector3d(worldCom), Vector3d(velocity))
+				}
 				continue
 			}
 
-			system.getPhysicsHandle(subLevel).getLinearVelocity(velocity)
 			if (velocity.length() > MAX_FIELD_SPEED * c) velocity.normalize(MAX_FIELD_SPEED * c)
 			SpacetimeField.acceleration(level, worldCom, velocity, accel)
+			accel.add(SpacetimeField.radiationAcceleration(level, worldCom, Accretion.SHIP_COUPLING, Vector3d()))
 			if (accel.lengthSquared() == 0.0) continue
 			val impulse = pose.transformNormalInverse(accel.mul(mass.mass * dt))
 			subLevel.getOrCreateQueuedForceGroup(RelativityForceGroups.SPACETIME_CURVATURE.get())
@@ -80,10 +84,8 @@ object SableSpacetimeForces {
 			iterator.remove()
 			if (capture.subLevel.isRemoved) continue
 			container.removeSubLevel(capture.subLevel, SubLevelRemovalReason.REMOVED)
-			// r_s ∝ mass, so the radius grows by the swallowed mass's own Schwarzschild radius.
-			val growth = units.schwarzschildRadius(capture.mass)
-			SpacetimeField.updateBlackHole(level, capture.holeId) { it.copy(schwarzschildRadius = it.schwarzschildRadius + growth) }
-			CreateRelativity.LOGGER.info("Black hole {} swallowed sub-level {} (mass {}), r_s +{}", capture.holeId, capture.subLevel.uniqueId, capture.mass, growth)
+			Accretion.capture(level, capture.hole, capture.mass, capture.position, capture.velocity)
+			CreateRelativity.LOGGER.info("Black hole {} swallowed sub-level {} (mass {})", capture.hole.id, capture.subLevel.uniqueId, capture.mass)
 		}
 	}
 

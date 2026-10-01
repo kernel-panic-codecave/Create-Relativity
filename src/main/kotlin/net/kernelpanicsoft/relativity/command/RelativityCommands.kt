@@ -26,9 +26,12 @@ object RelativityCommands {
 				.then(Commands.argument("pos", Vec3Argument.vec3())
 					.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.05, 256.0))
 						.executes { create(it, 0.0) }
-						.then(Commands.argument("spin", DoubleArgumentType.doubleArg(0.0, 0.998))
+						.then(Commands.argument("spin", DoubleArgumentType.doubleArg(-BlackHole.MAX_SPIN, BlackHole.MAX_SPIN))
 							.executes { create(it, DoubleArgumentType.getDouble(it, "spin")) }))))
 			.then(Commands.literal("list").executes(::list))
+			.then(Commands.literal("feed")
+				.then(Commands.argument("rate", DoubleArgumentType.doubleArg(0.0, 1e6))
+					.executes(::feed)))
 			.then(Commands.literal("remove").executes(::removeNearest))
 			.then(Commands.literal("clear").executes { ctx ->
 				val removed = SpacetimeField.removeBlackHoles(ctx.source.level) { true }
@@ -53,12 +56,28 @@ object RelativityCommands {
 		ctx.source.sendSuccess({ Component.translatable("commands.create_relativity.bh.list", holes.size) }, false)
 		for (hole in holes) {
 			ctx.source.sendSuccess({
-				Component.literal("  %s  r_s=%s  χ=%s  horizon=%s  ISCO=%s".format(
+				Component.literal("  %s  r_s=%s  χ=%s  horizon=%s  ISCO=%s  Ṁ=%s/s (λ=%s)  feed=%s/s".format(
 					"${fmt(hole.x)} ${fmt(hole.y)} ${fmt(hole.z)}", fmt(hole.schwarzschildRadius), fmt(hole.spin),
-					fmt(hole.horizonRadius), fmt(hole.isco(prograde = true))))
+					fmt(hole.horizonRadius), fmt(hole.isco(prograde = true)), fmt(hole.accretionRate),
+					fmt(hole.accretionRate / RelativityConfig.eddingtonRate(hole.schwarzschildRadius)), fmt(hole.feedRate)))
 			}, false)
 		}
 		return holes.size
+	}
+
+	/** Steady feed of the nearest hole through its disk, for watching it grow and glow; capped at Eddington. */
+	private fun feed(ctx: CommandContext<CommandSourceStack>): Int {
+		val rate = DoubleArgumentType.getDouble(ctx, "rate")
+		val from = ctx.source.position
+		val nearest = SpacetimeField.blackHoles(ctx.source.level).minByOrNull { it.center.distanceToSqr(from) }
+		if (nearest == null) {
+			ctx.source.sendFailure(Component.translatable("commands.create_relativity.bh.none"))
+			return 0
+		}
+		SpacetimeField.updateBlackHole(ctx.source.level, nearest.id) { it.copy(feedRate = rate) }
+		val eddington = RelativityConfig.eddingtonRate(nearest.schwarzschildRadius)
+		ctx.source.sendSuccess({ Component.translatable("commands.create_relativity.bh.feed", fmt(rate), fmt(eddington)) }, true)
+		return 1
 	}
 
 	private fun removeNearest(ctx: CommandContext<CommandSourceStack>): Int {
