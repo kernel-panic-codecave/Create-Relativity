@@ -5,6 +5,7 @@ import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.accretion.Accretion
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
+import net.kernelpanicsoft.relativity.time.LocalClocks
 import net.minecraft.core.registries.Registries
 import net.minecraft.resources.ResourceKey
 import net.minecraft.server.level.ServerPlayer
@@ -12,6 +13,7 @@ import net.minecraft.world.damagesource.DamageSource
 import net.minecraft.world.damagesource.DamageType
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.LivingEntity
+import net.minecraft.world.entity.MoverType
 import net.minecraft.world.entity.item.FallingBlockEntity
 import net.minecraft.world.entity.item.ItemEntity
 import net.minecraft.world.entity.player.Player
@@ -87,9 +89,36 @@ object EntitySpacetime {
 
 		// Creative flight is a building tool, not a way to hover over a hole; survival flight (mods) still falls.
 		val creativeFlying = entity is Player && entity.isCreative && entity.abilities.flying
+		val owned = entity is FallingBlockEntity || entity is ItemEntity
 		if (entity.isControlledByLocalInstance && !creativeFlying) {
-			if (entity is FallingBlockEntity || entity is ItemEntity) drift(entity, center) else fall(entity, center)
+			if (owned) drift(entity, center) else fall(entity, center)
 		}
+
+		if (!level.isClientSide && entity !is Player && !properTimeTick(entity, center)) {
+			// Motion is coordinate-time kinematics and keeps going; only the entity's own tick (AI, ageing, vanilla
+			// physics) waits for its clock. Debris and items' motion already cancels the gravity vanilla would add.
+			val motion = entity.deltaMovement
+			val gravity = if (entity.isNoGravity) 0.0 else entity.gravity
+			entity.move(MoverType.SELF, if (owned) motion.subtract(0.0, gravity, 0.0) else motion)
+			if (!owned && !entity.onGround()) entity.deltaMovement = entity.deltaMovement.subtract(0.0, gravity, 0.0)
+			event.isCanceled = true
+		}
+	}
+
+	private val clocks = WeakHashMap<Entity, LocalClocks.Clock>()
+
+	/**
+	 * Whether [entity]'s own tick runs this server tick, on its proper-time clock. Only the gravitational part of
+	 * dτ/dt counts for now: vanilla speeds can exceed c until M11 enforces the limit, which would freeze things.
+	 */
+	private fun properTimeTick(entity: Entity, center: Vector3d): Boolean {
+		if (!LocalClocks.enabled) return true
+		val rate = LocalClocks.rateAt(entity.level(), center)
+		if (rate >= 1.0) {
+			clocks.remove(entity)
+			return true
+		}
+		return clocks.getOrPut(entity, LocalClocks::Clock).advance(rate)
 	}
 
 	/** Where an entity should be after this tick, and velocity carried into the next one (blocks/s). */

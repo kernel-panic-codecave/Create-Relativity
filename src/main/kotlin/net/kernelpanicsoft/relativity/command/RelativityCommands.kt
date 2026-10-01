@@ -17,7 +17,29 @@ object RelativityCommands {
 		event.dispatcher.register(
 			Commands.literal("relativity").requires { it.hasPermission(2) }
 				.then(blackHole())
+				.then(Commands.literal("clock")
+					.then(Commands.argument("pos", net.minecraft.commands.arguments.coordinates.BlockPosArgument.blockPos())
+						.executes(::clock)))
 		)
+	}
+
+	/** Debug: the local clock rate at a block, the nearest hole's distance, and how many ticks have been skipped. */
+	private fun clock(ctx: CommandContext<CommandSourceStack>): Int {
+		val level = ctx.source.level
+		val pos = net.minecraft.commands.arguments.coordinates.BlockPosArgument.getLoadedBlockPos(ctx, "pos")
+		val rate = net.kernelpanicsoft.relativity.time.LocalClocks.rateAt(level, pos)
+		val hole = SpacetimeField.blackHoles(level).minByOrNull { pos.center.distanceToSqr(it.x, it.y, it.z) }
+		val where = hole?.let {
+			val r = pos.center.distanceTo(net.minecraft.world.phys.Vec3(it.x, it.y, it.z))
+			"%.1f blocks from a hole of r_s %.2f (%.2f r_s)".format(r, it.schwarzschildRadius, r / it.schwarzschildRadius)
+		} ?: "no holes"
+		val enabled = net.kernelpanicsoft.relativity.time.LocalClocks.enabled
+		val skipped = net.kernelpanicsoft.relativity.time.LocalClocks.skippedBlockEntityTicks
+		ctx.source.sendSuccess({
+			Component.literal("dτ/dt = %.4f at %s; %s. Dilation %s, block-entity ticks skipped so far: %d"
+				.format(rate, pos.toShortString(), where, if (enabled) "on" else "off", skipped))
+		}, false)
+		return 1
 	}
 
 	private fun blackHole(): LiteralArgumentBuilder<CommandSourceStack> =

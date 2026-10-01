@@ -77,6 +77,14 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				default = true,
 			)
 		}
+
+		object Time : CategorySpec(Component.translatable("config.create_relativity.time"), "time") {
+			val dilateTicks by boolean(
+				title = Component.translatable("config.create_relativity.time.dilate_ticks"),
+				comment = Component.translatable("config.create_relativity.time.dilate_ticks.comment"),
+				default = true,
+			)
+		}
 	}
 
 	/** Per-player client settings. */

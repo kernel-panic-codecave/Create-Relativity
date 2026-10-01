@@ -13,6 +13,7 @@ import net.kernelpanicsoft.relativity.sable.SableSpacetimeForces
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeSync
+import net.kernelpanicsoft.relativity.time.LocalClocks
 import net.minecraft.resources.ResourceLocation
 import net.neoforged.fml.common.Mod
 import net.neoforged.fml.loading.FMLEnvironment
@@ -44,6 +45,7 @@ object CreateRelativity {
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onPrePhysicsTick)
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(EntitySpacetime::onEntityTick)
+		NeoForge.EVENT_BUS.addListener(LocalClocks::onLevelLoad)
 		Accretion.init()
 		NeoForge.EVENT_BUS.addListener(Accretion::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(RelativityCommands::register)
