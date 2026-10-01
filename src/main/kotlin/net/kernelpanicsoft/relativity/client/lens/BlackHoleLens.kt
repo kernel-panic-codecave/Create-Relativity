@@ -46,6 +46,7 @@ object BlackHoleLens {
 	private var table: CompletableFuture<FloatArray>? = null
 	private var textureReady = false
 	private val holeUniforms = Array(MAX_HOLES) { Vector4f() }
+	private val spinUniforms = Array(MAX_HOLES) { Vector4f() }
 
 	/**
 	 * tan(½ vertical FOV) of what the player actually sees, while the level is being rendered wider than that
@@ -159,12 +160,14 @@ object BlackHoleLens {
 				(hole.x - camera.x).toFloat(), (hole.y - camera.y).toFloat(), (hole.z - camera.z).toFloat(),
 				hole.schwarzschildRadius.toFloat(),
 			)
+			spinUniforms[i].set(hole.spin.toFloat(), 0f, 0f, 0f)
 		}
 		val pipeline = event.pipeline
 		pipeline.getUniformSafe("DisplayTanHalfFov").setFloat(displayTanHalfFov.toFloat())
 		uploadDisk(pipeline, level, holes.firstOrNull(), minecraft)
 		pipeline.getUniformSafe("HoleCount").setInt(holes.size)
 		pipeline.getUniformSafe("Holes").setVectors(*holeUniforms)
+		pipeline.getUniformSafe("HoleSpins").setVectors(*spinUniforms)
 		val environmentReady = LensEnvironment.ready
 		pipeline.getUniformSafe("EnvironmentReady").setInt(if (environmentReady) 1 else 0)
 		if (environmentReady) {
