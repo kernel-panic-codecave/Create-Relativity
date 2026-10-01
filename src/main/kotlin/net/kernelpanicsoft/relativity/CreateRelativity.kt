@@ -7,10 +7,11 @@ import net.kernelpanicsoft.relativity.client.RelativityClient
 import net.kernelpanicsoft.relativity.command.RelativityCommands
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.entity.EntitySpacetime
-import net.kernelpanicsoft.relativity.network.RelativityNetwork
+import net.kernelpanicsoft.relativity.entity.RelativityEntities
 import net.kernelpanicsoft.relativity.sable.RelativityForceGroups
 import net.kernelpanicsoft.relativity.sable.SableSpacetimeForces
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
+import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.resources.ResourceLocation
 import net.neoforged.fml.common.Mod
 import net.neoforged.fml.loading.FMLEnvironment
@@ -33,7 +34,9 @@ object CreateRelativity {
 	init {
 		RelativityConfig.init()
 		SpacetimeAttachments.init()
-		RelativityNetwork.init()
+		RelativityEntities.register()
+		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityJoin)
+		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityLeave)
 		RelativityForceGroups.register()
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onPrePhysicsTick)
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onLevelTick)

@@ -1,23 +1,29 @@
 package net.kernelpanicsoft.relativity.spacetime
 
 import net.kernelpanicsoft.relativity.config.RelativityConfig
-import net.kernelpanicsoft.relativity.network.RelativityNetwork
+import net.kernelpanicsoft.relativity.entity.BlackHoleEntity
+import net.kernelpanicsoft.relativity.entity.RelativityEntities
 import net.kernelpanicsoft.relativity.physics.geodesic.CoordinateAcceleration
 import net.kernelpanicsoft.relativity.physics.geodesic.Geodesic
 import net.kernelpanicsoft.relativity.physics.weakfield.PostNewtonian
-import net.minecraft.resources.ResourceKey
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.Level
 import org.joml.Vector3d
+import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent
+import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent
 import org.joml.Vector3dc
 
 /**
- * The one place the rest of the mod asks what spacetime is doing at a point. Server levels read the
- * persisted sources; client levels read what [RelativityNetwork] last synced.
+ * The one place the rest of the mod asks what spacetime is doing at a point. Black holes are entities
+ * ([BlackHoleEntity]); this keeps an index of them per level, on both sides, and hands out snapshots.
  */
 object SpacetimeField {
-	@Volatile
-	private var clientHoles: Map<ResourceKey<Level>, List<BlackHole>> = emptyMap()
+	/** Live black-hole entities per level (both sides), kept by entity join/leave events. */
+	private val index = java.util.WeakHashMap<Level, MutableSet<BlackHoleEntity>>()
+
+	/** Snapshots for the current tick, rebuilt when a tick passes or a hole is added, removed or changed. */
+	private val cache = java.util.WeakHashMap<Level, Pair<Long, List<BlackHole>>>()
+	private var generation = 0L
 
 	/**
 	 * Inside this fraction of `r_s` the field isn't evaluated: the point is well inside the horizon, where
@@ -34,48 +40,47 @@ object SpacetimeField {
 	/** Things this deep inside the horizon (fraction of r_s, spheroidal radius) have reached the singularity. */
 	const val SINGULARITY_RADIUS = 0.15
 
-	fun blackHoles(level: Level): List<BlackHole> =
-		if (level is ServerLevel) SpacetimeAttachments.blackHoles.get(level).holes else clientHoles[level.dimension()].orEmpty()
+	fun onEntityJoin(event: EntityJoinLevelEvent) {
+		val hole = event.entity as? BlackHoleEntity ?: return
+		index.getOrPut(event.level) { LinkedHashSet() }.add(hole)
+		generation++
+	}
 
-	fun addBlackHole(level: ServerLevel, hole: BlackHole) = update(level) { it + hole }
+	fun onEntityLeave(event: EntityLeaveLevelEvent) {
+		val hole = event.entity as? BlackHoleEntity ?: return
+		index[event.level]?.remove(hole)
+		generation++
+	}
 
-	/**
-	 * Replaces the hole with [id], if it still exists, by [change] applied to it. With [sync] false the change is
-	 * saved but clients only hear about it on the next [syncDirty] (for per-tick changes like growth).
-	 */
-	fun updateBlackHole(level: ServerLevel, id: String, sync: Boolean = true, change: (BlackHole) -> BlackHole) =
-		update(level, sync) { holes -> holes.map { if (it.id == id) change(it) else it } }
+	fun blackHoles(level: Level): List<BlackHole> {
+		val stamp = level.gameTime * 1_000_003L + generation
+		cache[level]?.let { (at, holes) -> if (at == stamp) return holes }
+		val holes = index[level].orEmpty().filter { !it.isRemoved }.map { it.snapshot() }
+		cache[level] = stamp to holes
+		return holes
+	}
 
-	private val dirty = java.util.Collections.newSetFromMap(java.util.WeakHashMap<ServerLevel, Boolean>())
+	private fun entity(level: Level, id: String): BlackHoleEntity? =
+		index[level].orEmpty().firstOrNull { it.stringUUID == id && !it.isRemoved }
 
-	/** Sends levels with unsynced changes to their players. */
-	fun syncDirty(level: ServerLevel) {
-		if (dirty.remove(level)) RelativityNetwork.syncToDimension(level, blackHoles(level))
+	fun addBlackHole(level: ServerLevel, hole: BlackHole) {
+		val entity = RelativityEntities.BLACK_HOLE.get().create(level) ?: return
+		entity.setPos(hole.x, hole.y, hole.z)
+		entity.apply(hole)
+		level.addFreshEntity(entity)
+	}
+
+	/** Applies [change] to the hole with [id], if it still exists. */
+	fun updateBlackHole(level: ServerLevel, id: String, change: (BlackHole) -> BlackHole) {
+		val entity = entity(level, id) ?: return
+		entity.apply(change(entity.snapshot()))
+		generation++
 	}
 
 	fun removeBlackHoles(level: ServerLevel, predicate: (BlackHole) -> Boolean): Int {
-		var removed = 0
-		update(level) { holes -> holes.filterNot(predicate).also { removed = holes.size - it.size } }
-		return removed
-	}
-
-	private fun update(level: ServerLevel, sync: Boolean = true, change: (List<BlackHole>) -> List<BlackHole>) {
-		val updated = change(SpacetimeAttachments.blackHoles.get(level).holes)
-		SpacetimeAttachments.blackHoles.set(level, BlackHoles(updated))
-		if (sync) {
-			dirty.remove(level)
-			RelativityNetwork.syncToDimension(level, updated)
-		} else {
-			dirty.add(level)
-		}
-	}
-
-	internal fun setClientHoles(dimension: ResourceKey<Level>, holes: List<BlackHole>) {
-		clientHoles = clientHoles + (dimension to holes)
-	}
-
-	internal fun clearClient() {
-		clientHoles = emptyMap()
+		val doomed = index[level].orEmpty().filter { !it.isRemoved && predicate(it.snapshot()) }
+		doomed.forEach { it.discard() }
+		return doomed.size
 	}
 
 	/**

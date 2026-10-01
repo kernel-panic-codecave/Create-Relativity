@@ -1,6 +1,5 @@
 package net.kernelpanicsoft.relativity.spacetime
 
-import kotlinx.serialization.Serializable
 import net.kernelpanicsoft.relativity.physics.orbit.KerrOrbits
 import net.kernelpanicsoft.relativity.physics.spacetime.Kerr
 import net.minecraft.world.phys.Vec3
@@ -12,10 +11,11 @@ import java.util.UUID
  * Size is set in blocks rather than mass, so it means the same thing whatever the dimension's speed of light is;
  * mass follows from the units.
  *
+ * An immutable snapshot of a [net.kernelpanicsoft.relativity.entity.BlackHoleEntity]; [id] is the entity's UUID.
+ *
  * [accretionRate] is the recent rate of swallowed mass (Sable mass units per second, smoothed); it drives the disk's
  * brightness and radiation pressure. [feedRate] is a steady artificial feed through the disk (`/relativity bh feed`).
  */
-@Serializable
 data class BlackHole(
 	val id: String = UUID.randomUUID().toString(),
 	val x: Double,

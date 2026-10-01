@@ -50,7 +50,8 @@ object EntitySpacetime {
 	fun onEntityTick(event: EntityTickEvent.Pre) {
 		val entity = event.entity
 		val level = entity.level()
-		if (entity.isSpectator || entity.isPassenger) return
+		// A hole sits inside its own horizon; it must not swallow itself (hole-hole interaction is M10's).
+		if (entity is BlackHoleEntity || entity.isSpectator || entity.isPassenger) return
 		if (SpacetimeField.blackHoles(level).isEmpty()) return
 		val halfHeight = entity.bbHeight / 2.0
 		val center = Vector3d(entity.x, entity.y + halfHeight, entity.z)
@@ -77,35 +78,111 @@ object EntitySpacetime {
 
 		// Creative flight is a building tool, not a way to hover over a hole; survival flight (mods) still falls.
 		val creativeFlying = entity is Player && entity.isCreative && entity.abilities.flying
-		if (entity.isControlledByLocalInstance && !creativeFlying) fall(entity, center)
-	}
-
-	private fun fall(entity: Entity, center: Vector3d) {
-		val level = entity.level()
-		val c = net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension())
-		val motion = entity.deltaMovement
-		val velocity = Vector3d(motion.x, motion.y, motion.z).mul(TICKS_PER_SECOND)
-		if (velocity.length() > MAX_FIELD_SPEED * c) velocity.normalize(MAX_FIELD_SPEED * c)
-		// Leapfrog: take the pull at the middle of this tick's motion, not its start. One kick per tick from the start
-		// point pumps energy into tight orbits near a hole and flings debris out; the midpoint conserves it.
-		val midpoint = Vector3d(velocity).mul(0.5 / TICKS_PER_SECOND).add(center)
-		val accel = SpacetimeField.acceleration(level, midpoint, velocity, Vector3d())
-		accel.add(SpacetimeField.radiationAcceleration(level, midpoint, couplingOf(entity), Vector3d()))
-		if (accel.lengthSquared() == 0.0) return
-		// blocks/s² over one tick, expressed in blocks/tick per tick.
-		val perTick = 1.0 / (TICKS_PER_SECOND * TICKS_PER_SECOND)
-		var next = motion.add(accel.x * perTick, accel.y * perTick, accel.z * perTick)
-
-		// The horizon is one-way: nothing inside moves outward.
-		val inside = SpacetimeField.insideHorizon(level, center)
-		if (inside != null) {
-			val outward = Vec3(center.x - inside.x, center.y - inside.y, center.z - inside.z).normalize()
-			val radial = next.dot(outward)
-			if (radial > 0.0) next = next.subtract(outward.scale(radial))
+		if (entity.isControlledByLocalInstance && !creativeFlying) {
+			if (entity is FallingBlockEntity || entity is ItemEntity) drift(entity, center) else fall(entity, center)
 		}
-		entity.deltaMovement = next
-		entity.hasImpulse = true
 	}
+
+	/** Where an entity should be after this tick, and velocity carried into the next one (blocks/s). */
+	private class Trajectory(val expected: Vec3, val velocity: Vector3d)
+
+	private val trajectories = WeakHashMap<Entity, Trajectory>()
+
+	/** Debris drag inside a hole's disk region (1/s): stands in for disk viscosity, so orbits decay and spiral in. */
+	private const val DISK_DRAG = 0.4
+	private const val MAX_SUBSTEPS = 32
+
+	/**
+	 * Integrates one tick of gravity (and radiation pressure) from [start] with velocity [velocity] (blocks/s, updated
+	 * in place), sub-stepped with leapfrog finely enough to resolve the local orbit (~1/40 of an orbital period): a
+	 * tight orbit near a hole takes only a few ticks, and one kick per tick throws things out. Returns the end point.
+	 */
+	private fun integrateTick(entity: Entity, start: Vector3d, velocity: Vector3d, diskDrag: Boolean): Vector3d {
+		val level = entity.level()
+		val holes = SpacetimeField.blackHoles(level)
+		val c = net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension())
+		var period = Double.POSITIVE_INFINITY
+		var inDisk = false
+		for (hole in holes) {
+			val gm = c * c * hole.mass
+			val r = maxOf(start.distance(hole.x, hole.y, hole.z), hole.schwarzschildRadius)
+			period = minOf(period, 2.0 * PI * kotlin.math.sqrt(r * r * r / gm))
+			if (r < 20.0 * hole.schwarzschildRadius) inDisk = true
+		}
+		val dt = 1.0 / TICKS_PER_SECOND
+		val steps = kotlin.math.ceil(dt / (period / 40.0)).toInt().coerceIn(1, MAX_SUBSTEPS)
+		val h = dt / steps
+		val coupling = couplingOf(entity)
+		val position = Vector3d(start)
+		val accel = Vector3d()
+		val push = Vector3d()
+
+		fun pull(at: Vector3d, v: Vector3d): Vector3d {
+			val fieldVelocity = Vector3d(v)
+			if (fieldVelocity.length() > MAX_FIELD_SPEED * c) fieldVelocity.normalize(MAX_FIELD_SPEED * c)
+			SpacetimeField.acceleration(level, at, fieldVelocity, accel)
+			return accel.add(SpacetimeField.radiationAcceleration(level, at, coupling, push))
+		}
+
+		repeat(steps) {
+			velocity.fma(h / 2.0, pull(position, velocity))
+			position.fma(h, velocity)
+			velocity.fma(h / 2.0, pull(position, velocity))
+			if (diskDrag && inDisk) velocity.mul(kotlin.math.exp(-DISK_DRAG * h))
+			// The horizon is one-way: nothing inside moves outward.
+			val inside = SpacetimeField.insideHorizon(level, position)
+			if (inside != null) {
+				val outward = Vector3d(position).sub(inside.x, inside.y, inside.z).normalize()
+				val radial = velocity.dot(outward)
+				if (radial > 0.0) velocity.sub(outward.mul(radial))
+			}
+		}
+		return position
+	}
+
+	/** True if [entity] ended up where the last tick's integration said it would. */
+	private fun onTrack(entity: Entity, carried: Trajectory?): Boolean =
+		carried != null && entity.position().distanceToSqr(carried.expected) < 0.01
+
+	/**
+	 * Loose things (debris, items) whose movement this owns outright: the motion is set to the exact displacement for
+	 * the tick, so vanilla movement (and the client, which receives it) follows the precise path, and the true
+	 * velocity is carried into the next tick unless a collision moved the entity elsewhere.
+	 */
+	private fun drift(entity: Entity, center: Vector3d) {
+		val carried = trajectories[entity]
+		val velocity = if (onTrack(entity, carried)) Vector3d(carried!!.velocity) else motionPerSecond(entity)
+		val end = integrateTick(entity, center, velocity, diskDrag = true)
+		val displacement = end.sub(center)
+		// Vanilla adds its own gravity before moving; take it back out so the entity lands exactly where integrated.
+		val vanillaGravity = if (entity.isNoGravity) 0.0 else entity.gravity
+		entity.deltaMovement = Vec3(displacement.x, displacement.y + vanillaGravity, displacement.z)
+		entity.hasImpulse = true
+		trajectories[entity] = Trajectory(entity.position().add(displacement.x, displacement.y, displacement.z), velocity)
+	}
+
+	/**
+	 * Mobs and players, whose movement also goes through vanilla (input, AI, friction, collisions). Gravity is
+	 * integrated exactly over the tick and handed to vanilla as the chord (x₁ − x₀) per tick: the exact path as one
+	 * segment, which vanilla then adds input to and collides. The part of the velocity change the chord doesn't contain
+	 * (v₁ − chord) is carried into the next tick, and dropped if the entity didn't arrive where expected (it hit
+	 * something, was knocked back or teleported).
+	 */
+	private fun fall(entity: Entity, center: Vector3d) {
+		val carried = trajectories[entity]
+		val start = motionPerSecond(entity)
+		if (onTrack(entity, carried)) start.add(carried!!.velocity)
+		val velocity = Vector3d(start)
+		val end = integrateTick(entity, center, velocity, diskDrag = false)
+		val chord = Vector3d(end).sub(center)
+		entity.deltaMovement = Vec3(chord.x, chord.y, chord.z)
+		entity.hasImpulse = true
+		val leftover = Vector3d(velocity).sub(Vector3d(chord).mul(TICKS_PER_SECOND))
+		trajectories[entity] = Trajectory(entity.position().add(chord.x, chord.y, chord.z), leftover)
+	}
+
+	private fun motionPerSecond(entity: Entity) =
+		Vector3d(entity.deltaMovement.x, entity.deltaMovement.y, entity.deltaMovement.z).mul(TICKS_PER_SECOND)
 
 	/** Proper time falls behind world time at (1 − dτ/dt) seconds per second. */
 	private fun tickClock(player: ServerPlayer, center: Vector3d) {

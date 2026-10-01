@@ -36,7 +36,6 @@ object Accretion {
 		GameRules.register("relativityBlackHoleGrowth", GameRules.Category.MISC, GameRules.BooleanValue.create(true))
 
 	private const val TICKS_PER_SECOND = 20.0
-	private const val SYNC_INTERVAL_TICKS = 10
 	/** Smoothing time of the accretion rate the disk and radiation pressure see. */
 	private const val RATE_SMOOTHING_SECONDS = 2.0
 	/** Horizon positions examined per tick per hole while hunting for blocks to eat. */
@@ -76,7 +75,7 @@ object Accretion {
 		val units = RelativityConfig.units(level.dimension())
 		val growth = level.gameRules.getBoolean(GROWTH)
 		for (hole in holes) tickHole(level, hole, units, growth)
-		if (level.gameTime % SYNC_INTERVAL_TICKS == 0L) SpacetimeField.syncDirty(level)
+
 	}
 
 	private fun tickHole(level: ServerLevel, hole: BlackHole, units: SpacetimeUnits, growth: Boolean) {
@@ -123,7 +122,7 @@ object Accretion {
 		val alpha = 1.0 / (RATE_SMOOTHING_SECONDS * TICKS_PER_SECOND)
 		val smoothed = hole.accretionRate + (rate - hole.accretionRate) * alpha
 		if (rs == hole.schwarzschildRadius && spin == hole.spin && abs(smoothed - hole.accretionRate) < 1e-9) return
-		SpacetimeField.updateBlackHole(level, hole.id, sync = false) {
+		SpacetimeField.updateBlackHole(level, hole.id) {
 			it.copy(schwarzschildRadius = rs, spin = spin, accretionRate = if (smoothed < 1e-6) 0.0 else smoothed)
 		}
 	}
@@ -194,6 +193,8 @@ object Accretion {
 			val pull = toHole.normalize(gm / d2).add(0.0, -WORLD_GRAVITY, 0.0).length()
 			if (pull < strength * (1.0 + hardness)) return@repeat
 			val debris = FallingBlockEntity.fall(level, pos, state)
+			// Its motion is fully integrated around the hole (EntitySpacetime.drift); vanilla gravity would double-count.
+			debris.isNoGravity = true
 			// Prograde tangential kick, a fraction of the circular speed: debris spirals in, forming the disk.
 			val sense = if (hole.spin < 0.0) -1.0 else 1.0
 			val tangent = Vector3d(dir.z, 0.0, -dir.x).mul(sense)

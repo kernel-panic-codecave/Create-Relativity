@@ -60,5 +60,6 @@
   "config.create_relativity.black_holes.hawking": "Hawking Evaporation",
   "config.create_relativity.black_holes.hawking.comment": "Small holes evaporate (lifetime grows with mass cubed) and pop at the Planck length.",
   "gamerule.relativityBlackHoleGrowth": "Black holes eat blocks and grow",
-  "commands.create_relativity.bh.feed": "Feeding the nearest black hole at %s mass/s (Eddington limit %s mass/s; anything above is blown away)"
+  "commands.create_relativity.bh.feed": "Feeding the nearest black hole at %s mass/s (Eddington limit %s mass/s; anything above is blown away)",
+  "entity.create_relativity.black_hole": "Black Hole"
 }
