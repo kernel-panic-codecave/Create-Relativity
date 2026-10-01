@@ -1,0 +1,9 @@
+{
+  "stages": [
+    {
+      "type": "veil:blit",
+      "shader": "create_relativity:black_hole_lens",
+      "in": "minecraft:main"
+    }
+  ]
+}

@@ -15,5 +15,8 @@
   "commands.create_relativity.bh.list": "%s black hole(s) in this dimension:",
   "commands.create_relativity.bh.removed": "Removed black hole at %s %s %s",
   "commands.create_relativity.bh.cleared": "Removed %s black hole(s)",
-  "commands.create_relativity.bh.none": "No black holes in this dimension"
+  "commands.create_relativity.bh.none": "No black holes in this dimension",
+  "config.create_relativity.render": "Rendering",
+  "config.create_relativity.render.lensing": "Gravitational Lensing",
+  "config.create_relativity.render.lensing.comment": "Bend light around black holes (post-processing). Turn off if it clashes with a shader pack."
 }

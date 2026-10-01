@@ -33,6 +33,14 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 
 	/** Per-player client settings. */
 	object Client : ConfigSpec.Client(CreateRelativity.MOD) {
+		object Render : CategorySpec(Component.translatable("config.create_relativity.render"), "render") {
+			val lensing by boolean(
+				title = Component.translatable("config.create_relativity.render.lensing"),
+				comment = Component.translatable("config.create_relativity.render.lensing.comment"),
+				default = true,
+			)
+		}
+
 		object Debug : CategorySpec(Component.translatable("config.create_relativity.debug"), "debug") {
 			val showRadii by boolean(
 				title = Component.translatable("config.create_relativity.debug.show_radii"),

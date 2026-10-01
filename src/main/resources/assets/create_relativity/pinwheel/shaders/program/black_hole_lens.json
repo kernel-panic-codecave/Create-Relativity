@@ -1,0 +1,7 @@
+{
+  "vertex": "veil:blit_screen",
+  "fragment": "create_relativity:black_hole_lens",
+  "textures": {
+    "LensLookup": "create_relativity:lens_lookup"
+  }
+}
