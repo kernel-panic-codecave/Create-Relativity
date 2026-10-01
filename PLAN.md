@@ -130,22 +130,37 @@ SR kinematics:
 - **Event horizon**: once inside, every future-directed path leads to r → 0. Controls still work, but you can't escape.
   The singularity kills you (`create_relativity.singularity` damage type).
 
-### Time dilation: the hard multiplayer problem
-Every entity carries a **proper-time ledger** `τ` and a local rate `dτ/dt = α·sqrt(1 − v²_local/c²)` (the exact form comes from the metric).
+### Time dilation: local tick rates from proper time
+Proper time along a worldline is invariant: every observer agrees how much of it has passed. So **a thing's tick count
+is its proper time**, and simulation stays consistent in multiplayer.
 
-- **Mobs, items, block entities, Create kinetics** use a *tick accumulator*: they run `floor(acc += dτ/dt)` ticks per
-  world tick. Near a BH, furnaces smelt slower, crops grow slower, mobs move in slow motion, and Create shafts spin
-  slower as seen from outside.
-- **Players, singleplayer**: scale the server `TickRateManager` (vanilla `/tick rate` machinery) by `1/(dτ/dt)` of the
-  player. Hover near the horizon and the world outside fast-forwards: sun racing, crops shooting up. That's the Interstellar
-  "Miller's planet" moment.
-- **Players, multiplayer**: you can't run the world at a different rate for each player. Their proper-time clock (HUD
-  chronometer) diverges from world time, and the "aging" effects are personal: potion/effect durations, hunger and
-  cooldowns run on τ. Config option: `multiplayerTimeDilation = LEDGER_ONLY | SLOW_PLAYER`.
-- Chunk loading: a dilated region inside an otherwise-unloaded area gets a forced ticket for as long as a source is active
+**Simulation (server).** Server time is coordinate time, the clock of an observer far from every hole, so
+`dτ/dt ≤ 1` everywhere and regions only ever *skip* ticks.
+- Each block entity, entity, chunk section and **Sable sub-level** keeps an accumulator: add dτ/dt (from its position
+  and velocity, via `SpacetimeField.properTimeRate`) every server tick, run one real tick each time it reaches 1.
+- A sub-level uses dτ/dt at its centre of mass, so the whole ship (Create kinetics, contraptions, block entities in
+  its plot) runs on the ship's own clock. The twin paradox comes for free: a ship flown fast has smelted less on return.
+- Hooks: entity ticks (`EntityTickEvent.Pre`, cancellable), block-entity ticking, random ticks per section, and
+  scheduled block/fluid ticks (a due tick is re-deferred until its region's local clock has caught up).
+- Rendering interpolates with a per-region partial tick, so dilated mobs and machines animate in smooth slow motion
+  instead of stuttering.
+
+**Presentation (client, each observer's frame).** At c = 64 b/s light delay is visible (640 blocks ≈ 10 s). The
+server timestamps block changes, block-entity render state and entity positions. Each client applies them when their
+light reaches it: `t_emit + distance/c`, with the extra delay from light passing near a hole (from the
+physics-core photon paths). The result is a delayed view of distant events, pile-up in front of fast ships, and the
+retarded positions M11's SR rendering needs. It's purely visual: interaction always uses server state. Toggleable.
+
+**What a queue can't do.** It can only delay. A dilated observer should see the outside **sped up**, which in
+multiplayer would mean showing events that haven't happened yet. So:
+- **Multiplayer:** a dilated player can also tick at their local rate (`playerDilation = SLOW_PLAYER`): they move in
+  slow motion and the outside looks fast *relative to them*, consistently for everyone. `LEDGER_ONLY` (only the HUD
+  clock drifts, the player moves normally) remains as the gentler option.
+- **Singleplayer:** the reference frame follows the player. The server tick rate becomes 20 / dτ/dt_player and every
+  region ticks at its rate *relative to the player's*. Hovering near a hole, you play at normal speed while the world
+  outside races (the Miller's-planet moment).
+- Chunk loading: a dilated region in an otherwise unloaded area gets a forced ticket while a hole is active
   (config cap on how many).
-
----
 
 ## 5. Black holes
 
@@ -479,7 +494,7 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M4** | Entity geodesics + horizon + proper time | Items and mobs orbit, precess, and fall in. Players die at the singularity. HUD chronometer. |
 | **M5** | Accretion + growth + disk shader | BH eats blocks, grows, and the disk lights up and gets brighter while feeding. Hawking evaporation. |
 | **M6** | **Spaghettification** | Tidal chains, deformation renderer, first-person stretch, death message. *Second wow point.* |
-| **M7** | Time dilation systems | Tick accumulator for BEs/mobs/kinetics. Singleplayer tick-rate scaling. MP ledger mode. |
+| **M7** | Time dilation systems | Proper-time local tick rates for BEs, entities, sections and Sable sub-levels (scheduled + random ticks too), per-region render interpolation, light-delay presentation queue on clients, SP reference frame follows the player, MP `SLOW_PLAYER`/`LEDGER_ONLY`. |
 | **M8** | Sable/Aeronautics integration | Ships orbit, slingshot, get tidally ripped apart. Kinetic dilation overstress. |
 | **M9** | Kerr | Spin from accretion, frame dragging, ergosphere, Kerr ray marcher, Penrose power plant. **High-quality lens preset**: march the curved light path through the frame and capture depth so objects near the hole occlude and get uncovered correctly (screen-space lensing can't; see the parked `lens-experiments` branch for what was tried). |
 | **M10** | **Binary BHs + gravitational waves** | PN inspiral with radiation reaction, NR-fit remnant + kick, QNM ringdown, strain field, ship flexing, ripple shader, chirp audio, interferometer. *Third wow point.* |
@@ -514,7 +529,7 @@ spike (M0) comes first because it's the biggest unknown.
 ## 13. Open decisions (defaults chosen; change if you disagree)
 1. **c = 64 blocks/s** default, overridable per dimension (see 6).
 2. **BH growth on by default** in survival, with evaporation keeping small ones in check.
-3. **Multiplayer time dilation = LEDGER_ONLY** default.
+3. **Multiplayer player dilation = LEDGER_ONLY** default (`SLOW_PLAYER` opt-in); everything else always ticks on its proper time.
 4. **SR visuals = SEEN** (Terrell-correct) default.
 5. Package `net.kernelpanicsoft.relativity`, mod id `create_relativity`.
 6. ✅ **c is per dimension**: 64 by default, 512 in planetoid space so planets aren't near-black-holes (decided).
