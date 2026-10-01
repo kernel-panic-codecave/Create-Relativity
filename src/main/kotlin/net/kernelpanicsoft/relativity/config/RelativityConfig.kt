@@ -61,6 +61,16 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.black_holes.max_radius.comment"),
 				default = 32.0,
 			)
+			val bodyTolerance by double(
+				title = Component.translatable("config.create_relativity.black_holes.body_tolerance"),
+				comment = Component.translatable("config.create_relativity.black_holes.body_tolerance.comment"),
+				default = 20.0,
+			)
+			val shipTidalStrength by double(
+				title = Component.translatable("config.create_relativity.black_holes.ship_tidal_strength"),
+				comment = Component.translatable("config.create_relativity.black_holes.ship_tidal_strength.comment"),
+				default = 200.0,
+			)
 			val hawking by boolean(
 				title = Component.translatable("config.create_relativity.black_holes.hawking"),
 				comment = Component.translatable("config.create_relativity.black_holes.hawking.comment"),

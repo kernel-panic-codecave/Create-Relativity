@@ -1,0 +1,23 @@
+{
+  "parent": "minecraft:story/root",
+  "display": {
+    "icon": {
+      "id": "minecraft:string"
+    },
+    "title": {
+      "translate": "advancements.create_relativity.noodle_incident.title"
+    },
+    "description": {
+      "translate": "advancements.create_relativity.noodle_incident.description"
+    },
+    "frame": "challenge",
+    "hidden": true,
+    "announce_to_chat": true,
+    "show_toast": true
+  },
+  "criteria": {
+    "spaghettified": {
+      "trigger": "minecraft:impossible"
+    }
+  }
+}

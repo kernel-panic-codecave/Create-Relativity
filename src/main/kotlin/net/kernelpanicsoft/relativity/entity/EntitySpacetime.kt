@@ -52,7 +52,14 @@ object EntitySpacetime {
 		val level = entity.level()
 		// A hole sits inside its own horizon; it must not swallow itself (hole-hole interaction is M10's).
 		if (entity is BlackHoleEntity || entity.isSpectator || entity.isPassenger) return
-		if (SpacetimeField.blackHoles(level).isEmpty()) return
+		if (SpacetimeField.blackHoles(level).isEmpty()) {
+			// No holes left (removed or evaporated): let go of any stretch.
+			if (!level.isClientSide && entity is LivingEntity && SpacetimeAttachments.bodyStretch.get(entity) != 1.0) {
+				SpacetimeAttachments.bodyStretch.set(entity, 1.0)
+				net.kernelpanicsoft.relativity.spacetime.SpacetimeSync.update(entity)
+			}
+			return
+		}
 		val halfHeight = entity.bbHeight / 2.0
 		val center = Vector3d(entity.x, entity.y + halfHeight, entity.z)
 
@@ -74,6 +81,8 @@ object EntitySpacetime {
 				ticksInside.remove(entity)
 			}
 			if (entity is ServerPlayer) tickClock(entity, center)
+			if (entity is LivingEntity && entity.isAlive) Spaghettification.tick(entity, center)
+			if (entity is LivingEntity) net.kernelpanicsoft.relativity.spacetime.SpacetimeSync.update(entity)
 		}
 
 		// Creative flight is a building tool, not a way to hover over a hole; survival flight (mods) still falls.

@@ -28,12 +28,14 @@ object ProperTimeHud {
 		val rate = SpacetimeField.properTimeRate(level, center, Vector3d(motion.x, motion.y, motion.z).mul(20.0))
 		val lag = SpacetimeAttachments.properTimeLag.get(player)
 		val inside = SpacetimeField.insideHorizon(level, center) != null
-		if (rate > 0.9995 && lag < 0.05 && !inside) return
+		val stretch = SpacetimeAttachments.bodyStretch.get(player)
+		if (rate > 0.9995 && lag < 0.05 && !inside && stretch < 1.01) return
 
 		val font = minecraft.font
 		val lines = buildList {
 			add(Component.translatable("hud.create_relativity.clock_rate", "%.4f".format(rate)))
 			add(Component.translatable("hud.create_relativity.clock_lag", "%.2f".format(lag)))
+			if (stretch >= 1.01) add(Component.translatable("hud.create_relativity.body_stretch", "%.2f".format(stretch)))
 			if (inside) add(Component.translatable("hud.create_relativity.inside_horizon"))
 		}
 		val right = graphics.guiWidth() - 4

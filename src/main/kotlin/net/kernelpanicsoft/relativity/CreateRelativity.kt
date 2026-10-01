@@ -12,6 +12,7 @@ import net.kernelpanicsoft.relativity.sable.RelativityForceGroups
 import net.kernelpanicsoft.relativity.sable.SableSpacetimeForces
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
+import net.kernelpanicsoft.relativity.spacetime.SpacetimeSync
 import net.minecraft.resources.ResourceLocation
 import net.neoforged.fml.common.Mod
 import net.neoforged.fml.loading.FMLEnvironment
@@ -34,6 +35,8 @@ object CreateRelativity {
 	init {
 		RelativityConfig.init()
 		SpacetimeAttachments.init()
+		SpacetimeSync.init()
+		NeoForge.EVENT_BUS.addListener(SpacetimeSync::onStartTracking)
 		RelativityEntities.register()
 		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityJoin)
 		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityLeave)

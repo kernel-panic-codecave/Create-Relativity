@@ -8,6 +8,12 @@
     "create_relativity:singularity_rounding",
     "create_relativity:singularity_information",
     "create_relativity:singularity_bottom",
-    "create_relativity:singularity_entropy"
+    "create_relativity:singularity_entropy",
+    "create_relativity:spaghettification",
+    "create_relativity:spaghettification_noodle",
+    "create_relativity:spaghettification_al_dente",
+    "create_relativity:spaghettification_disagreement",
+    "create_relativity:spaghettification_stretch",
+    "create_relativity:spaghettification_extruded"
   ]
 }

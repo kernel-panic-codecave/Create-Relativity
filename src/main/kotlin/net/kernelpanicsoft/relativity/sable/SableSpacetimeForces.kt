@@ -71,11 +71,18 @@ object SableSpacetimeForces {
 		}
 	}
 
-	/** Swallows queued sub-levels once the physics step is over, so the container isn't modified mid-iteration. */
+	private const val TEAR_INTERVAL_TICKS = 5
+	private const val MAX_TEAR_BLOCKS = 128
+
+	/**
+	 * Swallows queued sub-levels once the physics step is over, so the container isn't modified mid-iteration, and
+	 * tears ships apart where the tides across them beat their strength.
+	 */
 	fun onLevelTick(event: LevelTickEvent.Post) {
 		val level = event.level as? ServerLevel ?: return
-		if (captures.isEmpty()) return
 		val container = SubLevelContainer.getContainer(level) ?: return
+		if (level.gameTime % TEAR_INTERVAL_TICKS == 0L) tearShips(level, container)
+		if (captures.isEmpty()) return
 		val units = RelativityConfig.units(level.dimension())
 		val iterator = captures.iterator()
 		while (iterator.hasNext()) {
@@ -86,6 +93,64 @@ object SableSpacetimeForces {
 			container.removeSubLevel(capture.subLevel, SubLevelRemovalReason.REMOVED)
 			Accretion.capture(level, capture.hole, capture.mass, capture.position, capture.velocity)
 			CreateRelativity.LOGGER.info("Black hole {} swallowed sub-level {} (mass {})", capture.hole.id, capture.subLevel.uniqueId, capture.mass)
+		}
+	}
+
+	/**
+	 * A ship of extent D along the radial direction feels its ends pulled apart at 2GM·D/r³. Past its strength it
+	 * tears across the mid-plane through its centre of mass (perpendicular to the radial): those blocks are removed and
+	 * Sable's connectivity check splits it in two. Each half is checked again; shorter pieces feel weaker tides, so the
+	 * breakup cascades as they fall in.
+	 */
+	private fun tearShips(level: ServerLevel, container: dev.ryanhcode.sable.api.sublevel.ServerSubLevelContainer) {
+		val holes = SpacetimeField.blackHoles(level)
+		if (holes.isEmpty()) return
+		val c = RelativityConfig.speedOfLight(level.dimension())
+		val strength = RelativityConfig.Server.BlackHoles.shipTidalStrength
+		val corner = Vector3d()
+		val world = Vector3d()
+		for (subLevel in container.allSubLevels.toList()) {
+			if (subLevel.isRemoved) continue
+			val mass = subLevel.massTracker
+			if (mass.isInvalid) continue
+			val com = mass.centerOfMass ?: continue
+			val pose = subLevel.logicalPose()
+			val worldCom = pose.transformPosition(Vector3d(com))
+			val hole = holes.minByOrNull { worldCom.distanceSquared(it.x, it.y, it.z) } ?: continue
+			val r = worldCom.distance(hole.x, hole.y, hole.z)
+			if (r > 50.0 * hole.schwarzschildRadius || r < 1e-3) continue
+			val radial = Vector3d(worldCom).sub(hole.x, hole.y, hole.z).normalize()
+
+			val box = subLevel.plot.boundingBox
+			var low = Double.POSITIVE_INFINITY
+			var high = Double.NEGATIVE_INFINITY
+			for (i in 0 until 8) {
+				corner.set(
+					if (i and 1 == 0) box.minX().toDouble() else box.maxX() + 1.0,
+					if (i and 2 == 0) box.minY().toDouble() else box.maxY() + 1.0,
+					if (i and 4 == 0) box.minZ().toDouble() else box.maxZ() + 1.0,
+				)
+				val along = pose.transformPosition(corner, world).sub(worldCom).dot(radial)
+				low = minOf(low, along)
+				high = maxOf(high, along)
+			}
+			val extent = high - low
+			if (extent < 1.5) continue // a single block's width can't be split further
+			val tide = 2.0 * c * c * hole.mass * extent / (r * r * r)
+			if (tide < strength) continue
+
+			var torn = 0
+			val pos = net.minecraft.core.BlockPos.MutableBlockPos()
+			loop@ for (x in box.minX()..box.maxX()) for (y in box.minY()..box.maxY()) for (z in box.minZ()..box.maxZ()) {
+				pos.set(x, y, z)
+				val state = level.getBlockState(pos)
+				if (state.isAir || state.getDestroySpeed(level, pos) < 0f) continue
+				corner.set(x + 0.5, y + 0.5, z + 0.5)
+				if (kotlin.math.abs(pose.transformPosition(corner, world).sub(worldCom).dot(radial)) >= 0.5) continue
+				level.setBlock(pos, net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(), 3)
+				if (++torn >= MAX_TEAR_BLOCKS) break@loop
+			}
+			if (torn > 0) CreateRelativity.LOGGER.debug("Tides tore {} blocks from sub-level {}", torn, subLevel.uniqueId)
 		}
 	}
 
