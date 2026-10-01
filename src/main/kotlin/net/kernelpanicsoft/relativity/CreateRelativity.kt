@@ -1,12 +1,16 @@
 package net.kernelpanicsoft.relativity
 
 import dev.architectury.platform.Platform
+import net.kernelpanicsoft.archie.events.gametest.AGametestEvents
+import net.kernelpanicsoft.archie.gametest.platform.AGameTestPlatform
 import net.kernelpanicsoft.archie.util.onClient
 import net.kernelpanicsoft.relativity.accretion.Accretion
 import net.kernelpanicsoft.relativity.client.RelativityClient
 import net.kernelpanicsoft.relativity.command.RelativityCommands
 import net.kernelpanicsoft.relativity.config.RelativityConfig
+import net.kernelpanicsoft.relativity.create.ShaftTorsion
 import net.kernelpanicsoft.relativity.entity.EntitySpacetime
+import net.kernelpanicsoft.relativity.gametest.RelativityGameTest
 import net.kernelpanicsoft.relativity.entity.RelativityEntities
 import net.kernelpanicsoft.relativity.sable.RelativityForceGroups
 import net.kernelpanicsoft.relativity.sable.SableSpacetimeForces
@@ -48,10 +52,16 @@ object CreateRelativity {
 		NeoForge.EVENT_BUS.addListener(EntitySpacetime::onEntityTick)
 		NeoForge.EVENT_BUS.addListener(LocalClocks::onLevelLoad)
 		NeoForge.EVENT_BUS.addListener(ReferenceFrame::onServerTick)
+		NeoForge.EVENT_BUS.addListener(ShaftTorsion::onLevelTick)
 		Accretion.init()
 		NeoForge.EVENT_BUS.addListener(Accretion::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(RelativityCommands::register)
 		onClient { RelativityClient.init() }
+		// Only under runGametest(Client): the gametest library isn't on the production classpath.
+		if (AGameTestPlatform.isGameTest) {
+			AGametestEvents += MOD
+			RelativityGameTest.init()
+		}
 		LOGGER.info("Create: Relativity initialized")
 	}
 }

@@ -29,6 +29,27 @@ loom {
     runs {
         named("client")
         named("server")
+        // Archie GameTest runs: `./gradlew runGametest` (server suite, exits with the result).
+        create("gametest") {
+            server()
+            name("Minecraft GameTest")
+            property("neoforge.enableGameTest", "true")
+            property("neoforge.gameTestServer", "true")
+            property("archie.gametest.side", "server")
+            property("archie.gametest", "true")
+            property("archie.gametest.modid", modId)
+            // Only ours: other mods on the dev runtime ship gametests whose structures aren't here.
+            property("neoforge.enabledGameTestNamespaces", modId)
+        }
+        create("gametestClient") {
+            client()
+            name("Minecraft GameTest Client")
+            property("neoforge.enableGameTest", "true")
+            property("archie.gametest.side", "client")
+            property("archie.gametest", "true")
+            property("archie.gametest.modid", modId)
+            property("neoforge.enabledGameTestNamespaces", modId)
+        }
         forEach { config ->
             config.ideConfigGenerated(true)
         }
@@ -94,6 +115,10 @@ dependencies {
         exclude(group = "dev.nyon", module = "KotlinLangForge")
         exclude(group = "org.junit.jupiter")
     }
+
+    // Archie's GameTest harness: dev-time only, referenced only behind AGameTestPlatform.isGameTest
+    modCompileOnly("net.kernelpanicsoft.archie:archie-core-gametest-neoforge:${property("archie_version")}") { isTransitive = false }
+    modLocalRuntime("net.kernelpanicsoft.archie:archie-core-gametest-neoforge:${property("archie_version")}") { isTransitive = false }
 
     // Pure-Kotlin relativity math, shipped inside our jar
     implementation(project(":physics-core"))

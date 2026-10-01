@@ -29,6 +29,8 @@
     "BoundTickingBlockEntityMixin",
     "LevelMixin",
     "LevelTicksMixin",
-    "ServerLevelMixin"
+    "ServerLevelMixin",
+    "create.KineticNetworkMixin",
+    "create.TorquePropagatorAccessor"
   ]
 }

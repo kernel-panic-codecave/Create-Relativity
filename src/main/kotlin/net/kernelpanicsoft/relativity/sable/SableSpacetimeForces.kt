@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * Applies the spacetime field to every Sable sub-level each physics substep, at its centre of mass:
  * ships orbit, precess, get dragged by spinning holes and fall in along true geodesics. A ship whose
  * centre of mass crosses a horizon is captured: removed, with its mass added to the hole.
- * Tidal stress across a ship comes later (M6/M8).
+ * The tidal field also torques the ship toward the hole (gravity gradient), and tears it apart past its strength.
  */
 object SableSpacetimeForces {
 	/**
@@ -43,6 +43,7 @@ object SableSpacetimeForces {
 		val dt = event.timeStep
 		val velocity = Vector3d()
 		val accel = Vector3d()
+		val torque = Vector3d()
 
 		for (subLevel in container.allSubLevels) {
 			if (subLevel.isRemoved) continue
@@ -66,9 +67,34 @@ object SableSpacetimeForces {
 			accel.add(SpacetimeField.radiationAcceleration(level, worldCom, Accretion.SHIP_COUPLING, Vector3d()))
 			if (accel.lengthSquared() == 0.0) continue
 			val impulse = pose.transformNormalInverse(accel.mul(mass.mass * dt))
-			subLevel.getOrCreateQueuedForceGroup(RelativityForceGroups.SPACETIME_CURVATURE.get())
-				.applyAndRecordPointForce(com, impulse)
+			val forces = subLevel.getOrCreateQueuedForceGroup(RelativityForceGroups.SPACETIME_CURVATURE.get())
+			forces.applyAndRecordPointForce(com, impulse)
+			gravityGradientTorque(holes, c, worldCom, pose, mass.inertiaTensor, torque)
+			forces.forceTotal.applyTorqueImpulse(torque.mul(dt))
 		}
+	}
+
+	/**
+	 * Gravity-gradient torque on a body (plot-local, N·m): τ = Σ (3GM/r³) r̂ × (I·r̂) over the holes, with r̂ from the
+	 * hole to the centre of mass in the body frame and I the inertia tensor about it. It turns the body's long axis
+	 * (least inertia) toward the hole: ships tidally lock and rock about the radial line.
+	 */
+	private fun gravityGradientTorque(
+		holes: List<BlackHole>, c: Double, worldCom: Vector3d, pose: dev.ryanhcode.sable.companion.math.Pose3dc,
+		inertia: org.joml.Matrix3dc, out: Vector3d,
+	): Vector3d {
+		out.zero()
+		val radial = Vector3d()
+		val ir = Vector3d()
+		for (hole in holes) {
+			radial.set(worldCom).sub(hole.x, hole.y, hole.z)
+			val r = radial.length()
+			if (r < hole.schwarzschildRadius) continue
+			pose.transformNormalInverse(radial.div(r))
+			inertia.transform(radial, ir)
+			out.add(radial.cross(ir).mul(3.0 * c * c * hole.mass / (r * r * r)))
+		}
+		return out
 	}
 
 	private const val TEAR_INTERVAL_TICKS = 5
