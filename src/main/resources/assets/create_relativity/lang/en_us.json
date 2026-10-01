@@ -85,5 +85,7 @@
   "config.create_relativity.time.dilate_ticks": "Dilate Local Ticks",
   "config.create_relativity.time.dilate_ticks.comment": "Entities, block entities, random ticks and scheduled ticks run at their local proper-time rate: near a hole or aboard a fast ship, machines, crops and mobs slow down by dτ/dt. Players are exempt (their clock only drifts on the HUD).",
   "config.create_relativity.time.max_frame_speedup": "Max Singleplayer Speedup",
-  "config.create_relativity.time.max_frame_speedup.comment": "In singleplayer the world runs relative to your own clock: when you're dilated by dτ/dt the server ticks 1/(dτ/dt) times faster while you stay at normal speed. This caps that speedup (the server has to keep up)."
+  "config.create_relativity.time.max_frame_speedup.comment": "In singleplayer the world runs relative to your own clock: when you're dilated by dτ/dt the server ticks 1/(dτ/dt) times faster while you stay at normal speed. This caps that speedup (the server has to keep up).",
+  "config.create_relativity.render.light_delay": "Light Delay",
+  "config.create_relativity.render.light_delay.comment": "See distant things as they were when their light left them: block and entity updates are held for distance / c. At c = 64 b/s, something 64 blocks away is a second in the past."
 }

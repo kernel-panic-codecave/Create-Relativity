@@ -97,7 +97,8 @@ object LocalClocks {
 		shipRates[ship.uniqueId]?.let { if (it.gameTime == time) return it.rate }
 		val pose = ship.logicalPose()
 		val position = Vector3d(pose.position())
-		val velocity = SableCompanion.INSTANCE.getVelocity(level, ship, Vector3d(position))
+		// Sable takes the point in the ship's plot coordinates; its pivot moves at the ship's linear velocity.
+		val velocity = SableCompanion.INSTANCE.getVelocity(level, ship, Vector3d(pose.rotationPoint()))
 		val rate = clean(SpacetimeField.properTimeRate(level, position, velocity))
 		if (shipRates.size > 4096) shipRates.clear()
 		shipRates[ship.uniqueId] = ShipRate(time, rate)

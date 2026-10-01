@@ -14,7 +14,12 @@
     "client.PlayerFrameRenderMixin",
     "client.LevelRendererPlayerMixin",
     "client.GameRendererPlayerMixin",
-    "client.ItemInHandRendererMixin"
+    "client.ItemInHandRendererMixin",
+    "client.network.ConnectionMixin",
+    "client.network.PacketEntityIdAccessors$MoveEntity",
+    "client.network.PacketEntityIdAccessors$RotateHead",
+    "client.network.PacketEntityIdAccessors$EntityEvent",
+    "client.network.PacketEntityIdAccessors$SectionBlocks"
   ],
   "injectors": {
     "defaultRequire": 1
