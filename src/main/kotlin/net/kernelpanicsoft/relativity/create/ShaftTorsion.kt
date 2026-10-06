@@ -39,6 +39,8 @@ object ShaftTorsion {
 	/** Rates drift as holes grow and ships move; networks with dilated members re-total their stress every second. */
 	fun onLevelTick(event: LevelTickEvent.Post) {
 		val level = event.level as? ServerLevel ?: return
+		// Frozen with /tick freeze: hold still with the rest of the world (stepping still runs).
+		if (!level.tickRateManager().runsNormally()) return
 		if (level.gameTime % REFRESH_TICKS != 0L) return
 		val networks = TorquePropagatorAccessor.`create_relativity$getNetworks`()[level] ?: return
 		for (network in networks.values.toList()) {

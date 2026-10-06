@@ -106,6 +106,8 @@ object SableSpacetimeForces {
 	 */
 	fun onLevelTick(event: LevelTickEvent.Post) {
 		val level = event.level as? ServerLevel ?: return
+		// Frozen with /tick freeze: hold still with the rest of the world (stepping still runs).
+		if (!level.tickRateManager().runsNormally()) return
 		val container = SubLevelContainer.getContainer(level) ?: return
 		if (level.gameTime % TEAR_INTERVAL_TICKS == 0L) tearShips(level, container)
 		if (captures.isEmpty()) return

@@ -70,6 +70,8 @@ object Accretion {
 
 	fun onLevelTick(event: LevelTickEvent.Post) {
 		val level = event.level as? ServerLevel ?: return
+		// Frozen with /tick freeze: hold still with the rest of the world (stepping still runs).
+		if (!level.tickRateManager().runsNormally()) return
 		val holes = SpacetimeField.blackHoles(level)
 		if (holes.isEmpty()) return
 		val units = RelativityConfig.units(level.dimension())
