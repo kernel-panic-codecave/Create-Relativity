@@ -22,7 +22,11 @@
     "client.network.PacketEntityIdAccessors$SectionBlocks",
     "client.GameRendererPickMixin",
     "client.GameRendererShadersAccessor",
-    "client.FrustumMixin"
+    "client.FrustumMixin",
+    "client.RenderTypeTextureAccessors$Composite",
+    "client.RenderTypeTextureAccessors$State",
+    "client.RenderTypeTextureAccessors$Texture",
+    "client.flywheel.VisualizationManagerImplMixin"
   ],
   "injectors": {
     "defaultRequire": 1

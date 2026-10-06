@@ -1,144 +1,47 @@
 #veil:buffer veil:camera VeilCamera
+#include create_relativity:lens_scene
 
-// Gravitational lensing by Schwarzschild black holes.
+// Gravitational lensing by black holes.
 //
-// Each view ray is bent in its own orbital plane (hole, camera, ray) using a lookup table of where light seen at
-// angle psi from the inward radial, by a camera at u0 = r_s / r_cam, came from (SchwarzschildLens).
-//
-// The bent ray resamples the camera's own frame (sharp). Only where the frame can't hold the answer is it traced
-// through a colour+depth cube captured from the hole (LensEnvironment): rays bent off-screen (most of the photon
-// ring points back past the camera), and rays whose frame sample is an object in front of where they bend, which
-// they actually pass behind. For that tracing the bent ray is modelled as two straight legs meeting at its
-// closest approach to the hole. Near the screen edges the two sources are blended so there's no seam.
+// Each view ray's bent path is followed through the scene (lens_scene.glsl; spinning holes through Kerr, kerr.glsl),
+// from reduced-resolution tables (kerr_table.fsh, scene_table.fsh) where they're accurate and marched per pixel where
+// not: to the first surface the camera's frame shows, else one in the voxel grid round the hole (LensVoxels), else the
+// sky. Then the accretion disk on top, and with vertex lensing (VertexLens) only the shadow and the sky.
 
 uniform sampler2D DiffuseSampler0;
-uniform sampler2D DiffuseDepthSampler;
 uniform sampler2D LensLookup;
-uniform sampler2D Environment;      // 3x2 cube-face colour atlas
-uniform sampler2D EnvironmentDepth; // matching raw depth
-uniform int EnvironmentReady;
-uniform vec3 CaptureCenter;         // where the cube was captured, relative to the camera
 uniform vec4 Disk;      // nearest hole's accretion disk: x brightness (0 = none), y/z inner/outer radius (blocks),
                         // w spin sense (+1 counter-clockwise from above, -1 clockwise)
 uniform float DiskTime; // seconds x c (blocks of light travel), for the disk's rotating turbulence
-uniform float DisplayTanHalfFov;    // > 0: the frame was rendered wider than the screen (overscan); this is the
-                                    // screen's tan(vertical FOV / 2), and output pixels are cropped back to it
 
-#define MAX_HOLES 8
-uniform int HoleCount;
-uniform vec4 Holes[MAX_HOLES]; // xyz: centre relative to the camera (blocks), w: Schwarzschild radius (blocks)
-uniform vec4 HoleSpins[MAX_HOLES]; // x: spin a/M, signed (+ counter-clockwise about up, seen from above)
-uniform int VertexLensing; // 1: world geometry was already bent in the vertex shaders (VertexLens); lens only the sky
+uniform sampler2D KerrTable0; // kerr_table.fsh outputs, at reduced resolution
+uniform sampler2D KerrTable1;
+uniform sampler2D KerrTable2;
+uniform int KerrTableEnabled; // 0: march every pixel, 1: use the Kerr table, 2: and paint re-marched pixels red,
+                              // 3: output the table's error (main)
+uniform sampler2D SceneTable; // scene_table.fsh output, at reduced resolution
+uniform vec3 SkyColor;          // the sky overhead and at the horizon (fog), for paths that escape with nothing else
+uniform vec3 FogColor;          // to show
+uniform int LensMode; // 0: the lens; debug: 1 paints each pixel by its path's outcome, 2 by its full-resolution
+                      // march's step count (0 where the table served), 3 marches every pixel, 4 passes the frame through
 
 in vec2 texCoord;
 out vec4 fragColor;
 
 const float PI = 3.14159265358979;
 const vec2 LUT_SIZE = vec2(512.0, 1024.0); // BlackHoleLens.LUT_WIDTH / LUT_HEIGHT
-const float FACE_SIZE = 256.0;             // LensEnvironment.FACE_SIZE
-const float CAPTURE_NEAR = 0.05;           // LensEnvironment.NEAR
-const float CAPTURE_FAR = 1024.0;          // LensEnvironment.FAR
 
-// A frame sample nearer than the bend point by more than this many r_s is something the bent ray passes behind.
-const float FOREGROUND_MARGIN = 2.0;
-// Rays bent this far past the screen edge (in uv) fade from the edge-clamped frame to the capture.
-const float EDGE_BLEND = 0.08;
-const float SKY_DEPTH = 0.99999;
 const int DISK_STEPS = 320;
 const float DISK_STEP = 0.03; // radians of orbit angle per step
-const int MARCH_STEPS = 32;
 
-// Spinning holes: rays passing within KERR_REGION r_s are marched through the Kerr metric instead of the
-// Schwarzschild table, starting at most KERR_START r_s out.
-const float MIN_KERR_SPIN = 0.05;
-const float KERR_REGION = 20.0;
-const float KERR_START = 80.0;
-const int KERR_STEPS = 140;
-const float KERR_STEP = 0.1; // fraction of the radius per step
-
-const vec3 FACE_FORWARD[6] = vec3[](vec3(1, 0, 0), vec3(-1, 0, 0), vec3(0, 1, 0), vec3(0, -1, 0), vec3(0, 0, 1), vec3(0, 0, -1));
-const vec3 FACE_UP[6] = vec3[](vec3(0, 1, 0), vec3(0, 1, 0), vec3(0, 0, 1), vec3(0, 0, -1), vec3(0, 1, 0), vec3(0, 1, 0));
-
-vec3 viewRay(vec2 uv) {
-    vec4 view = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-    return normalize((VeilCamera.IViewMat * vec4(view.xyz / view.w, 0.0)).xyz);
-}
-
-// Distance to the surface at uv; the sky (nothing drawn) counts as infinitely far.
-// Ray through an output pixel: the screen's own FOV when overscanning, otherwise the frame's.
-vec3 displayRay(vec2 uv) {
-    if (DisplayTanHalfFov <= 0.0) return viewRay(uv);
-    float aspect = VeilCamera.ProjMat[1][1] / VeilCamera.ProjMat[0][0];
-    vec2 ndc = uv * 2.0 - 1.0;
-    vec3 view = vec3(ndc.x * DisplayTanHalfFov * aspect, ndc.y * DisplayTanHalfFov, -1.0);
-    return normalize((VeilCamera.IViewMat * vec4(view, 0.0)).xyz);
-}
-
-// Where a world direction lands in the (possibly overscanned) frame.
-vec2 frameUv(vec3 dir) {
-    vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(dir, 0.0));
-    return clip.xy / clip.w * 0.5 + 0.5;
-}
-
-float sceneDistance(vec2 uv) {
-    float depth = texture(DiffuseDepthSampler, uv).r;
-    if (depth >= SKY_DEPTH) return 1e30;
-    vec4 view = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-    return length(view.xyz / view.w);
-}
+// Kerr table (kerr_table.fsh, at reduced resolution): pixels it would place off by more than about this many sample
+// spacings are marched at full resolution instead.
+const float TABLE_TOLERANCE = 0.5;
 
 // Table axes are sqrt(u0) and sqrt(psi / pi), sampled at texel centres.
 vec2 lookup(float u0, float psi) {
     vec2 axes = vec2(sqrt(u0), sqrt(psi / PI));
     return texture(LensLookup, (axes * (LUT_SIZE - 1.0) + 0.5) / LUT_SIZE).rg;
-}
-
-// Cube atlas addressing; must mirror LensEnvironment: face f at column f % 3, row f / 3, image x along forward x up.
-// Returns the atlas uv and, in z, the cosine between dir and the face's forward axis.
-vec3 cubeUv(vec3 dir) {
-    vec3 a = abs(dir);
-    int face;
-    if (a.x >= a.y && a.x >= a.z) {
-        face = dir.x > 0.0 ? 0 : 1;
-    } else if (a.y >= a.z) {
-        face = dir.y > 0.0 ? 2 : 3;
-    } else {
-        face = dir.z > 0.0 ? 4 : 5;
-    }
-    vec3 forward = FACE_FORWARD[face];
-    vec3 up = FACE_UP[face];
-    float f = dot(dir, forward);
-    vec2 uv = vec2(dot(dir, cross(forward, up)), dot(dir, up)) / f * 0.5 + 0.5;
-    uv = clamp(uv, vec2(0.5 / FACE_SIZE), vec2(1.0 - 0.5 / FACE_SIZE)); // don't bleed into the neighbouring face
-    return vec3((vec2(face % 3, face / 3) + uv) / vec2(3.0, 2.0), f);
-}
-
-// Distance from the capture centre to the first surface along unit direction dir.
-float captureDistance(vec3 dir) {
-    vec3 c = cubeUv(dir);
-    float z = texture(EnvironmentDepth, c.xy).r * 2.0 - 1.0;
-    float viewZ = 2.0 * CAPTURE_NEAR * CAPTURE_FAR / (CAPTURE_FAR + CAPTURE_NEAR - z * (CAPTURE_FAR - CAPTURE_NEAR));
-    return viewZ / c.z; // depth is along the face axis; convert to distance along dir
-}
-
-// Colour seen along the ray origin + t*dir (camera-relative), traced through the captured cube.
-// hit is false if the ray found no captured surface (sky, or beyond the capture's render distance).
-vec3 traceEnvironment(vec3 origin, vec3 dir, out bool hit) {
-    hit = true;
-    vec3 start = origin - CaptureCenter;
-    float t = 0.0;
-    float step = 0.25;
-    for (int i = 0; i < MARCH_STEPS; i++) {
-        vec3 p = start + dir * t;
-        float r = length(p);
-        if (r > 1e-3 && r >= captureDistance(p / r)) {
-            return texture(Environment, cubeUv(p / r).xy).rgb;
-        }
-        t += step;
-        step *= 1.35; // geometric steps: fine near the hole, out to ~1000 blocks
-    }
-    hit = false;
-    return texture(Environment, cubeUv(dir).xy).rgb; // sky at infinity
 }
 
 // Blackbody colour (approximate sRGB, brightest channel ~1) at [kelvin]; Tanner Helland's fit.
@@ -201,247 +104,254 @@ vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega
 }
 
 // ---- Kerr ----
-// Kerr-Schild coordinates on a local frame L = (game z, game x, game y): spin axis L.z (game up), and positive spin
-// turns L.x toward L.y (game z toward game x), matching the physics core. The inverse metric is
-// g^uv = eta^uv - h l^u l^v, so with H = (eta^uv p_u p_v - h (l.p - p_t)^2) / 2 a ray needs only the scalar
-// h (l.p - p_t)^2 and its gradient: dx/dlambda = p - h l (l.p - p_t), dp/dlambda = grad[h (l.p - p_t)^2] / 2.
 
-vec3 toLocal(vec3 game) { return vec3(game.z, game.x, game.y); }
-vec3 toGame(vec3 local) { return vec3(local.y, local.z, local.x); }
-
-// Spheroidal radius r, h = 2 M r^3 / (r^4 + a^2 z^2) and the null vector l at local point x.
-float kerrProfile(vec3 x, float m, float a, out float h, out vec3 l) {
-    float a2 = a * a;
-    float w = dot(x, x) - a2;
-    float r2 = 0.5 * w + sqrt(0.25 * w * w + a2 * x.z * x.z);
-    float r = sqrt(max(r2, 1e-12));
-    h = 2.0 * m * r * r2 / (r2 * r2 + a2 * x.z * x.z);
-    float d = r2 + a2;
-    l = vec3((r * x.x + a * x.y) / d, (r * x.y - a * x.x) / d, x.z / r);
-    return r;
+// Largest second difference of a 4x4 neighbourhood (row-major, xyz only) along rows and columns through its inner
+// 2x2; bilinear interpolation inside that 2x2 is off by about an eighth of it.
+float secondDifference(vec3 v[16]) {
+    float worst = 0.0;
+    for (int k = 1; k <= 2; k += 1) {
+        worst = max(worst, length(v[k * 4] - 2.0 * v[k * 4 + 1] + v[k * 4 + 2]));
+        worst = max(worst, length(v[k * 4 + 1] - 2.0 * v[k * 4 + 2] + v[k * 4 + 3]));
+        worst = max(worst, length(v[k] - 2.0 * v[k + 4] + v[k + 8]));
+        worst = max(worst, length(v[k + 4] - 2.0 * v[k + 8] + v[k + 12]));
+    }
+    return worst;
 }
 
-float kerrPotential(vec3 x, vec3 p, float pt, float m, float a) {
-    float h;
-    vec3 l;
-    kerrProfile(x, m, a, h, l);
-    float lp = dot(l, p) - pt;
-    return h * lp * lp;
-}
-
-void kerrDerivative(vec3 x, vec3 p, float pt, float m, float a, out vec3 dx, out vec3 dp) {
-    float h;
-    vec3 l;
-    float r = kerrProfile(x, m, a, h, l);
-    float lp = dot(l, p) - pt;
-    dx = p - h * l * lp;
-    float e = 1e-3 * max(r, m);
-    vec3 ex = vec3(e, 0.0, 0.0);
-    vec3 ey = vec3(0.0, e, 0.0);
-    vec3 ez = vec3(0.0, 0.0, e);
-    dp = vec3(
-        kerrPotential(x + ex, p, pt, m, a) - kerrPotential(x - ex, p, pt, m, a),
-        kerrPotential(x + ey, p, pt, m, a) - kerrPotential(x - ey, p, pt, m, a),
-        kerrPotential(x + ez, p, pt, m, a) - kerrPotential(x - ez, p, pt, m, a)
-    ) / (4.0 * e);
-}
-
-struct KerrRay {
-    int status;     // 0 escaped (exitPos/exitDir set), 1 captured, 2 not marched
-    vec3 exitPos;   // camera-relative
-    vec3 exitDir;
-    vec4 disk;      // disk colour and opacity where the ray crossed it (0 if not)
-};
-
-// Marches the view ray along dir past hole i (camera-relative centre, signed spin). The light reaching the camera is
-// followed backwards; reversing time also reverses the spin, so the march runs in a hole of spin -a.
-KerrRay kerrMarch(int i, vec3 dir, float sceneDist, bool withDisk) {
+// The nearest hole's Kerr ray through this output pixel, interpolated from the table where that's accurate to about
+// half a pixel: the inner 2x2 entries share a fate and a disk image, and the 4x4 around them is smooth enough
+// (judged by second differences: the deflection's against a pixel's angle, the disk hit point's against its own
+// change per texel). Elsewhere (shadow and disk edges, the photon ring) the ray is marched here.
+KerrRay kerrNearest(vec3 dir, vec2 uv) {
     KerrRay ray;
     ray.status = 2;
-    ray.disk = vec4(0.0);
-    float rs = Holes[i].w;
-    float m = 0.5 * rs;
-    float spin = HoleSpins[i].x;
-    if (abs(spin) < MIN_KERR_SPIN) return ray;
-    vec3 toHole = Holes[i].xyz;
-    float rc = length(toHole);
-    float along = dot(toHole, dir);
-    float impact = length(toHole - dir * along);
-    if (impact > KERR_REGION * rs || (along < 0.0 && rc > KERR_REGION * rs)) return ray;
+    if (HoleCount == 0 || abs(HoleSpins[0].x) < MIN_KERR_SPIN) return ray;
+    ivec2 size = textureSize(KerrTable0, 0);
+    vec2 pos = uv * vec2(size) - 0.5;
+    ivec2 base = clamp(ivec2(floor(pos)), ivec2(1), size - 3);
+    vec2 f = pos - vec2(base); // past [0, 1] in the outermost texels: extrapolated, which the smooth edges allow
+    vec4 a0 = texelFetch(KerrTable0, base, 0);
+    vec4 b0 = texelFetch(KerrTable0, base + ivec2(1, 0), 0);
+    vec4 c0 = texelFetch(KerrTable0, base + ivec2(0, 1), 0);
+    vec4 d0 = texelFetch(KerrTable0, base + ivec2(1, 1), 0);
+    bool agree = KerrTableEnabled != 0 && a0.w == b0.w && a0.w == c0.w && a0.w == d0.w;
+    if (agree && a0.w == 2.0) return ray;
+    vec4 a1 = texelFetch(KerrTable1, base, 0);
+    vec4 b1 = texelFetch(KerrTable1, base + ivec2(1, 0), 0);
+    vec4 c1 = texelFetch(KerrTable1, base + ivec2(0, 1), 0);
+    vec4 d1 = texelFetch(KerrTable1, base + ivec2(1, 1), 0);
+    vec4 distances = vec4(a1.w, b1.w, c1.w, d1.w);
+    bool allDisk = all(greaterThan(distances, vec4(0.0)));
+    if (agree && any(greaterThan(distances, vec4(0.0))) != allDisk) agree = false;
+    vec4 a2 = texelFetch(KerrTable2, base, 0);
+    vec4 b2 = texelFetch(KerrTable2, base + ivec2(1, 0), 0);
+    vec4 c2 = texelFetch(KerrTable2, base + ivec2(0, 1), 0);
+    vec4 d2 = texelFetch(KerrTable2, base + ivec2(1, 1), 0);
 
-    float aTrue = spin * m;
-    float a = -aTrue;
-    float horizon = m + sqrt(max(m * m - a * a, 0.0));
-    // Start at the camera, or where the straight ray enters the start sphere.
-    float startRadius = KERR_START * rs;
-    float t0 = 0.0;
-    if (rc > startRadius) {
-        float disc = along * along - (rc * rc - startRadius * startRadius);
-        t0 = along - sqrt(max(disc, 0.0));
-    }
-    vec3 x = toLocal(dir * t0 - toHole);
-    vec3 d = toLocal(dir);
-
-    // Null momentum for coordinate direction d: u = (1, k d), g(u, u) = 0, then p = g u.
-    float h0;
-    vec3 l0;
-    kerrProfile(x, m, a, h0, l0);
-    float ld = dot(l0, d);
-    float qa = 1.0 + h0 * ld * ld;
-    float qb = 2.0 * h0 * ld;
-    float qc = h0 - 1.0;
-    float k = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa);
-    float lu = 1.0 + k * ld;
-    float pt = -1.0 + h0 * lu;
-    vec3 p = k * d + h0 * l0 * lu;
-    float hCamera = h0;
-
-    float rOut = Disk.z;
-    for (int s = 0; s < KERR_STEPS; s += 1) {
-        float h;
-        vec3 l;
-        float r = kerrProfile(x, m, a, h, l);
-        if (r < horizon * 1.02) {
-            ray.status = 1;
-            return ray;
-        }
-        vec3 k1x;
-        vec3 k1p;
-        kerrDerivative(x, p, pt, m, a, k1x, k1p);
-        if (length(x) > startRadius * 1.01 && dot(x, k1x) > 0.0) break;
-        float dl = KERR_STEP * max(r, 0.5 * m) / max(length(k1x), 1e-6);
-        vec3 k2x;
-        vec3 k2p;
-        kerrDerivative(x + 0.5 * dl * k1x, p + 0.5 * dl * k1p, pt, m, a, k2x, k2p);
-        vec3 k3x;
-        vec3 k3p;
-        kerrDerivative(x + 0.5 * dl * k2x, p + 0.5 * dl * k2p, pt, m, a, k3x, k3p);
-        vec3 k4x;
-        vec3 k4p;
-        kerrDerivative(x + dl * k3x, p + dl * k3p, pt, m, a, k4x, k4p);
-        vec3 xNext = x + dl / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
-        vec3 pNext = p + dl / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
-
-        // Equatorial crossing inside the disk: the first one is what's seen.
-        if (withDisk && ray.disk.a == 0.0 && Disk.x > 0.0 && (x.z > 0.0) != (xNext.z > 0.0)) {
-            float f = x.z / (x.z - xNext.z);
-            vec3 hit = mix(x, xNext, f);
-            float rho = length(hit.xy);
-            if (rho >= Disk.y && rho <= rOut && sceneDist >= length(toGame(hit) + toHole) - 0.5) {
-                float absA = abs(aTrue);
-                float rbl = sqrt(max(rho * rho - absA * absA, 1e-6));
-                float sq = sqrt(m);
-                float r32 = rbl * sqrt(rbl);
-                float sense = sign(spin);
-                float omega = sense * sq / (r32 + absA * sq);
-                float ut = (r32 + absA * sq) / (pow(rbl, 0.75) * sqrt(max(r32 - 3.0 * m * sqrt(rbl) + 2.0 * absA * sq, 1e-5)));
-                // The light reaching the camera has the traced ray's spatial momentum reversed.
-                vec3 pHit = mix(p, pNext, f);
-                float lz = -(hit.x * pHit.y - hit.y * pHit.x) / (-pt);
-                float g = 1.0 / (sqrt(max(1.0 - hCamera, 1e-4)) * ut * (1.0 - omega * lz));
-                float angle = atan(hit.x, hit.y); // game atan(z, x)
-                ray.disk = diskColor(rho, Disk.y, rOut, g, angle, omega);
+    if (agree) {
+        vec3 deflection[16];
+        vec3 diskPoint[16];
+        for (int j = 0; j < 4; j += 1) {
+            for (int i = 0; i < 4; i += 1) {
+                ivec2 at = base + ivec2(i - 1, j - 1);
+                deflection[j * 4 + i] = texelFetch(KerrTable0, at, 0).xyz;
+                vec4 disk = texelFetch(KerrTable2, at, 0);
+                diskPoint[j * 4 + i] = vec3(disk.x * disk.zw, 0.0);
             }
         }
-        x = xNext;
-        p = pNext;
+        // Error is measured against how far apart neighbouring pixels sample the background, i.e. the change in exit
+        // direction per pixel: a pixel's angle where the view is barely bent, less where the lens magnifies (errors
+        // show more), more where it squeezes the background (near the photon ring), so there an error that can't show
+        // isn't paid for with a march. Interpolation is off by an eighth of the second difference, and a texel's
+        // change spans several pixels; so the error, in units of the change per pixel, is
+        // (D2 / 8) / (step / pixelsPerTexel).
+        float limit = 8.0 / (float(textureSize(DiffuseSampler0, 0).y) / float(size.y)) * TABLE_TOLERANCE;
+        if (a0.w == 0.0) {
+            vec3 exitA = displayRay((vec2(base) + 0.5) / vec2(size)) + a0.xyz;
+            vec3 exitB = displayRay((vec2(base + ivec2(1, 0)) + 0.5) / vec2(size)) + b0.xyz;
+            vec3 exitC = displayRay((vec2(base + ivec2(0, 1)) + 0.5) / vec2(size)) + c0.xyz;
+            vec3 exitD = displayRay((vec2(base + ivec2(1, 1)) + 0.5) / vec2(size)) + d0.xyz;
+            float step = max(max(length(exitA - exitB), length(exitA - exitC)), max(length(exitD - exitB), length(exitD - exitC)));
+            agree = secondDifference(deflection) < limit * step;
+        }
+        if (agree && allDisk) {
+            float step = max(max(length(diskPoint[5] - diskPoint[6]), length(diskPoint[5] - diskPoint[9])),
+                max(length(diskPoint[10] - diskPoint[6]), length(diskPoint[10] - diskPoint[9])));
+            agree = secondDifference(diskPoint) < limit * step;
+        }
     }
-    vec3 dx;
-    vec3 dp;
-    kerrDerivative(x, p, pt, m, a, dx, dp);
-    ray.status = 0;
-    ray.exitPos = toGame(x) + toHole;
-    ray.exitDir = normalize(toGame(dx));
+    if (!agree) {
+        vec2 diskRadii = vec2(0.0);
+        if (Disk.x > 0.0) diskRadii = Disk.yz;
+        ray = kerrMarch(Holes[0].xyz, Holes[0].w, HoleSpins[0].x, dir, diskRadii);
+        if (KerrTableEnabled == 2) ray.diskG = -1.0; // flags the pixel for main()
+        return ray;
+    }
+    ray.status = int(a0.w + 0.5);
+    // The deflection interpolates well where the exit direction itself doesn't (even unbent, it isn't linear on screen).
+    ray.exitDir = normalize(dir + mix(mix(a0.xyz, b0.xyz, f.x), mix(c0.xyz, d0.xyz, f.x), f.y));
+    vec4 t1 = mix(mix(a1, b1, f.x), mix(c1, d1, f.x), f.y);
+    vec4 t2 = mix(mix(a2, b2, f.x), mix(c2, d2, f.x), f.y);
+    ray.exitPos = t1.xyz;
+    ray.diskDist = 0.0;
+    ray.diskRho = 0.0;
+    ray.diskG = 0.0;
+    ray.diskAngle = 0.0;
+    if (allDisk) {
+        ray.diskDist = t1.w;
+        ray.diskRho = t2.x;
+        ray.diskG = t2.y;
+        ray.diskAngle = atan(t2.w, t2.z);
+    }
     return ray;
 }
 
-// The frame as seen through every hole's lens (background bending, shadow, capture fallbacks).
-vec3 lensedScene(vec3 dir, vec4 original, float sceneDist, KerrRay first) {
-    vec3 origin = vec3(0.0); // start of the current straight leg, camera-relative
-    bool bent = false;
-    float bendDistance = 0.0; // distance from the camera to the last bend point
-    float bendRs = 0.0;
+// The disk image a Kerr ray recorded, unless the scene is in front of it.
+vec4 kerrDisk(KerrRay ray, float sceneDist) {
+    if (ray.diskRho <= 0.0 || sceneDist < ray.diskDist - 0.5) return vec4(0.0);
+    float omega = kerrDiskOmega(ray.diskRho, 0.5 * Holes[0].w, HoleSpins[0].x);
+    return diskColor(ray.diskRho, Disk.y, Disk.z, ray.diskG, ray.diskAngle, omega);
+}
 
-    for (int i = 0; i < HoleCount; i++) {
-        vec3 toHole = Holes[i].xyz - origin;
-        float rs = Holes[i].w;
-        float rc = length(toHole);
-        if (rc <= rs) { return vec3(0.0); } // inside the horizon
+// ---- Scene table ----
 
-        // Closest approach along the current leg (none if the leg points away from the hole).
-        float tPeri = max(dot(toHole, dir), 0.0);
-        if (!bent && sceneDist < tPeri - rs) continue; // the camera's ray hits something before reaching the hole
-
-        // Spinning hole near this ray: the Kerr march replaces the table (the nearest one was marched already).
-        if (abs(HoleSpins[i].x) >= MIN_KERR_SPIN && !bent) {
-            KerrRay ray = first;
-            if (i != 0) ray = kerrMarch(i, dir, sceneDist, false);
-            if (ray.status == 1) { return vec3(0.0); }
-            if (ray.status == 0) {
-                origin = ray.exitPos;
-                dir = ray.exitDir;
-                bent = true;
-                bendDistance = length(Holes[i].xyz);
-                bendRs = rs;
-                continue;
+// The bent path of this pixel's view ray: interpolated from the scene table where its inner 2x2 entries share an
+// outcome and the 4x4 around them is smooth (second differences against the change per texel, as for the Kerr table:
+// for frame hits in output pixels, for directions in radians); otherwise marched here.
+SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
+    if (sceneUnbent(dir, sceneDist)) return sceneHit(SCENE_UNBENT, vec3(0.0));
+    if (LensMode == 3) return marchScene(dir, sceneDist);
+    ivec2 size = textureSize(SceneTable, 0);
+    vec2 pos = uv * vec2(size) - 0.5;
+    ivec2 base = clamp(ivec2(floor(pos)), ivec2(1), size - 3);
+    vec2 f = pos - vec2(base);
+    vec4 a = texelFetch(SceneTable, base, 0);
+    vec4 b = texelFetch(SceneTable, base + ivec2(1, 0), 0);
+    vec4 c = texelFetch(SceneTable, base + ivec2(0, 1), 0);
+    vec4 d = texelFetch(SceneTable, base + ivec2(1, 1), 0);
+    int outcome = int(a.w + 0.5);
+    bool agree = a.w == b.w && a.w == c.w && a.w == d.w && outcome != SCENE_UNBENT && outcome != 0;
+    if (agree && outcome == SCENE_FELL_IN) return sceneHit(SCENE_FELL_IN, vec3(0.0));
+    if (agree) {
+        // Frame hits compare in output pixels, directions in radians.
+        vec2 frameSize = vec2(textureSize(DiffuseSampler0, 0));
+        vec3 scale = vec3(1.0);
+        if (outcome == SCENE_FRAME) scale = vec3(frameSize, 0.0);
+        if (outcome >= SCENE_VOXEL) scale = vec3(1.0 / max(length(a.xyz), 1e-3)); // positions, as angles from the camera
+        vec3 v[16];
+        bool same[16];
+        for (int j = 0; j < 4; j += 1) {
+            for (int i = 0; i < 4; i += 1) {
+                vec4 entry = texelFetch(SceneTable, base + ivec2(i - 1, j - 1), 0);
+                v[j * 4 + i] = entry.xyz * scale;
+                same[j * 4 + i] = entry.w == a.w;
             }
         }
-
-        vec3 e1 = -toHole / rc; // hole -> leg start
-        float cosPsi = clamp(-dot(dir, e1), -1.0, 1.0);
-        vec3 perp = dir + cosPsi * e1;
-        float perpLen = length(perp);
-        if (perpLen < 1e-6) {
-            if (cosPsi > 0.0) { return vec3(0.0); }
-            continue;
+        // Outer entries with another outcome (across an edge just outside the 2x2) are extrapolated from the inner
+        // ones, so only the inner 2x2 has to agree. (The corners aren't used.)
+        for (int k = 1; k <= 2; k += 1) {
+            if (!same[k * 4]) v[k * 4] = 2.0 * v[k * 4 + 1] - v[k * 4 + 2];
+            if (!same[k * 4 + 3]) v[k * 4 + 3] = 2.0 * v[k * 4 + 2] - v[k * 4 + 1];
+            if (!same[k]) v[k] = 2.0 * v[k + 4] - v[k + 8];
+            if (!same[k + 12]) v[k + 12] = 2.0 * v[k + 8] - v[k + 4];
         }
-        vec3 e2 = perp / perpLen;
-
-        vec2 lens = lookup(rs / rc, acos(cosPsi));
-        if (lens.g > 0.5) { return vec3(0.0); } // captured: the shadow
-        origin += dir * tPeri;
-        dir = cos(lens.r) * e1 + sin(lens.r) * e2;
-        bent = true;
-        bendDistance = length(origin);
-        bendRs = rs;
+        float pixelsPerTexel = frameSize.y / float(size.y);
+        float natural = pixelsPerTexel;
+        if (outcome != SCENE_FRAME) natural *= pixelAngle();
+        float step = max(max(max(length(v[5] - v[6]), length(v[5] - v[9])), max(length(v[10] - v[6]), length(v[10] - v[9]))), natural);
+        if (agree) agree = secondDifference(v) < 8.0 / pixelsPerTexel * TABLE_TOLERANCE * step;
     }
+    if (!agree) return marchScene(dir, sceneDist);
+    vec3 value = mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
+    if (outcome == SCENE_ESCAPED) value = normalize(value);
+    return sceneHit(outcome, value);
+}
 
-    if (!bent) { return original.rgb; }
+// Vanilla's face shading for normal n: top 1, bottom 0.5, north/south 0.8, east/west 0.6, blended.
+float faceShade(vec3 n) {
+    float vertical = 0.5;
+    if (n.y > 0.0) vertical = 1.0;
+    return n.x * n.x * 0.6 + n.z * n.z * 0.8 + n.y * n.y * vertical;
+}
 
-    vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(dir, 0.0));
-    vec2 uv = clip.xy / abs(clip.w) * 0.5 + 0.5;
-    bool onScreen = clip.w > 0.0 && all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
-
-    if (EnvironmentReady == 0) {
-        if (onScreen) {
-            return texture(DiffuseSampler0, uv).rgb;
+// The colour of the quad at `at` (camera-relative), hit facing along `face`: the quad that contains the point in its
+// cell (or the cell across the face), its pixel there, shaded by its normal.
+vec3 geometryColor(vec3 at, int face) {
+    int axis = face / 2;
+    vec3 n = vec3(0.0);
+    n[axis] = -1.0;
+    if (face - 2 * axis == 1) n[axis] = 1.0;
+    for (int side = 0; side < 2; side += 1) {
+        vec3 g = at - VoxelOrigin - n * (0.002 - 0.004 * float(side));
+        ivec3 cell = ivec3(floor(g));
+        if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(VOXEL_SIZE)))) continue;
+        uint run = texelFetch(Voxels, cell, 0).r;
+        int start = int(run >> 8u);
+        int count = min(int(run & 255u), MAX_CELL_QUADS);
+        vec3 p = at - VoxelOrigin - vec3(cell);
+        for (int i = 0; i < count; i += 1) {
+            int q = start + i;
+            int base = q * QUAD_TEXELS;
+            vec3 p0 = texelFetch(VoxelQuads, base).xyz;
+            vec3 p1 = texelFetch(VoxelQuads, base + 1).xyz;
+            vec3 p2 = texelFetch(VoxelQuads, base + 2).xyz;
+            vec3 p3 = texelFetch(VoxelQuads, base + 3).xyz;
+            for (int k = 0; k < 2; k += 1) {
+                vec3 pb = p1;
+                vec3 pc = p2;
+                if (k == 1) {
+                    pb = p2;
+                    pc = p3;
+                }
+                vec3 e1 = pb - p0;
+                vec3 e2 = pc - p0;
+                vec3 normal = cross(e1, e2);
+                float area = length(normal);
+                if (area < 1e-9) continue;
+                normal /= area;
+                vec3 r = p - p0;
+                if (abs(dot(r, normal)) > 0.01) continue;
+                // Barycentrics of p projected on the triangle.
+                float d00 = dot(e1, e1);
+                float d01 = dot(e1, e2);
+                float d11 = dot(e2, e2);
+                float d20 = dot(r, e1);
+                float d21 = dot(r, e2);
+                float den = d00 * d11 - d01 * d01;
+                vec2 bary = vec2(d11 * d20 - d01 * d21, d00 * d21 - d01 * d20) / den;
+                if (bary.x < -0.01 || bary.y < -0.01 || bary.x + bary.y > 1.01) continue;
+                vec3 color;
+                if (!quadPixel(q, k == 1, clamp(bary, 0.0, 1.0), color)) continue;
+                return color * faceShade(normal);
+            }
         }
-        uv = 1.0 - abs(1.0 - mod(uv, 2.0)); // no capture yet: fold back into the frame, dimmed
-        return texture(DiffuseSampler0, uv).rgb * 0.6;
     }
+    return vec3(0.5);
+}
 
-    // How far past the screen edge the bent ray lands (0 on screen; large when it points behind the camera).
-    float overshoot = 1.0;
-    if (clip.w > 0.0) {
-        vec2 outside = max(-uv, uv - 1.0);
-        overshoot = max(max(outside.x, outside.y), 0.0);
-    }
-    vec2 edgeUv = clamp(uv, vec2(0.0), vec2(1.0));
-    vec3 frameColor = texture(DiffuseSampler0, edgeUv).rgb;
-    bool foreground = sceneDistance(edgeUv) < bendDistance - FOREGROUND_MARGIN * bendRs;
-    if (overshoot <= 0.0 && !foreground) {
-        return frameColor;
-    }
+// A coarse cell's colour at `at`, shaded by the face hit.
+vec3 coarseColor(vec3 at, int face) {
+    int axis = face / 2;
+    vec3 n = vec3(0.0);
+    n[axis] = -1.0;
+    if (face - 2 * axis == 1) n[axis] = 1.0;
+    ivec3 cell = clamp(ivec3(floor((at - CoarseOrigin) / CoarseCell - n * 0.01)), ivec3(0), ivec3(VOXEL_SIZE - 1));
+    return texelFetch(VoxelCoarse, cell, 0).rgb * faceShade(-n);
+}
 
-    bool hit;
-    vec3 traced = traceEnvironment(origin, dir, hit);
-    if (overshoot <= 0.0) {
-        if (!hit) traced = frameColor; // the capture knows nothing better than the frame here
-        return traced;
+// The colour a bent path ends on.
+vec3 sceneColor(SceneHit hit, vec4 original) {
+    if (hit.outcome == SCENE_FRAME) return texture(DiffuseSampler0, hit.value.xy).rgb;
+    if (hit.outcome >= SCENE_COARSE) return coarseColor(hit.value, hit.outcome - SCENE_COARSE);
+    if (hit.outcome >= SCENE_VOXEL) return geometryColor(hit.value, hit.outcome - SCENE_VOXEL);
+    if (hit.outcome == SCENE_FELL_IN) return vec3(0.0);
+    if (hit.outcome == SCENE_ESCAPED) {
+        // The frame's own sky, unless vertex lensing drew hidden triangles out at the far plane where sky would be.
+        vec3 f = frameOf(hit.value * 1e4);
+        if (VertexLensing == 0 && f.z > 0.5 && texture(DiffuseDepthSampler, f.xy).r >= SKY_DEPTH) return texture(DiffuseSampler0, f.xy).rgb;
+        return mix(FogColor, SkyColor, smoothstep(0.0, 0.4, hit.value.y));
     }
-    float toCapture = smoothstep(0.0, EDGE_BLEND, overshoot);
-    if (foreground) toCapture = 1.0;
-    return mix(frameColor, traced, toCapture);
+    return original.rgb;
 }
 
 // The nearest feeding hole's accretion disk along this view ray, lensed: the photon's orbit is marched back from
@@ -535,19 +445,50 @@ void main() {
     vec2 ownUv = texCoord;
     if (DisplayTanHalfFov > 0.0) ownUv = frameUv(dir);
     vec4 original = texture(DiffuseSampler0, ownUv);
-    if (HoleCount == 0) { fragColor = original; return; }
+    if (HoleCount == 0 || LensMode == 4) { fragColor = original; return; } // 4: the frame as rendered (debug)
+    if (KerrTableEnabled == 3) {
+        // The table's error against a full march of this pixel: red, the exit direction's (a quarter per sample
+        // spacing: a pixel's angle, or the exit direction's change per pixel where the lens squeezes the background);
+        // green, a different fate or disk image; blue, the disk hit point's (a quarter per percent of its radius).
+        KerrRay table = kerrNearest(dir, texCoord);
+        vec2 diskRadii = vec2(0.0);
+        if (Disk.x > 0.0) diskRadii = Disk.yz;
+        KerrRay marched = kerrMarch(Holes[0].xyz, Holes[0].w, HoleSpins[0].x, dir, diskRadii);
+        float exitError = 0.0;
+        float spacing = max(pixelAngle(), max(length(dFdx(marched.exitDir)), length(dFdy(marched.exitDir))));
+        if (marched.status == 0 && table.status == 0) exitError = length(table.exitDir - marched.exitDir) / spacing; // chord, not acos: float precision
+        float fate = 0.0;
+        if (table.status != marched.status || (table.diskRho > 0.0) != (marched.diskRho > 0.0)) fate = 1.0;
+        float diskError = 0.0;
+        if (table.diskRho > 0.0 && marched.diskRho > 0.0) {
+            vec2 a = table.diskRho * vec2(cos(table.diskAngle), sin(table.diskAngle));
+            vec2 b = marched.diskRho * vec2(cos(marched.diskAngle), sin(marched.diskAngle));
+            diskError = 100.0 * length(a - b) / marched.diskRho;
+        }
+        fragColor = vec4(clamp(exitError / 4.0, 0.0, 1.0), fate, clamp(diskError / 4.0, 0.0, 1.0), 1.0);
+        return;
+    }
     float sceneDist = sceneDistance(ownUv);
     // The nearest hole, if spinning, is marched once for both its lens and its disk.
-    KerrRay first = kerrMarch(0, dir, sceneDist, true);
+    KerrRay first = kerrNearest(dir, texCoord);
     vec3 scene;
+    SceneHit hit = sceneHit(0, vec3(0.0));
     if (VertexLensing == 1 && sceneDist < 1e29) {
         // Geometry is already where its light appears; only the shadow can hide it (if it lies beyond the hole).
         scene = original.rgb;
         if (inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
     } else {
-        scene = lensedScene(dir, original, sceneDist, first);
+        hit = sceneNearest(dir, texCoord, sceneDist);
+        scene = sceneColor(hit, original);
     }
-    vec4 disk = first.disk;
+    vec4 disk = kerrDisk(first, sceneDist);
     if (first.status == 2) disk = diskSample(dir, sceneDist);
     fragColor = vec4(mix(scene, disk.rgb, disk.a), 1.0);
+    if (LensMode == 2) fragColor = vec4(vec3(float(marchSteps) / 64.0), 1.0);
+    if (LensMode == 1) {
+        // grey none, green unbent, red frame, white escaped, black fell in, yellow voxel
+        vec3 outcome[7] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0), vec3(0.0), vec3(1.0, 1.0, 0.0));
+        fragColor = vec4(outcome[min(hit.outcome, SCENE_VOXEL)], 1.0);
+    }
+    if (KerrTableEnabled == 2 && first.diskG < -0.5) fragColor = vec4(1.0, 0.0, 0.0, 1.0);
 }

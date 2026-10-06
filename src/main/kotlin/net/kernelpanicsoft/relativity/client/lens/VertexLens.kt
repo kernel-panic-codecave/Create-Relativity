@@ -12,6 +12,8 @@ import net.minecraft.world.phys.AABB
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent
 import net.neoforged.neoforge.common.NeoForge
 import org.joml.Matrix4f
+import org.joml.Quaternionf
+import org.joml.Vector3f
 import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11
 import org.lwjgl.opengl.GL12
@@ -24,13 +26,14 @@ import org.lwjgl.opengl.GL41
 import org.lwjgl.system.MemoryStack
 import org.lwjgl.system.MemoryUtil
 import java.util.concurrent.CompletableFuture
+import kotlin.math.abs
 
 /**
  * High-quality lens preset: world geometry is lensed in the vertex shader (vertex_lens.glsl, injected into vanilla's
  * world shaders through Veil). Each vertex moves to where its light appears, at its true distance, so depth testing
  * handles occlusion: no near/far cutoff, no doubling, nothing culled where the screen-space lens left holes. This feeds
  * those shaders: a uniform block (the nearest lensing hole, the level's projection) and the inverse image table
- * ([SchwarzschildImages]) as a 3D texture. The post pass then only lenses the sky and draws the shadow.
+ * ([SchwarzschildImages.forFiltering]: correction and validity) as a 3D texture. The post pass then only lenses the sky and draws the shadow.
  */
 object VertexLens {
 	private const val TABLE_U0 = 64
@@ -40,6 +43,9 @@ object VertexLens {
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
 	private const val BLOCK_BYTES = 96 // vec4 hole, vec4 params, mat4 projection (std140)
+
+	/** Spin from which the hole is treated as Kerr (kerr.glsl's MIN_KERR_SPIN), which this preset doesn't handle. */
+	private const val MIN_KERR_SPIN = 0.05
 
 	/** Boxes within this many r_s of the hole skip frustum culling: bent light can show them from anywhere. */
 	private const val RELAX_RADIUS = 60.0
@@ -59,12 +65,22 @@ object VertexLens {
 		private set
 
 	fun init() {
-		table = CompletableFuture.supplyAsync { SchwarzschildImages.buildTable(TABLE_U0, TABLE_UP, TABLE_PHI) }
+		table = CompletableFuture.supplyAsync {
+			SchwarzschildImages.forFiltering(SchwarzschildImages.buildTable(TABLE_U0, TABLE_UP, TABLE_PHI), TABLE_U0, TABLE_UP, TABLE_PHI)
+		}
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, ::onRenderStage)
 	}
 
+	/** Debug: draws every vertex at its flat-space direction, without the image table (GameTests). */
+	@JvmField
+	var skipTable = false
+
+	/** Overrides the Vertex Lensing setting when set (GameTests). */
+	@JvmField
+	var forced: Boolean? = null
+
 	private val wanted: Boolean
-		get() = RelativityConfig.Client.Render.lensing && RelativityConfig.Client.Render.vertexLensing
+		get() = RelativityConfig.Client.Render.lensing && (forced ?: RelativityConfig.Client.Render.vertexLensing)
 
 	private fun onRenderStage(event: RenderLevelStageEvent) {
 		when (event.stage) {
@@ -80,18 +96,21 @@ object VertexLens {
 		linkPrograms()
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level
-		// The environment capture renders the level too, and must stay unlensed.
-		val capture = VeilLevelPerspectiveRenderer.isRenderingPerspective()
+		// Perspective renders (Veil level views, such as other mods' cameras) draw the level too, and stay unlensed.
+		val perspective = VeilLevelPerspectiveRenderer.isRenderingPerspective()
 		val camera = minecraft.gameRenderer.mainCamera.position
-		val nearest = if (wanted && level != null && !capture) {
-			BlackHoleLens.visibleHoles(level).minByOrNull { it.center.distanceToSqr(camera) }
+		// The image table is Schwarzschild's: a spinning hole is left to the post pass, which marches Kerr.
+		val nearest = if (wanted && level != null && !perspective) {
+			BlackHoleLens.visibleHoles(level).minByOrNull { it.center.distanceToSqr(camera) }?.takeIf { abs(it.spin) < MIN_KERR_SPIN }
 		} else null
-		if (!capture) {
+		if (!perspective) {
 			hole = nearest
 			activeThisFrame = nearest != null
 			relaxCaveCulling(nearest != null)
 		}
-		upload(nearest, camera.x, camera.y, camera.z, projection, nearest != null)
+		// The level's view rotation (as GameRenderer builds it): the shader works in view space.
+		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
+		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null)
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)
@@ -111,16 +130,16 @@ object VertexLens {
 		}
 	}
 
-	private fun upload(hole: BlackHole?, camX: Double, camY: Double, camZ: Double, projection: Matrix4f, enabled: Boolean) {
+	private fun upload(hole: BlackHole?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean) {
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(BLOCK_BYTES / 4)
 			if (hole != null) {
-				data.put((hole.x - camX).toFloat()).put((hole.y - camY).toFloat()).put((hole.z - camZ).toFloat())
-					.put(hole.schwarzschildRadius.toFloat())
+				val at = view.transform(Vector3f((hole.x - camX).toFloat(), (hole.y - camY).toFloat(), (hole.z - camZ).toFloat()))
+				data.put(at.x).put(at.y).put(at.z).put(hole.schwarzschildRadius.toFloat())
 			} else {
 				data.put(0f).put(0f).put(0f).put(0f)
 			}
-			data.put(if (enabled) 1f else 0f).put(0f).put(0f).put(0f)
+			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(0f).put(0f)
 			projection.get(data.position(), data)
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
@@ -162,7 +181,7 @@ object VertexLens {
 		val pixels = MemoryUtil.memAllocFloat(data.size)
 		try {
 			pixels.put(data).flip()
-			GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, GL30.GL_R32F, TABLE_U0, TABLE_UP, TABLE_PHI, 0, GL11.GL_RED, GL11.GL_FLOAT, pixels)
+			GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, GL30.GL_RG32F, TABLE_U0, TABLE_UP, TABLE_PHI, 0, GL30.GL_RG, GL11.GL_FLOAT, pixels)
 		} finally {
 			MemoryUtil.memFree(pixels)
 		}

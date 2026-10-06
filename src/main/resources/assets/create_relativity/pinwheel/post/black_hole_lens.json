@@ -1,6 +1,41 @@
 {
   "renderStage": "after_level",
+  "framebuffers": {
+    "kerr_table": {
+      "width": "q.screen_width / 4",
+      "height": "q.screen_height / 4",
+      "color_buffers": [
+        { "format": "RGBA32F" },
+        { "format": "RGBA32F" },
+        { "format": "RGBA32F" }
+      ],
+      "depth": false
+    },
+    "scene_table": {
+      "width": "q.screen_width / 4",
+      "height": "q.screen_height / 4",
+      "format": "RGBA32F",
+      "depth": false
+    }
+  },
+  "textures": {
+    "KerrTable0": { "type": "framebuffer", "name": "kerr_table", "sampler": 0 },
+    "KerrTable1": { "type": "framebuffer", "name": "kerr_table", "sampler": 1 },
+    "KerrTable2": { "type": "framebuffer", "name": "kerr_table", "sampler": 2 },
+    "SceneTable": { "type": "framebuffer", "name": "scene_table", "sampler": 0 }
+  },
   "stages": [
+    {
+      "type": "veil:blit",
+      "shader": "create_relativity:kerr_table",
+      "out": "kerr_table"
+    },
+    {
+      "type": "veil:blit",
+      "shader": "create_relativity:scene_table",
+      "in": "minecraft:main",
+      "out": "scene_table"
+    },
     {
       "type": "veil:blit",
       "shader": "create_relativity:black_hole_lens",

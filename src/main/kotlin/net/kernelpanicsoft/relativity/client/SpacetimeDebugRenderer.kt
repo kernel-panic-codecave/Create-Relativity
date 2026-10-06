@@ -38,9 +38,13 @@ object SpacetimeDebugRenderer {
 	private const val ERGOSPHERE = 0xff5a3f
 	private const val MERIDIANS = 3
 
+	/** Hides the gizmos whatever the setting (GameTests comparing screenshots). */
+	@JvmField
+	var hidden = false
+
 	fun render(event: RenderLevelStageEvent) {
 		if (event.stage != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return
-		if (!RelativityConfig.Client.Debug.showRadii) return
+		if (!RelativityConfig.Client.Debug.showRadii || hidden) return
 		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) return // keep gizmos out of the lens capture
 		if (BlackHoleLens.active) return // drawn undistorted after the lens instead
 		val minecraft = Minecraft.getInstance()
@@ -58,7 +62,7 @@ object SpacetimeDebugRenderer {
 	 * one), depth testing off: they're markers, not scenery.
 	 */
 	fun renderAfterLens(projection: Matrix4f) {
-		if (!RelativityConfig.Client.Debug.showRadii) return
+		if (!RelativityConfig.Client.Debug.showRadii || hidden) return
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
 		val holes = SpacetimeField.blackHoles(level)
