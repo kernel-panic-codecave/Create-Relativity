@@ -162,6 +162,28 @@ object SchwarzschildImages {
 		return Double.NaN
 	}
 
+	/**
+	 * [table] as interleaved (correction, valid) pairs for a GPU texture with linear filtering: [NONE] cells take the
+	 * nearest valid correction along Φ (so filtering never blends in the sentinel) and valid 0, which interpolates to
+	 * the edge of the region with no image.
+	 */
+	fun forFiltering(table: FloatArray, n0: Int, nP: Int, nPhi: Int): FloatArray {
+		val out = FloatArray(table.size * 2)
+		for (j in 0 until nP) for (i in 0 until n0) {
+			fun at(k: Int) = (k * nP + j) * n0 + i
+			val first = (0 until nPhi).firstOrNull { table[at(it)] > NONE }
+			var last = if (first != null) table[at(first)] else 0f
+			for (k in 0 until nPhi) {
+				val v = table[at(k)]
+				val valid = v > NONE
+				if (valid) last = v
+				out[2 * at(k)] = last
+				out[2 * at(k) + 1] = if (valid) 1f else 0f
+			}
+		}
+		return out
+	}
+
 	/** Launch angle from a [buildTable] table by trilinear lookup of the correction, as the shader does; NaN where any corner has no image. */
 	fun sample(table: FloatArray, n0: Int, nP: Int, nPhi: Int, u0: Double, uP: Double, phi: Double): Double {
 		if (uP >= 1.0 || u0 >= 1.0) return Double.NaN // inside the horizon

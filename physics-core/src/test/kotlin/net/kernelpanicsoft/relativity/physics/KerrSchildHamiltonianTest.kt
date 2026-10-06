@@ -9,7 +9,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * The lens shader marches Kerr light rays with the Kerr–Schild Hamiltonian (g^μν = η^μν − h l^μ l^ν, finite-difference
+ * The lens shader marches Kerr light rays with the Kerr–Schild Hamiltonian (g^μν = η^μν − h l^μ l^ν, closed-form
  * gradient, RK4 with steps of 0.1 r). This mirrors that code in Kotlin and checks it against the Christoffel-based
  * [NullRay] tracer, so the shader's maths is verified without a GPU.
  */
@@ -39,44 +39,73 @@ class KerrSchildHamiltonianTest {
 		return h * lp * lp
 	}
 
-	private fun derivative(x: V, p: V, pt: Double, m: Double, a: Double): Pair<V, V> {
-		val (r, h, l) = profile(x, m, a)
-		val lp = l.dot(p) - pt
-		val dx = p - l * (h * lp)
-		val e = 1e-3 * maxOf(r, m)
+	/** The gradient of [potential] by central differences: the reference for [derivative]'s closed form. */
+	private fun numericGradient(x: V, p: V, pt: Double, m: Double, a: Double): V {
+		val e = 1e-5 * maxOf(x.length(), m)
 		val ex = V(e, 0.0, 0.0)
 		val ey = V(0.0, e, 0.0)
 		val ez = V(0.0, 0.0, e)
-		val dp = V(
+		return V(
 			potential(x + ex, p, pt, m, a) - potential(x - ex, p, pt, m, a),
 			potential(x + ey, p, pt, m, a) - potential(x - ey, p, pt, m, a),
 			potential(x + ez, p, pt, m, a) - potential(x - ez, p, pt, m, a),
-		) * (1.0 / (4.0 * e))
+		) * (1.0 / (2.0 * e))
+	}
+
+	// Shader: kerrDerivative. dp = ∇[h (l·p − p_t)²] / 2 in closed form, through r's implicit gradient
+	// ∇r = (r² x + a² z ẑ) / (r (2r² − (|x|² − a²))).
+	private fun derivative(x: V, p: V, pt: Double, m: Double, a: Double): Pair<V, V> {
+		val a2 = a * a
+		val w = x.dot(x) - a2
+		val s = sqrt(0.25 * w * w + a2 * x.z * x.z)
+		val r2 = 0.5 * w + s
+		val r = sqrt(r2)
+		val gradR = V(r2 * x.x, r2 * x.y, r2 * x.z + a2 * x.z) * (1.0 / (r * 2.0 * s))
+		val q = r2 * r2 + a2 * x.z * x.z
+		val h = 2.0 * m * r * r2 / q
+		val dhdr = 2.0 * m * r2 * (3.0 * q - 4.0 * r2 * r2) / (q * q)
+		val gradH = gradR * dhdr + V(0.0, 0.0, -4.0 * m * r * r2 * a2 * x.z / (q * q))
+		val d = r2 + a2
+		val l = V((r * x.x + a * x.y) / d, (r * x.y - a * x.x) / d, x.z / r)
+		val lp = l.dot(p) - pt
+		val along = x.x * p.x + x.y * p.y
+		val across = x.y * p.x - x.x * p.y
+		val dfdr = (along * d - (r * along + a * across) * 2.0 * r) / (d * d) - x.z * p.z / r2
+		val gradF = V((r * p.x - a * p.y) / d, (r * p.y + a * p.x) / d, p.z / r) + gradR * dfdr
+		val dx = p - l * (h * lp)
+		val dp = gradH * (0.5 * lp * lp) + gradF * (h * lp)
 		return dx to dp
 	}
 
-	/** Shader: kerrMarch from x along coordinate direction d until past [escape]; returns the exit direction. */
-	private fun march(start: V, d: V, m: Double, a: Double, escape: Double): V? {
+	/**
+	 * March from x along coordinate direction d until past [escape]; returns the exit direction. With [arriving] (the
+	 * shader's kerrMarch): the photon arriving along −d, followed back in time (kerrBackward, the derivative negated).
+	 */
+	private fun march(start: V, d: V, m: Double, a: Double, escape: Double, arriving: Boolean = false): V? {
 		var x = start
+		val sign = if (arriving) -1.0 else 1.0
+		val launch = d * sign
 		val (_, h0, l0) = profile(x, m, a)
-		val ld = l0.dot(d)
+		val ld = l0.dot(launch)
 		val qa = 1.0 + h0 * ld * ld
 		val qb = 2.0 * h0 * ld
 		val qc = h0 - 1.0
 		val k = (-qb + sqrt(qb * qb - 4.0 * qa * qc)) / (2.0 * qa)
 		val lu = 1.0 + k * ld
 		val pt = -1.0 + h0 * lu
-		var p = d * k + l0 * (h0 * lu)
+		var p = launch * k + l0 * (h0 * lu)
+		fun flow(x: V, p: V, pt: Double, m: Double, a: Double): Pair<V, V> =
+			derivative(x, p, pt, m, a).let { (dx, dp) -> dx * sign to dp * sign }
 		val horizon = m + sqrt(m * m - a * a)
 		repeat(400) {
 			val (r, _, _) = profile(x, m, a)
 			if (r < horizon * 1.02) return null
-			val (k1x, k1p) = derivative(x, p, pt, m, a)
+			val (k1x, k1p) = flow(x, p, pt, m, a)
 			if (x.length() > escape && x.dot(k1x) > 0.0) return k1x * (1.0 / k1x.length())
 			val dl = 0.1 * maxOf(r, 0.5 * m) / k1x.length()
-			val (k2x, k2p) = derivative(x + k1x * (0.5 * dl), p + k1p * (0.5 * dl), pt, m, a)
-			val (k3x, k3p) = derivative(x + k2x * (0.5 * dl), p + k2p * (0.5 * dl), pt, m, a)
-			val (k4x, k4p) = derivative(x + k3x * dl, p + k3p * dl, pt, m, a)
+			val (k2x, k2p) = flow(x + k1x * (0.5 * dl), p + k1p * (0.5 * dl), pt, m, a)
+			val (k3x, k3p) = flow(x + k2x * (0.5 * dl), p + k2p * (0.5 * dl), pt, m, a)
+			val (k4x, k4p) = flow(x + k3x * dl, p + k3p * dl, pt, m, a)
 			x = x + (k1x + k2x * 2.0 + k3x * 2.0 + k4x) * (dl / 6.0)
 			p = p + (k1p + k2p * 2.0 + k3p * 2.0 + k4p) * (dl / 6.0)
 		}
@@ -108,6 +137,21 @@ class KerrSchildHamiltonianTest {
 	}
 
 	@Test
+	fun `closed-form gradient matches finite differences`() {
+		val random = java.util.Random(7)
+		for (a in listOf(0.0, 0.5, 0.9, -0.99)) repeat(200) {
+			val m = 1.0
+			val x = V(random.nextGaussian(), random.nextGaussian(), random.nextGaussian()).let { it * ((2.5 + 40.0 * random.nextDouble()) / it.length()) }
+			val p = V(random.nextGaussian(), random.nextGaussian(), random.nextGaussian())
+			val pt = -1.0 + 0.3 * random.nextGaussian()
+			val (_, analytic) = derivative(x, p, pt, m, a)
+			val numeric = numericGradient(x, p, pt, m, a) * 0.5
+			val error = (analytic - numeric).length()
+			assertTrue(error <= 1e-6 * maxOf(numeric.length(), 1e-3), "a = $a, x = (${x.x}, ${x.y}, ${x.z}): ${analytic.x},${analytic.y},${analytic.z} vs ${numeric.x},${numeric.y},${numeric.z}")
+		}
+	}
+
+	@Test
 	fun `prograde and retrograde rays bend differently`() {
 		// Frame dragging: a ray passing on the side moving with the spin bends less than one passing against it.
 		val m = 1.0
@@ -117,5 +161,25 @@ class KerrSchildHamiltonianTest {
 		val bendWith = acos(with.x)
 		val bendAgainst = acos(against.x)
 		assertTrue(bendWith != bendAgainst && kotlin.math.abs(bendWith - bendAgainst) > 0.02, "bends $bendWith vs $bendAgainst")
+	}
+
+	@Test
+	fun `backward march sees what arrives, as the arriving trace does`() {
+		val m = 1.0
+		val a = 0.9
+		for (b in listOf(6.0, 8.0, -7.0, 12.0)) {
+			val start = V(-60.0, b, 0.0)
+			val shader = march(start, V(1.0, 0.0, 0.0), m, a, 80.0, arriving = true)
+			val reference = NullRay.trace(Kerr(m, a), doubleArrayOf(start.x, start.y, start.z), doubleArrayOf(1.0, 0.0, 0.0), 400.0, 1.05 * (m + sqrt(m * m - a * a)), maxSegment = 2.0, arriving = true)
+			if (reference.end == NullRay.End.CAPTURED) {
+				assertEquals(null, shader, "b = $b: reference captured, shader escaped")
+				continue
+			}
+			assertTrue(shader != null, "b = $b: shader captured, reference escaped")
+			val pts = reference.points
+			val ref = V(pts.last()[0] - pts[pts.size - 2][0], pts.last()[1] - pts[pts.size - 2][1], pts.last()[2] - pts[pts.size - 2][2]).let { it * (1.0 / it.length()) }
+			val angle = acos(shader!!.dot(ref).coerceIn(-1.0, 1.0))
+			assertTrue(angle < 0.01, "b = $b: exit directions differ by $angle rad")
+		}
 	}
 }

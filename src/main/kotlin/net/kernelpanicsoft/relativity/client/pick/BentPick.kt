@@ -38,8 +38,10 @@ object BentPick {
 		val direction = DoubleArray(3)
 		GameFrame.toPhysics(Vector3d(eye.x - hole.x, eye.y - hole.y, eye.z - hole.z), origin)
 		GameFrame.toPhysics(Vector3d(view.x, view.y, view.z), direction)
-		val capture = hole.equatorialExtent(hole.horizonRadius)
-		val path = NullRay.trace(hole.spacetime(), origin, direction, reach, capture)
+		// The light you see there arrived along the sight line: traced back in time (it differs around a spinning hole).
+		// Traced back, light from the hole only nears its horizon, so capture is a little outside it.
+		val capture = 1.02 * hole.equatorialExtent(hole.horizonRadius)
+		val path = NullRay.trace(hole.spacetime(), origin, direction, reach, capture, arriving = true)
 		val points = path.points.map {
 			val game = GameFrame.toGame(it, 0, Vector3d())
 			Vec3(game.x + hole.x, game.y + hole.y, game.z + hole.z)

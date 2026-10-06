@@ -44,7 +44,7 @@ class PickGameTest {
 			val direction = DoubleArray(3)
 			GameFrame.toPhysics(Vector3d(eye.x - hole.x, eye.y - hole.y, eye.z - hole.z), origin)
 			GameFrame.toPhysics(Vector3d(view.x, view.y, view.z), direction)
-			val path = NullRay.trace(hole.spacetime(), origin, direction, 4.0, hole.equatorialExtent(hole.horizonRadius))
+			val path = NullRay.trace(hole.spacetime(), origin, direction, 4.0, 1.02 * hole.equatorialExtent(hole.horizonRadius), arriving = true)
 			val end = GameFrame.toGame(path.points.last(), 0, Vector3d())
 			val target = BlockPos.containing(end.x + hole.x, end.y + hole.y, end.z + hole.z)
 			val straight = BlockPos.containing(eye.add(view.scale(4.0)))
