@@ -8,11 +8,12 @@ uniform sampler2D DiffuseDepthSampler;
 uniform float RenderDistance; // blocks (paths count as escaped past twice this)
 uniform int ViewChunks;       // the level renderer's view distance in chunks: which chunks it draws
 uniform vec2 CameraInChunk;   // the camera's x and z within its chunk (0 .. 16)
-uniform float FogStart;       // the level's terrain fog this frame (vanilla's linear fog)
-uniform float FogEnd;
-uniform int FogShape;         // 0 sphere, 1 cylinder
+uniform float LensFogStart;   // the level's terrain fog this frame (vanilla's linear fog). Not vanilla's uniform names:
+uniform float LensFogEnd;     // Veil sets those from the render state when binding, and by the post pass there's no fog
+uniform int LensFogShape;     // 0 sphere, 1 cylinder
+uniform vec4 LensFogColor;    // the terrain fog's colour (alpha its strength)
 uniform int ProfileFlags;     // profiling only (0 normally): 2 skips geometry, 4 uses Euler for bending, 8 ignores the
-                              // render distance
+                              // render distance; 16 draws fogged geometry as drawn; 32 (LensMode 1) paints traced hits' fog distance
 uniform int UnseenSource; // what bent paths can meet: 0 nothing (the sky), 1 the geometry round the hole (LensVoxels)
 uniform usampler3D Voxels;      // LensVoxels' fine grid: per one-block cell, its quads as (start << 8) | count
 uniform samplerBuffer VoxelQuads; // its quads, 6 texels each (LensVoxels.writeQuad), relative to their cell
@@ -50,7 +51,12 @@ float sceneDistance(vec2 uv) {
     float depth = texture(DiffuseDepthSampler, uv).r;
     if (depth >= SKY_DEPTH) return 1e30;
     vec4 view = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
-    return length(view.xyz / view.w);
+    float distance = length(view.xyz / view.w);
+    // Wholly in the fog, drawn geometry looks just like sky, and near a fold the vertex lens can leave a gap in nearer
+    // ground through which far ground shows (its own images there hidden): such pixels are traced like sky, so the
+    // nearer ground the light really meets wins.
+    if (distance >= LensFogEnd && LensFogColor.a > 0.0 && (ProfileFlags & 16) == 0) return 1e30;
+    return distance;
 }
 
 // Angle between neighbouring output pixels (radians).
@@ -83,7 +89,7 @@ bool drawnChunk(vec3 p) {
 
 // Vanilla's fog distance of camera-relative point p.
 float fogDistance(vec3 p) {
-    if (FogShape == 0) return length(p);
+    if (LensFogShape == 0) return length(p);
     return max(length(p.xz), abs(p.y));
 }
 const float SETTLED = 60.0;       // r_s from every hole, heading away: bending is done, steps grow freely
@@ -357,7 +363,17 @@ bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
     float tBehind;
     vec3 nBehind;
     bool main = gridHit(Voxels, VoxelOrigin, a, d, tMain, nMain);
-    bool behind = VoxelBehindReady == 1 && gridHit(VoxelsBehind, VoxelOriginBehind, a, d, tBehind, nBehind);
+    // The grids overlap (and hold the same blocks there): the one past the hole is walked only for a segment leaving
+    // the main one's box, and only up to the main one's hit.
+    vec3 ra = a - VoxelOrigin;
+    vec3 rb = b - VoxelOrigin;
+    bool insideMain = all(greaterThanEqual(min(ra, rb), vec3(0.0))) && all(lessThan(max(ra, rb), vec3(float(VOXEL_SIZE))));
+    bool behind = false;
+    if (VoxelBehindReady == 1 && !insideMain) {
+        float reach = main ? tMain : 1.0;
+        behind = gridHit(VoxelsBehind, VoxelOriginBehind, a, d * reach, tBehind, nBehind);
+        tBehind *= reach;
+    }
     if (!main && !behind) return false;
     if (main && (!behind || tMain <= tBehind)) {
         at = a + d * tMain;

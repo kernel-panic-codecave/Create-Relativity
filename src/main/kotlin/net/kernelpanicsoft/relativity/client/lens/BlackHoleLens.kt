@@ -251,10 +251,10 @@ object BlackHoleLens {
 		uniform("LensMode") { setInt(if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
 		pipeline.getUniformSafe("SkyColor").setVector(sky.x.toFloat(), sky.y.toFloat(), sky.z.toFloat())
-		pipeline.getUniformSafe("FogColor").setVector(fogColor[0], fogColor[1], fogColor[2], fogColor[3])
-		uniform("FogStart") { setFloat(fogStart) }
-		uniform("FogEnd") { setFloat(fogEnd) }
-		uniform("FogShape") { setInt(fogShape) }
+		uniform("LensFogColor") { setVector(fogColor[0], fogColor[1], fogColor[2], fogColor[3]) }
+		uniform("LensFogStart") { setFloat(fogStart) }
+		uniform("LensFogEnd") { setFloat(fogEnd) }
+		uniform("LensFogShape") { setInt(fogShape) }
 		uniform("ProfileFlags") { setInt(profileFlags) }
 		LensVoxels.waterSurface.let { w -> pipeline.getUniformSafe("WaterSurface").setVector(w[0], w[1], w[2], w[3]) }
 		uniform("RenderDistance") { setFloat(minecraft.gameRenderer.renderDistance) }

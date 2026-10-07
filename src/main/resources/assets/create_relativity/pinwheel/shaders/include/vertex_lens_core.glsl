@@ -33,6 +33,7 @@ bool relativityLevelProjection(mat4 proj) {
 
 // ---- Spinning holes: the image found on the Kerr path table (kerr_paths.fsh) by Newton's method ----
 
+vec2 relativityLastSolve = vec2(-1.0); // debug (KerrSolveCheck): the last found solve's start (0..2) and path position v
 int relativityLastFound = 2; // debug (KerrSolveCheck): the last Kerr solve's outcome (2: none ran)
 
 // Path sample j (-7 .. 7: coming in, the closest approach at 0, going out) of the table's texel t.
@@ -147,6 +148,32 @@ bool relativityKerrSolve(inout vec3 x, vec3 n, float rP) {
     return ok && dot(miss, miss) < 1e-6;
 }
 
+// The image's magnification at solution x (for the point at direction n, radius rP from the hole, camera distance
+// d): the point's area per texel squared unlensed over lensed. The solve's Jacobian, with the path position held to
+// the radius (the third residual), maps texels to directions round the hole; near a fold (where two images of the
+// ground meet and merge) it goes singular and the magnification blows up. 0 where it can't be measured.
+float relativityKerrMagnification(vec3 x, vec3 n, float rP, float d) {
+    bool ok;
+    vec3 miss = relativityPathImage(x, n, rP, ok);
+    vec3 steps = vec3(0.5, 0.5, 0.02);
+    mat3 jacobian;
+    for (int c = 0; c < 3; c += 1) {
+        vec3 shifted = x;
+        shifted[c] += steps[c];
+        bool okShift;
+        jacobian[c] = (relativityPathImage(shifted, n, rP, okShift) - miss) / steps[c];
+        if (!okShift) return 0.0;
+    }
+    // At the path's closest approach (v near 0) the radius barely moves with v, so it can't fix v: no measure (0).
+    if (abs(jacobian[2].z) < 1e-4) return 0.0;
+    // Column c, row r: d miss_r / d x_c. Eliminate x.z through the radius row.
+    vec2 cx = jacobian[0].xy - jacobian[2].xy * (jacobian[0].z / jacobian[2].z);
+    vec2 cy = jacobian[1].xy - jacobian[2].xy * (jacobian[1].z / jacobian[2].z);
+    float lensed = abs(cx.x * cy.y - cx.y * cy.x) * rP * rP;
+    float texel = 2.0 * RelativityLensData[7].x / RelativityLensData[7].z * d;
+    return texel * texel / max(lensed, 1e-30);
+}
+
 // Where along texel t's path radius rP would be, coming in (v < 0) or going out: a starting point for the solve.
 float relativityPathPosition(ivec2 t, float rP, bool outbound) {
     float rMin = texelFetch(RelativityKerrPaths, ivec3(t, 0), 0).x;
@@ -160,6 +187,9 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
 // table's edge (off screen: the caller's Schwarzschild image stands, so a triangle reaching on screen keeps its
 // corner); -1 not found (near the line behind the hole, where images crowd the Einstein ring: hidden, like
 // Schwarzschild's near-axis vertices, and left to the post pass).
+// Magnification past which a Kerr image counts as on a fold (healthy images beside one stay under about 40).
+#define RELATIVITY_FOLD_CUT 80.0
+
 int relativityKerrImage(vec3 p, vec3 guess, out vec3 seen) {
     seen = guess;
     if (guess.z > -1e-3) return 0;
@@ -190,6 +220,11 @@ int relativityKerrImage(vec3 p, vec3 guess, out vec3 seen) {
         vec3 x = vec3(start, tries[k]);
         if (relativityKerrSolve(x, n, rP) && dot(start - holeAt, x.xy - holeAt) >= 0.0) {
             seen = normalize(vec3((x.xy / size * 2.0 - 1.0) * tanXY, -1.0));
+            float magnification = relativityKerrMagnification(x, n, rP, length(p));
+            relativityLastSolve = vec2(float(k), magnification);
+            // At a fold the solve lands between the two merging images, and a triangle reaching such a vertex is
+            // stretched across both: hidden, and the strip left to the post pass (as Schwarzschild's near-axis cut).
+            if (magnification > RELATIVITY_FOLD_CUT) { relativityLastSolve.x = 5.0; return -1; }
             if (RelativityLensData[1].w > 1.5 && RelativityLensData[1].w < 2.5 && x.z > 0.0) return -1; // debug 2: hide going out
             if (RelativityLensData[1].w > 2.5 && RelativityLensData[1].w < 3.5 && x.z <= 0.0) return -1; // debug 3: hide coming in
             return 1;

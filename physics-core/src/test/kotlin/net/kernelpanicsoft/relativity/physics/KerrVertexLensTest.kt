@@ -594,9 +594,9 @@ class KerrVertexLensTest {
 		val rStart = minOf(profile(camera, 0.5 * rs, spin * 0.5 * rs).r, draw[5])
 		val rows = ArrayList<String>()
 		var gpuOnlyFailures = 0
-		for (gy in 60 downTo -60 step 4) {
+		for (gy in 96 downTo -96 step 6) {
 			val row = StringBuilder()
-			for (gx in -14..90 step 3) {
+			for (gx in -14..96 step 4) {
 				val p = local(gx.toDouble() - 0.5, -6.0, gy.toDouble() - 0.5) // world (x, z) relative to the hole at x, z = 0.5
 				val guess = schwarzschildGuess(scene, p)
 				val start = guess?.let { tablePosition(scene, it) } ?: tablePosition(scene, (p - camera).normalized())
@@ -616,7 +616,7 @@ class KerrVertexLensTest {
 				val g = solve(gpuScene)
 				val c = solve(scene)
 				if (g < 0 && c >= 0) gpuOnlyFailures++
-				if (g < 0 && abs(gy) > 8) println("fails at block corner (${gx}, ${gy}) relative to the hole: rP ${"%.2f".format(rP)}, start ${start.toList().map { "%.1f".format(it) }}, guess ${guess != null}")
+				if (g < 0 && abs(gy) > 30) println("fails at block corner (${gx}, ${gy}) relative to the hole: rP ${"%.2f".format(rP)}, start ${start.toList().map { "%.1f".format(it) }}, guess ${guess != null}")
 				row.append(when {
 					g == c -> if (g == 1) 'o' else if (g == 0) 's' else '?'
 					g < 0 -> '#' // fails on the GPU's table only

@@ -365,6 +365,14 @@ class LensClientGameTest {
 				val wrong = LensReference.compare(reference, kerrShot)
 				CreateRelativity.LOGGER.info("Kerr vertex lens vs reference: {}% of pixels in the wrong class", "%.1f".format(wrong * 100))
 			}
+			// Which pixels the world drew (grey) and which the post pass traced (yellow; blue coloured from the drawing).
+			runOnClient { BlackHoleLens.marchDebug = true }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_sources")
+			runOnClient { BlackHoleLens.profileFlags = 32 }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_sources_distance") // traced hits by fog distance: black near, yellow at 128
+			runOnClient { BlackHoleLens.profileFlags = 0; BlackHoleLens.marchDebug = false }
 			runOnClient { BlackHoleLens.profileFlags = 8 }
 			waitTicks(10)
 			takeScreenshot("kerr_vertex_uncut")
@@ -405,11 +413,49 @@ class LensClientGameTest {
 				val results = KerrSolveCheck.run(points, VertexLens.lastProjection)
 				rows.indices.joinToString("\n") { r ->
 					columns.indices.joinToString("") { c ->
-						when (results.getOrNull(r * columns.size + c)?.get(0)?.toInt()) { 1 -> "o"; 0 -> "s"; -1 -> "?"; 2 -> "."; else -> " " }
+						when (results.getOrNull(r * columns.size + c)?.get(0)?.toInt()?.let { if (it % 10 == 1) 1 else it }) { 1 -> "o"; 0 -> "s"; -1 -> "?"; 2 -> "."; else -> " " }
 					}
 				}
 			}
 			CreateRelativity.LOGGER.info("Kerr solve on the GPU, floor round the hole:\n{}", map)
+			// No drawn floor quad (top at y -60, every corner placed) stretched across the view: a vertex solved to the
+			// wrong image (between two merging ones at a fold) pulls its quads hundreds of pixels past where the lens's
+			// magnification takes its neighbours (healthy quads near the ring here stay under about 210 px; near the
+			// camera, quads are big unbent too, so those are measured against their unbent size).
+			val stretched = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+				val span = -130..130
+				val points = ArrayList<FloatArray>()
+				for (z in span) for (x in span) {
+					val v = view.transform(org.joml.Vector3f((x - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (z - camera.position.z).toFloat()))
+					points += floatArrayOf(v.x, v.y, v.z)
+				}
+				val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection) }
+				val width = minecraft.window.width.toDouble()
+				val height = minecraft.window.height.toDouble()
+				val n = span.count()
+				fun at(i: Int, j: Int) = results[j * n + i]
+				val found = ArrayList<Pair<Double, String>>()
+				for (j in 0 until n - 1) for (i in 0 until n - 1) {
+					val corners = listOf(at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1))
+					// Placed by the Kerr solve, and on or near the screen (a corner level with the camera projects
+					// anywhere; clipping takes care of it).
+					if (corners.any { it[0].toInt() % 10 != 1 || it[3] > 99f || kotlin.math.abs(it[1]) > 3f || kotlin.math.abs(it[2]) > 3f }) continue
+					val xs = corners.map { (it[1] + 1.0) / 2.0 * width }
+					val ys = corners.map { (1.0 - it[2]) / 2.0 * height }
+					val extent = maxOf(xs.max() - xs.min(), ys.max() - ys.min())
+					val unbent = listOf(i to j, i + 1 to j, i + 1 to j + 1, i to j + 1).map { (a, b) ->
+						val v = points[b * n + a]
+						val clip = org.joml.Vector4f(v[0], v[1], v[2], 1f).mul(VertexLens.lastProjection)
+						doubleArrayOf(clip.x / clip.w / 2.0 * width, -clip.y / clip.w / 2.0 * height)
+					}
+					val unbentExtent = maxOf(unbent.maxOf { it[0] } - unbent.minOf { it[0] }, unbent.maxOf { it[1] } - unbent.minOf { it[1] })
+					if (extent > 300.0 + 2.0 * unbentExtent) found += extent to "block (${span.first + i}, ${span.first + j}) spans ${extent.toInt()} px (${unbentExtent.toInt()} unbent)"
+				}
+				found.sortedByDescending { it.first }.take(5).map { it.second }
+			}
+			assertTrue(stretched.isEmpty()) { "Stretched floor quads: $stretched" }
 			// The GPU's path table and its parameters, for KerrVertexLensTest to check against its CPU mirror.
 			runOnClient {
 				val data = net.kernelpanicsoft.relativity.client.lens.KerrPaths.readBack()
@@ -646,11 +692,12 @@ class LensClientGameTest {
 				it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO
 				BlackHoleLens.timeGpu = true
 			}
-			// Filling: the most a frame spends on it.
+			// Filling (until both grids are full; they share a frame's budget): the most a frame spends on it.
 			var worst = 0.0
-			repeat(60) {
+			for (i in 0 until 600) {
 				waitTick()
 				worst = maxOf(worst, computeOnClient { LensVoxels.updateMillis })
+				if (i >= 60 && computeOnClient { LensVoxels.ready && LensVoxels.behind.ready }) break
 			}
 			val counts = computeOnClient { minecraft -> placed.keys.associate { (name, pos) -> name to LensVoxels.quadsAt(minecraft.level!!, pos) } }
 			val steady = (0 until 20).map { waitTick(); computeOnClient { LensVoxels.updateMillis } }.sorted()[10]

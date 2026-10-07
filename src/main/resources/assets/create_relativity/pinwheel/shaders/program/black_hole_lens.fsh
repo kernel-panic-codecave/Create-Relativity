@@ -24,7 +24,6 @@ uniform sampler2D SkyProbe;   // sky_probe.fsh: the sky all round (latitude-long
 uniform vec3 SkyColor;          // the sky overhead and at the horizon (fog), for paths that escape with nothing else
 uniform sampler2D Lightmap;     // the game's lightmap (block light x sky light)
 uniform vec4 WaterSurface;      // LensVoxels.waterSurface: water's surface (untinted RGB) and opacity
-uniform vec4 FogColor;          // to show; also the terrain fog's colour (alpha its strength)
 uniform int LensMode; // 0: the lens; debug: 1 paints each sky pixel by its path's outcome, 2 by its full-resolution
                       // march's step count (every pixel marched), 3 marches every pixel, 4 passes the frame through,
                       // 5 also skips the tables; 6 paints pixels re-marched at full resolution (red: scene, blue: Kerr)
@@ -380,10 +379,10 @@ vec3 geometryColor(vec3 at, int face, usampler3D cells, usampler3D tintGrid, sam
 // Vanilla's linear fog on a traced surface at camera-relative point p.
 vec3 linearFog(vec3 color, vec3 p) {
     float distance = fogDistance(p);
-    if (distance <= FogStart) return color;
+    if (distance <= LensFogStart) return color;
     float fog = 1.0;
-    if (distance < FogEnd) fog = smoothstep(FogStart, FogEnd, distance);
-    return mix(color, FogColor.rgb, fog * FogColor.a);
+    if (distance < LensFogEnd) fog = smoothstep(LensFogStart, LensFogEnd, distance);
+    return mix(color, LensFogColor.rgb, fog * LensFogColor.a);
 }
 
 // The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
@@ -411,7 +410,7 @@ vec3 skyAt(vec3 d) {
         }
         if (sum.a > 0.5) return sum.rgb / sum.a;
     }
-    return mix(FogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y));
+    return mix(LensFogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y));
 }
 
 // Where the world's drawing shows camera-relative point p (the vertex lens put it where its light appears, at its
@@ -582,7 +581,9 @@ void main() {
         // (blue: coloured from where the world drew it)
         vec3 outcome[7] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0), vec3(1.0, 1.0, 0.0));
         fragColor = vec4(outcome[min(hit.outcome, SCENE_VOXEL)], 1.0);
+        if (sceneDist < 1e29) fragColor = vec4(vec3(clamp(sceneDist / 256.0, 0.0, 1.0)), 1.0); // drawn: grey by distance
         if (fromDrawing) fragColor = vec4(0.0, 0.6, 1.0, 1.0); // geometry coloured from the drawing: blue
+        if (hit.outcome >= SCENE_VOXEL && (ProfileFlags & 32) != 0) fragColor = vec4(1.0, clamp(fogDistance(hit.value) / 128.0, 0.0, 1.0), 0.0, 1.0); // debug: traced hit's fog distance
         if (hit.outcome == SCENE_ESCAPED && marchSteps >= SCENE_STEPS) fragColor = vec4(0.0, 1.0, 1.0, 1.0); // out of steps: cyan
     }
     if (KerrTableEnabled == 2 && first.diskG < -0.5) fragColor = vec4(1.0, 0.0, 0.0, 1.0);

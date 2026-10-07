@@ -48,9 +48,13 @@ object VertexLens {
 	private const val BLOCK_BYTES = 192 // 12 vec4s: see vertex_lens_core.glsl's RelativityLensData
 	private const val KERR_SAMPLER = "RelativityKerrPaths"
 
-	/** The Kerr path table: a texel per this many screen pixels, over the view widened by [KERR_MARGIN]. */
+	/** The Kerr path table: a texel per this many screen pixels, over the view widened by [kerrMargin]. */
 	private const val KERR_TABLE_DIVISOR = 6
-	private const val KERR_MARGIN = 1.3f
+	private const val KERR_MARGIN_DEFAULT = 2.0f
+
+	/** [KERR_MARGIN_DEFAULT]; only GameTests change it (timing). */
+	@JvmField
+	var kerrMargin = KERR_MARGIN_DEFAULT
 
 	/** kerr.glsl's KERR_START: the least the table's paths reach from the hole (r_s). */
 	private const val KERR_START = 80.0
@@ -152,8 +156,8 @@ object VertexLens {
 			kerr = KerrPaths.draw(
 				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(),
 				pathRadius(nearest, holeGame.length().toDouble()).toFloat(), viewToGame,
-				KERR_MARGIN / projection.m00(), KERR_MARGIN / projection.m11(),
-				maxOf(16, (window.width * KERR_MARGIN / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * KERR_MARGIN / KERR_TABLE_DIVISOR).toInt()),
+				kerrMargin / projection.m00(), kerrMargin / projection.m11(),
+				maxOf(16, (window.width * kerrMargin / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * kerrMargin / KERR_TABLE_DIVISOR).toInt()),
 			)
 		}
 		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null, kerr)
@@ -195,7 +199,7 @@ object VertexLens {
 				val dy = hole.y - camY
 				val dz = hole.z - camZ
 				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put(hole.spin.toFloat())
-				data.put(KERR_MARGIN / projection.m00()).put(KERR_MARGIN / projection.m11())
+				data.put(kerrMargin / projection.m00()).put(kerrMargin / projection.m11())
 					.put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
