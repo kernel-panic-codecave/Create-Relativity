@@ -33,6 +33,8 @@ bool relativityLevelProjection(mat4 proj) {
 
 // ---- Spinning holes: the image found on the Kerr path table (kerr_paths.fsh) by Newton's method ----
 
+int relativityLastFound = 2; // debug (KerrSolveCheck): the last Kerr solve's outcome (2: none ran)
+
 // Path sample j (-7 .. 7: coming in, the closest approach at 0, going out) of the table's texel t.
 vec2 relativityPathSample(ivec2 t, int j) {
     if (j == 0) return texelFetch(RelativityKerrPaths, ivec3(t, 0), 0).zw;
@@ -244,6 +246,7 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     if (RelativityLensData[1].z > 0.5 && !nearAxis) {
         vec3 kerr;
         int found = relativityKerrImage(p, seen, kerr);
+        relativityLastFound = found;
         if (found == 1) return proj * vec4(kerr * length(p), 1.0);
         if (RelativityLensData[1].w > 3.5) found = 0; // debug 4: failures drawn at the Schwarzschild image instead
         if (found < 0 || (RelativityLensData[1].w > 0.5 && RelativityLensData[1].w < 1.5)) image.g = 0.0; // hidden (debug 1: all not placed by Kerr)

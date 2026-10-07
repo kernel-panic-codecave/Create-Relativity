@@ -5,7 +5,9 @@
 #include create_relativity:kerr
 
 uniform sampler2D DiffuseDepthSampler;
-uniform float RenderDistance; // blocks: traced geometry farther than this (by the fog's distance measure) isn't drawn
+uniform float RenderDistance; // blocks (paths count as escaped past twice this)
+uniform int ViewChunks;       // the level renderer's view distance in chunks: which chunks it draws
+uniform vec2 CameraInChunk;   // the camera's x and z within its chunk (0 .. 16)
 uniform float FogStart;       // the level's terrain fog this frame (vanilla's linear fog)
 uniform float FogEnd;
 uniform int FogShape;         // 0 sphere, 1 cylinder
@@ -66,6 +68,17 @@ const int SCENE_STEPS = 160;
 // Path length past which a path counts as escaped: twice the render distance (it can curve back), at least 64 blocks.
 float sceneFar() {
     return max(2.0 * RenderDistance, 64.0);
+}
+
+// Whether the level renderer draws the chunk holding camera-relative point p (ChunkTrackingView.isWithinDistance, as
+// its section graph uses it), so traced geometry ends where the drawn world does.
+bool drawnChunk(vec3 p) {
+    ivec2 offset = ivec2(floor((CameraInChunk + p.xz) / 16.0));
+    int i = max(0, abs(offset.x) - 1);
+    int j = max(0, abs(offset.y) - 1);
+    int far = max(i, j);
+    int near = min(i, j);
+    return near * near + far * far < ViewChunks * ViewChunks;
 }
 
 // Vanilla's fog distance of camera-relative point p.
@@ -482,7 +495,7 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
             vec3 at;
             int outcome;
             // Past the render distance there's nothing drawn, so nothing to meet.
-            if (geometryHit(x, xNext, at, outcome) && (fogDistance(at) <= RenderDistance || (ProfileFlags & 8) != 0)) {
+            if (geometryHit(x, xNext, at, outcome) && (drawnChunk(at) || (ProfileFlags & 8) != 0)) {
                 return sceneHit(outcome, at);
             }
         }

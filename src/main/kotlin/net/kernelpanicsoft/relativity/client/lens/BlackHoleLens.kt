@@ -258,6 +258,8 @@ object BlackHoleLens {
 		uniform("ProfileFlags") { setInt(profileFlags) }
 		LensVoxels.waterSurface.let { w -> pipeline.getUniformSafe("WaterSurface").setVector(w[0], w[1], w[2], w[3]) }
 		uniform("RenderDistance") { setFloat(minecraft.gameRenderer.renderDistance) }
+		uniform("ViewChunks") { setInt(minecraft.options.effectiveRenderDistance) }
+		uniform("CameraInChunk") { setVector((camera.x - 16.0 * kotlin.math.floor(camera.x / 16.0)).toFloat(), (camera.z - 16.0 * kotlin.math.floor(camera.z / 16.0)).toFloat()) }
 
 		// Every sampler gets a real texture, whatever the mode: Veil binds missing ones to a placeholder on unit 0 and
 		// renumbers the rest, and a mismatch there (the voxels' integer 3D sampler) makes the whole draw invalid.

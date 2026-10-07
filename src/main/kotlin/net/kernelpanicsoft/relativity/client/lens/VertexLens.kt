@@ -121,7 +121,12 @@ object VertexLens {
 	}
 
 	/** Before terrain: pick the hole, upload the block, bind the table, link any new programs. */
+	/** The level's projection last frame (debug; GameTests). */
+	@JvmField
+	var lastProjection = Matrix4f()
+
 	private fun beginLevel(projection: Matrix4f) {
+		if (!VeilLevelPerspectiveRenderer.isRenderingPerspective()) lastProjection = Matrix4f(projection)
 		if (!ensureResources()) return
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level

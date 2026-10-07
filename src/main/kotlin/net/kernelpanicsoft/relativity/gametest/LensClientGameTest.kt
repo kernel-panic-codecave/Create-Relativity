@@ -350,7 +350,25 @@ class LensClientGameTest {
 			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
 			waitTicks(40)
 			settle()
-			takeScreenshot("kerr_vertex")
+			val kerrShot = takeScreenshot("kerr_vertex")
+			// Against the CPU trace of the same view (fog-free range only: past it colours fade into the fog).
+			run {
+				val columns = 160
+				val rows = computeOnClient { columns * it.window.height / it.window.width }
+				val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+				for (first in 0 until rows step 8) {
+					val part = computeOnClient { minecraft ->
+						LensReference.trace(minecraft, SpacetimeField.blackHoles(minecraft.level!!).single(), columns, rows, 200.0, 85.0, first until minOf(first + 8, rows))
+					}
+					for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+				}
+				val wrong = LensReference.compare(reference, kerrShot)
+				CreateRelativity.LOGGER.info("Kerr vertex lens vs reference: {}% of pixels in the wrong class", "%.1f".format(wrong * 100))
+			}
+			runOnClient { BlackHoleLens.profileFlags = 8 }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_uncut")
+			runOnClient { BlackHoleLens.profileFlags = 0 }
 			// (The post pass's tracing off, so what the vertex lens leaves out shows as sky.)
 			for ((mode, label) in listOf(1 to "placed", 2 to "inbound", 3 to "outbound")) {
 				runOnClient {
@@ -372,6 +390,26 @@ class LensClientGameTest {
 			runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE }
 			waitTicks(10)
 			takeScreenshot("kerr_vertex_nogrid")
+			// The vertex lens's own solve on the GPU for the floor (y -60) round the hole at (0.5, 0.5): the same map as
+			// KerrVertexLensTest's (o found, s Schwarzschild, ? hidden, . no Kerr solve).
+			val map = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+				val rows = (96 downTo -96 step 6).toList()
+				val columns = (-14..96 step 4).toList()
+				val points = ArrayList<FloatArray>()
+				for (gy in rows) for (gx in columns) {
+					val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gy - camera.position.z).toFloat()))
+					points += floatArrayOf(v.x, v.y, v.z)
+				}
+				val results = KerrSolveCheck.run(points, VertexLens.lastProjection)
+				rows.indices.joinToString("\n") { r ->
+					columns.indices.joinToString("") { c ->
+						when (results.getOrNull(r * columns.size + c)?.get(0)?.toInt()) { 1 -> "o"; 0 -> "s"; -1 -> "?"; 2 -> "."; else -> " " }
+					}
+				}
+			}
+			CreateRelativity.LOGGER.info("Kerr solve on the GPU, floor round the hole:\n{}", map)
 			// The GPU's path table and its parameters, for KerrVertexLensTest to check against its CPU mirror.
 			runOnClient {
 				val data = net.kernelpanicsoft.relativity.client.lens.KerrPaths.readBack()
