@@ -15,7 +15,8 @@ import org.lwjgl.system.MemoryStack
  * The vertex lens's Kerr image map (kerr_image_map.fsh), drawn each frame after the Kerr path table: for points round a
  * spinning hole on a grid of azimuth, polar angle and (logarithmic) radius, how each one's image is turned from the
  * straight line of sight. The world's vertex shaders read it with one filtered lookup (vertex_lens_core.glsl) instead
- * of each solving for its image. Two textures, swapped each frame: the last frame's map starts this frame's solve.
+ * of each solving for its image. A layer is solved into a scratch texture from the live one (its last answer starts the
+ * solve), then copied back; while the camera moves only [layersPerFrame] layers a frame are, in turn.
  * Its own GL program and framebuffer; leaves all state as it found it.
  */
 object KerrImageMap {
@@ -23,11 +24,13 @@ object KerrImageMap {
 	const val HEIGHT = 64 // cos of the polar angle
 	const val DEPTH = 48  // radius
 
+	/** The live map ([LIVE]) and a scratch one each layer is solved into before being copied back. */
 	private val textures = IntArray(2)
 
-	/** Per texel, where along its path each image was (R32F; 99 none): the next frame's solve starts there. */
+	/** Per texel, where along its path each image was (R32F; 99 none): the next solve starts there. Live and scratch. */
 	private val paths = IntArray(2)
-	private var current = 0
+	private const val LIVE = 0
+	private const val SCRATCH = 1
 	private var previousValid = false
 	private var program = 0
 	private var framebuffer = 0
@@ -35,9 +38,9 @@ object KerrImageMap {
 	private var failed = false
 	private val uniforms = HashMap<String, Int>()
 
-	/** Layers redrawn per frame (debug; GameTests: timing); the rest keep last frame's. */
+	/** Layers solved per frame while the map catches up with the camera; the rest keep their last answer. */
 	@JvmField
-	var layersPerFrame = DEPTH
+	var layersPerFrame = 8
 	private var nextLayer = 0
 	private var frame = 0
 
@@ -47,7 +50,7 @@ object KerrImageMap {
 
 	/** The map the vertex shaders read (GL_TEXTURE_3D, RGBA32F); a texture always exists once [ensureTexture] ran. */
 	val texture: Int
-		get() = textures[current]
+		get() = textures[LIVE]
 
 	/** Makes sure the textures exist (empty until drawn), for samplers that must always have one. */
 	fun ensureTexture() {
@@ -89,7 +92,6 @@ object KerrImageMap {
 		if (drawnSinceChange >= DEPTH) return true
 		ensureTexture()
 		if (framebuffer == 0) framebuffer = GL30.glGenFramebuffers()
-		val target = 1 - current
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
 		val previousVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)
@@ -111,12 +113,14 @@ object KerrImageMap {
 			// The previous map on a unit of its own (the block's samplers keep theirs, set by VertexLens.linkProgram).
 			GlStateManager._activeTexture(GL13.GL_TEXTURE1)
 			val previousBound1 = GL11.glGetInteger(GL12.GL_TEXTURE_BINDING_3D)
-			GL11.glBindTexture(GL12.GL_TEXTURE_3D, paths[current])
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, paths[LIVE])
 			GL20.glUniform1i(uniform("PreviousPath"), 1)
 			GlStateManager._activeTexture(GL13.GL_TEXTURE0)
 			val previousBound = GL11.glGetInteger(GL12.GL_TEXTURE_BINDING_3D)
-			GL11.glBindTexture(GL12.GL_TEXTURE_3D, textures[current])
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, textures[LIVE])
 			GL20.glUniform1i(uniform("PreviousMap"), 0)
+			GlStateManager._activeTexture(GL13.GL_TEXTURE2)
+			val previousBound2 = GL11.glGetInteger(GL12.GL_TEXTURE_BINDING_3D)
 			val buffers = stack.mallocInt(2)
 			buffers.put(0, GL30.GL_COLOR_ATTACHMENT0).put(1, GL30.GL_COLOR_ATTACHMENT1)
 			GL20.glDrawBuffers(buffers)
@@ -124,15 +128,22 @@ object KerrImageMap {
 			GL20.glUniform1i(uniform("Frame"), frame++)
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
 			GL30.glBindVertexArray(vao)
-			// Layers not redrawn this frame keep what the target held (the map from two frames back).
+			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones.
 			val redraw = if (previousValid) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
 			for (layer in 0 until DEPTH) {
 				if (((layer - nextLayer) % DEPTH + DEPTH) % DEPTH >= redraw) continue
-				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[target], 0, layer)
-				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT1, paths[target], 0, layer)
+				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[SCRATCH], 0, layer)
+				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT1, paths[SCRATCH], 0, layer)
 				GL20.glUniform1i(uniform("Layer"), layer)
 				GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
+				for ((attachment, live) in listOf(GL30.GL_COLOR_ATTACHMENT0 to textures[LIVE], GL30.GL_COLOR_ATTACHMENT1 to paths[LIVE])) {
+					GL11.glReadBuffer(attachment)
+					GL11.glBindTexture(GL12.GL_TEXTURE_3D, live)
+					GL12.glCopyTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, layer, 0, 0, WIDTH, HEIGHT)
+				}
 			}
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, previousBound2)
+			GlStateManager._activeTexture(GL13.GL_TEXTURE0)
 			nextLayer = (nextLayer + redraw) % DEPTH
 			drawnSinceChange += redraw
 			GL11.glBindTexture(GL12.GL_TEXTURE_3D, previousBound)
@@ -148,7 +159,6 @@ object KerrImageMap {
 		if (depth) GlStateManager._enableDepthTest()
 		if (cull) GlStateManager._enableCull()
 		if (scissor) GlStateManager._enableScissorTest()
-		current = target
 		previousValid = true
 		return true
 	}
