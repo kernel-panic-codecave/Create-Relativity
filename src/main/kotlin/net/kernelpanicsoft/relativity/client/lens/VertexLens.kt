@@ -48,6 +48,9 @@ object VertexLens {
 	private const val BLOCK_BYTES = 192 // 12 vec4s: see vertex_lens_core.glsl's RelativityLensData
 	private const val KERR_SAMPLER = "RelativityKerrPaths"
 
+	/** The Kerr image map's sampler (KerrImageMap), on the unit below the path table's. */
+	private const val KERR_MAP_SAMPLER = "RelativityKerrMap"
+
 	/** The Kerr path table: a texel per this many screen pixels, over the view widened by [kerrMargin]. */
 	private const val KERR_TABLE_DIVISOR = 6
 	private const val KERR_MARGIN_DEFAULT = 2.0f
@@ -133,6 +136,13 @@ object VertexLens {
 	@JvmField
 	var lastProjection = Matrix4f()
 
+	/** GPU time of the Kerr path pass and the image map pass (debug; GameTests, with BlackHoleLens.timeGpu). */
+	val pathsTimer = GpuTimer()
+	val mapTimer = GpuTimer()
+
+	/** The hole the Kerr image map was last drawn for (a new one starts it over). */
+	private var mapHole: Any? = null
+
 	private fun beginLevel(projection: Matrix4f) {
 		if (!VeilLevelPerspectiveRenderer.isRenderingPerspective()) lastProjection = Matrix4f(projection)
 		if (!ensureResources()) return
@@ -157,12 +167,14 @@ object VertexLens {
 			val holeGame = Vector3f((nearest.x - camera.x).toFloat(), (nearest.y - camera.y).toFloat(), (nearest.z - camera.z).toFloat())
 			val viewToGame = org.joml.Matrix3f().rotation(Quaternionf(minecraft.gameRenderer.mainCamera.rotation()))
 			val window = minecraft.window
+			if (BlackHoleLens.timeGpu) pathsTimer.begin()
 			kerr = KerrPaths.draw(
 				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(),
 				pathRadius(nearest, holeGame.length().toDouble()).toFloat(), viewToGame,
 				kerrMargin / projection.m00(), kerrMargin / projection.m11(),
 				maxOf(16, (window.width * kerrMargin / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * kerrMargin / KERR_TABLE_DIVISOR).toInt()),
 			)
+			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
 		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null, kerr && !kerrSolveOff)
 
@@ -171,6 +183,20 @@ object VertexLens {
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
 		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
+		GlStateManager._activeTexture(previous)
+		// The image map the vertices read, solved on the path table (the block and the table bound for it).
+		KerrImageMap.ensureTexture()
+		if (!perspective) {
+			if (!kerr || nearest?.id != mapHole) KerrImageMap.invalidate()
+			mapHole = nearest?.id
+			if (kerr && !kerrSolveOff) {
+				if (BlackHoleLens.timeGpu) mapTimer.begin()
+				KerrImageMap.draw()
+				if (BlackHoleLens.timeGpu) mapTimer.end()
+			}
+		}
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 2)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrImageMap.texture)
 		GlStateManager._activeTexture(previous)
 	}
 
@@ -216,7 +242,9 @@ object VertexLens {
 				val w = dx * dx + dy * dy + dz * dz - a * a
 				val camR = kotlin.math.sqrt(0.5 * w + kotlin.math.sqrt(0.25 * w * w + a * a * dy * dy))
 				val reach = pathRadius(hole, kotlin.math.sqrt(dx * dx + dy * dy + dz * dz))
-				data.put(minOf(camR, reach).toFloat()).put(reach.toFloat()).put(0f).put(0f)
+				// The image map: from just outside the horizon out to the paths' end.
+				val horizon = rs / 2 + kotlin.math.sqrt(maxOf(rs * rs / 4 - a * a, 0.0))
+				data.put(minOf(camR, reach).toFloat()).put(reach.toFloat()).put((1.05 * horizon).toFloat()).put(reach.toFloat())
 			} else {
 				repeat(24) { data.put(0f) }
 			}
@@ -288,7 +316,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {

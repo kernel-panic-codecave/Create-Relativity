@@ -7,6 +7,7 @@ import net.kernelpanicsoft.archie.gametest.TestSingleplayerContext
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
+import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
 import net.kernelpanicsoft.relativity.client.lens.LensVoxels
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos
@@ -620,7 +621,15 @@ class LensClientGameTest {
 					return measure(BlackHoleLens.KerrMode.TABLE)
 				}
 				// The parts: the post pass cut to a copy; then the vertex lens's Kerr solve off, then the Kerr path pass too.
+				runOnClient { BlackHoleLens.timeGpu = true }
 				val fpsLens = fps()
+				var kerrMs = computeOnClient { "Kerr paths %.1f ms, image map %.1f ms".format(VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis) }
+				for (mode in 1..2) {
+					runOnClient { KerrImageMap.debugMode = mode }
+					waitTicks(40)
+					kerrMs += computeOnClient { "; map mode %d %.1f ms".format(mode, VertexLens.mapTimer.millis) }
+				}
+				runOnClient { KerrImageMap.debugMode = 0 }
 				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val fpsVertex = fps()
 				runOnClient { VertexLens.kerrSolveOff = true }
@@ -628,13 +637,11 @@ class LensClientGameTest {
 				runOnClient { VertexLens.kerrSolveOff = false; VertexLens.kerrOff = true }
 				val fpsSchwarzschild = fps()
 				runOnClient { VertexLens.kerrOff = false; BlackHoleLens.rawFrame = false; BlackHoleLens.skipTables = false }
-				lines += "%s: %.0f fps with the lens; post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f".format(name, fpsLens, fpsVertex, fpsPaths, fpsSchwarzschild)
+				lines += "%s: %.0f fps with the lens; post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f (%s)".format(name, fpsLens, fpsVertex, fpsPaths, fpsSchwarzschild, kerrMs)
 				val fixed = time { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val tables = time { BlackHoleLens.rawFrame = true }
 				val lens = time {}
 				val full = time { BlackHoleLens.marchEveryPixel = true }
-				// The march's parts (every pixel marched): without geometry, Euler bending, neither.
-				val parts = listOf(2, 4, 6).map { flags -> time { BlackHoleLens.marchEveryPixel = true; BlackHoleLens.profileFlags = flags } }
 				runOnClient {
 					BlackHoleLens.profileFlags = 0
 					BlackHoleLens.marchStepsDebug = true
@@ -655,9 +662,8 @@ class LensClientGameTest {
 				val sceneRemarched = fraction(shot) { r, _, _ -> r > 128 }
 				val kerrRemarched = fraction(shot) { _, _, b -> b > 128 }
 				lines += ("%s: fixed %.2f, tables %.2f, lens pass %.2f (total %.2f; re-marched %.1f%% scene, %.1f%% Kerr);" +
-					" march every pixel %.2f (%.1f steps a pixel; without geometry %.2f, Euler %.2f, neither %.2f)").format(
-					name, fixed, tables - fixed, lens - tables, lens, sceneRemarched * 100, kerrRemarched * 100,
-					full, meanSteps, parts[0], parts[1], parts[2],
+					" march every pixel %.2f (%.1f steps a pixel)").format(
+					name, fixed, tables - fixed, lens - tables, lens, sceneRemarched * 100, kerrRemarched * 100, full, meanSteps,
 				)
 			}
 			runOnClient {
@@ -822,6 +828,22 @@ class LensClientGameTest {
 		try {
 			world.block()
 		} finally {
+			// Debug switches back to normal, so a failed test doesn't leave the lens half off for the next.
+			runOnClient {
+				BlackHoleLens.rawFrame = false
+				BlackHoleLens.skipTables = false
+				BlackHoleLens.marchEveryPixel = false
+				BlackHoleLens.marchDebug = false
+				BlackHoleLens.marchStepsDebug = false
+				BlackHoleLens.remarchDebug = false
+				BlackHoleLens.profileFlags = 0
+				BlackHoleLens.timeGpu = false
+				BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
+				VertexLens.kerrOff = false
+				VertexLens.kerrSolveOff = false
+				VertexLens.kerrDebug = 0
+				KerrImageMap.debugMode = 0
+			}
 			world.close()
 			runOnClient { ClientTestInput.unlock(it) }
 			if (save.parent?.fileName?.toString() == "saves") save.toFile().deleteRecursively()
