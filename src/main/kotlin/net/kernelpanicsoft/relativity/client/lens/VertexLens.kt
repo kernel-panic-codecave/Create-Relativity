@@ -4,7 +4,6 @@ import com.mojang.blaze3d.platform.GlStateManager
 import foundry.veil.api.client.render.VeilLevelPerspectiveRenderer
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.config.RelativityConfig
-import net.kernelpanicsoft.relativity.mixin.client.GameRendererShadersAccessor
 import net.kernelpanicsoft.relativity.physics.lens.SchwarzschildImages
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
 import net.minecraft.client.Minecraft
@@ -29,22 +28,34 @@ import java.util.concurrent.CompletableFuture
 import kotlin.math.abs
 
 /**
- * High-quality lens preset: world geometry is lensed in the vertex shader (vertex_lens.glsl, injected into vanilla's
- * world shaders through Veil). Each vertex moves to where its light appears, at its true distance, so depth testing
- * handles occlusion: no near/far cutoff, no doubling, nothing culled where the screen-space lens left holes. This feeds
- * those shaders: a uniform block (the nearest lensing hole, the level's projection) and the inverse image table
- * ([SchwarzschildImages.forFiltering]: correction and validity) as a 3D texture. The post pass then only lenses the sky and draws the shadow.
+ * The black-hole lens: world geometry is lensed in the vertex shader (vertex_lens_core.glsl), injected into
+ * vanilla's world shaders and Sodium's terrain shader through Veil, into Flywheel's (CompilationMixin) and into
+ * shader packs' (TransformPatcherMixin). Each vertex moves to where its light appears, at its true distance, so depth
+ * testing handles occlusion.
+ * This feeds those shaders: a uniform block (the nearest lensing hole, the level's projection, the view's rotation)
+ * and two textures: the Schwarzschild inverse image table ([SchwarzschildImages.forFiltering]) and, for a spinning
+ * hole, this frame's Kerr path table ([KerrPaths]), which the shader inverts by Newton's method starting from the
+ * Schwarzschild image. The post pass ([BlackHoleLens]) then draws the shadow, the disk and the bent sky.
  */
 object VertexLens {
 	private const val TABLE_U0 = 64
 	private const val TABLE_UP = 64
 	private const val TABLE_PHI = 128
-	private const val TEXTURE_UNIT = 15
+	/** The table's texture unit: the last one, clear of what vanilla, Flywheel and shader packs use. */
+	private val TEXTURE_UNIT: Int by lazy { GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - 1 }
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
-	private const val BLOCK_BYTES = 96 // vec4 hole, vec4 params, mat4 projection (std140)
+	private const val BLOCK_BYTES = 192 // 12 vec4s: see vertex_lens_core.glsl's RelativityLensData
+	private const val KERR_SAMPLER = "RelativityKerrPaths"
 
-	/** Spin from which the hole is treated as Kerr (kerr.glsl's MIN_KERR_SPIN), which this preset doesn't handle. */
+	/** The Kerr path table: a texel per this many screen pixels, over the view widened by [KERR_MARGIN]. */
+	private const val KERR_TABLE_DIVISOR = 6
+	private const val KERR_MARGIN = 1.3f
+
+	/** kerr.glsl's KERR_START: where the table's paths start (or end) at the latest. */
+	private const val KERR_START = 80.0
+
+	/** Spin from which the hole is treated as Kerr (kerr.glsl's MIN_KERR_SPIN): images found on [KerrPaths]' table. */
 	private const val MIN_KERR_SPIN = 0.05
 
 	/** Boxes within this many r_s of the hole skip frustum culling: bent light can show them from anywhere. */
@@ -54,7 +65,8 @@ object VertexLens {
 	private var texture = 0
 	private var buffer = 0
 	private var binding = -1
-	private val linkedPrograms = HashSet<Int>()
+	/** Shaders' programs as last linked (Veil recompiles programs in place, so ids change under a shader). */
+	private val linkedPrograms = java.util.WeakHashMap<net.minecraft.client.renderer.ShaderInstance, Int>()
 
 	/** The hole lensing this frame (world position), or null. */
 	@Volatile private var hole: BlackHole? = null
@@ -75,12 +87,17 @@ object VertexLens {
 	@JvmField
 	var skipTable = false
 
-	/** Overrides the Vertex Lensing setting when set (GameTests). */
+	/** Hides vertices a spinning hole's path table didn't place (debug; GameTests). */
 	@JvmField
-	var forced: Boolean? = null
+	var kerrDebug = false
+
+	/** Turns Flywheel's visualization off, so its blocks draw through vanilla renderers (GameTests compare the two). */
+	@JvmField
+	@Volatile
+	var flywheelOff = false
 
 	private val wanted: Boolean
-		get() = RelativityConfig.Client.Render.lensing && (forced ?: RelativityConfig.Client.Render.vertexLensing)
+		get() = RelativityConfig.Client.Render.lensing
 
 	private fun onRenderStage(event: RenderLevelStageEvent) {
 		when (event.stage) {
@@ -93,15 +110,13 @@ object VertexLens {
 	/** Before terrain: pick the hole, upload the block, bind the table, link any new programs. */
 	private fun beginLevel(projection: Matrix4f) {
 		if (!ensureResources()) return
-		linkPrograms()
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level
 		// Perspective renders (Veil level views, such as other mods' cameras) draw the level too, and stay unlensed.
 		val perspective = VeilLevelPerspectiveRenderer.isRenderingPerspective()
 		val camera = minecraft.gameRenderer.mainCamera.position
-		// The image table is Schwarzschild's: a spinning hole is left to the post pass, which marches Kerr.
 		val nearest = if (wanted && level != null && !perspective) {
-			BlackHoleLens.visibleHoles(level).minByOrNull { it.center.distanceToSqr(camera) }?.takeIf { abs(it.spin) < MIN_KERR_SPIN }
+			BlackHoleLens.visibleHoles(level).minByOrNull { it.center.distanceToSqr(camera) }
 		} else null
 		if (!perspective) {
 			hole = nearest
@@ -110,11 +125,25 @@ object VertexLens {
 		}
 		// The level's view rotation (as GameRenderer builds it): the shader works in view space.
 		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
-		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null)
+		// A spinning hole: this frame's Kerr path table, which the shaders invert.
+		var kerr = false
+		if (nearest != null && abs(nearest.spin) >= MIN_KERR_SPIN) {
+			val holeGame = Vector3f((nearest.x - camera.x).toFloat(), (nearest.y - camera.y).toFloat(), (nearest.z - camera.z).toFloat())
+			val viewToGame = org.joml.Matrix3f().rotation(Quaternionf(minecraft.gameRenderer.mainCamera.rotation()))
+			val window = minecraft.window
+			kerr = KerrPaths.draw(
+				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(), viewToGame,
+				KERR_MARGIN / projection.m00(), KERR_MARGIN / projection.m11(),
+				maxOf(16, (window.width * KERR_MARGIN / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * KERR_MARGIN / KERR_TABLE_DIVISOR).toInt()),
+			)
+		}
+		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null, kerr)
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
 		GlStateManager._activeTexture(previous)
 	}
 
@@ -130,7 +159,7 @@ object VertexLens {
 		}
 	}
 
-	private fun upload(hole: BlackHole?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean) {
+	private fun upload(hole: BlackHole?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, kerr: Boolean) {
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(BLOCK_BYTES / 4)
 			if (hole != null) {
@@ -139,8 +168,30 @@ object VertexLens {
 			} else {
 				data.put(0f).put(0f).put(0f).put(0f)
 			}
-			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(0f).put(0f)
+			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(if (kerr) 1f else 0f).put(if (kerrDebug) 1f else 0f)
 			projection.get(data.position(), data)
+			data.position(data.position() + 16)
+			if (hole != null && kerr) {
+				val dx = hole.x - camX
+				val dy = hole.y - camY
+				val dz = hole.z - camZ
+				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put(hole.spin.toFloat())
+				data.put(KERR_MARGIN / projection.m00()).put(KERR_MARGIN / projection.m11())
+					.put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
+				for (column in 0..2) {
+					val c = viewToGame.getColumn(column, Vector3f())
+					data.put(c.x).put(c.y).put(c.z).put(0f)
+				}
+				// Boyer-Lindquist r of the camera (local axes: game z, x, y; spin about game y), capped at the start sphere.
+				val rs = hole.schwarzschildRadius
+				val a = hole.spin * rs / 2
+				val w = dx * dx + dy * dy + dz * dz - a * a
+				val camR = kotlin.math.sqrt(0.5 * w + kotlin.math.sqrt(0.25 * w * w + a * a * dy * dy))
+				data.put(minOf(camR, KERR_START * rs).toFloat()).put((KERR_START * rs).toFloat()).put(0f).put(0f)
+			} else {
+				repeat(24) { data.put(0f) }
+			}
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
 			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0L, data)
@@ -194,29 +245,79 @@ object VertexLens {
 		return id
 	}
 
-	/**
-	 * Points each vanilla program's lens block at our binding and its table sampler at our texture unit. Programs are
-	 * rebuilt on resource reloads (and by Veil), so new ids are picked up as they appear.
-	 */
-	private fun linkPrograms() {
-		val shaders = (Minecraft.getInstance().gameRenderer as GameRendererShadersAccessor).`create_relativity$getShaders`()
-		for (shader in shaders.values) {
-			val program = shader.id
-			if (!linkedPrograms.add(program)) continue
-			val block = GL31.glGetUniformBlockIndex(program, BLOCK)
-			if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-			val sampler = GL20.glGetUniformLocation(program, SAMPLER)
-			if (sampler >= 0) {
-				if (GL.getCapabilities().OpenGL41) {
-					GL41.glProgramUniform1i(program, sampler, TEXTURE_UNIT)
-				} else {
-					val current = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
-					GL20.glUseProgram(program)
-					GL20.glUniform1i(sampler, TEXTURE_UNIT)
-					GL20.glUseProgram(current)
-				}
+	/** Links [shader]'s program (see [linkProgram]) unless it's the one already linked. */
+	@JvmStatic
+	fun ensureLinked(shader: net.minecraft.client.renderer.ShaderInstance) {
+		val id = shader.id
+		if (linkedPrograms[shader] == id) return
+		linkedPrograms[shader] = id
+		linkProgram(id)
+	}
+
+	/** Points [program]'s lens block at our binding and its table sampler at our texture unit (if it has them). */
+	@JvmStatic
+	fun linkProgram(program: Int) {
+		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
+		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
+		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1)) {
+			val sampler = GL20.glGetUniformLocation(program, name)
+			if (sampler < 0) continue
+			if (GL.getCapabilities().OpenGL41) {
+				GL41.glProgramUniform1i(program, sampler, unit)
+			} else {
+				val current = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
+				GL20.glUseProgram(program)
+				GL20.glUniform1i(sampler, unit)
+				GL20.glUseProgram(current)
 			}
 		}
+	}
+
+	/** Flywheel's line placing each instanced vertex on screen (flywheel:internal/common.vert, both backends). */
+	private const val FLYWHEEL_POSITION = "gl_Position = flw_viewProjection * flw_vertexPos;"
+
+	/** The vertex lens's declarations and functions (vertex_lens_core.glsl), read once. */
+	private val lensSource: String? by lazy {
+		val location = net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, "pinwheel/shaders/include/vertex_lens_core.glsl")
+		val resource = Minecraft.getInstance().resourceManager.getResource(location).orElse(null) ?: return@lazy null
+		resource.open().use { String(it.readAllBytes(), Charsets.UTF_8) }
+	}
+
+	/** Shader-pack programs not lensed: the shadow pass (drawn from the sun), the hand, sky, clouds, Distant Horizons. */
+	private val IRIS_SKIPPED = listOf("shadow", "gbuffers_hand", "gbuffers_sky", "gbuffers_clouds", "dh_")
+
+	/** A shader-pack program's `main`, renamed so the lens can run after it. */
+	private val IRIS_MAIN = Regex("""\bvoid\s+main\s*\(\s*(void\s*)?\)""")
+
+	/**
+	 * A shader pack's vertex source for program [name] (as Iris patched it) with the lens applied to its final position:
+	 * its `main` renamed, and a new one that runs it, then bends gl_Position. Unchanged for skipped programs, and for
+	 * programs with later stages that set the position (geometry or tessellation; the lens would have to go there).
+	 */
+	@JvmStatic
+	fun irisSource(name: String, source: String, laterStages: Boolean): String {
+		val lens = lensSource ?: return source
+		if (laterStages || IRIS_SKIPPED.any { name.startsWith(it) }) return source
+		val main = IRIS_MAIN.find(source) ?: return source
+		return source.substring(0, main.range.first) + "void relativity_packMain()" + source.substring(main.range.last + 1) +
+			"\n" + lens + "\nvoid main() {\n    relativity_packMain();\n    gl_Position = relativityLensLevel(gl_Position);\n}\n"
+	}
+
+	/**
+	 * A Flywheel shader's full source with the lens applied where it places vertices on screen (so Create's instanced
+	 * parts bend like everything else, with Flywheel's instancing kept); other sources unchanged.
+	 */
+	@JvmStatic
+	fun flywheelSource(source: CharSequence): CharSequence {
+		val text = source.toString()
+		val at = text.indexOf(FLYWHEEL_POSITION)
+		val main = text.indexOf("void _flw_main(")
+		val lens = lensSource
+		if (at < 0 || main < 0 || main > at || lens == null) return source
+		return text.substring(0, main) + "\n" + lens + "\n" + text.substring(main, at) +
+			"gl_Position = relativityLens(flw_viewProjection * flw_vertexPos, flw_projection);" +
+			text.substring(at + FLYWHEEL_POSITION.length)
 	}
 
 	/** Light bent round the hole shows sections a straight line of sight is blocked from: cave culling would drop them. */

@@ -24,6 +24,7 @@ class LensClientGameTest {
 	 */
 	@ClientGameTest
 	fun ClientGameTestContext.kerrTableMatchesFullMarch() {
+		if (!ClientTestInput.selected("kerrTableMatchesFullMarch")) return
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(6)
 			minecraft.options.enableVsync().set(false)
@@ -82,13 +83,13 @@ class LensClientGameTest {
 	}
 
 	/**
-	 * Fragment (post-pass) lens with nearby ground: a hole (static, then spinning) above a checkerboard floor with red
-	 * posts, seen from several poses and compared with [LensReference]'s CPU trace of the same view: with the post pass
-	 * alone, and with vertex lensing (static holes only; it leaves spinning ones to the post pass). (The old two-leg
-	 * model was 13–41% wrong here.)
+	 * The lens with nearby ground: a hole (static, then spinning) above a checkerboard floor with red posts, seen from
+	 * several poses and compared with [LensReference]'s CPU trace of the same view, with and without the geometry
+	 * round the hole for the sky's bent paths.
 	 */
 	@ClientGameTest
 	fun ClientGameTestContext.groundAroundHole() {
+		if (!ClientTestInput.selected("groundAroundHole")) return
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(6)
 			minecraft.options.hideGui = true
@@ -146,12 +147,329 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * Traced geometry respects the render distance: a red wall behind the hole shows in its Einstein ring with the wall
+	 * inside the render distance, and not with it outside. And it's lit by the world's light through the game's
+	 * lightmap: a screenshot at midnight with a torch by the hole, for a look.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.renderDistanceAndLight() {
+		if (!ClientTestInput.selected("renderDistanceAndLight")) return
+		runOnClient { minecraft ->
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+		}
+		withTestWorld { // superflat: the ground is at y = -61
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			// A red wall 48 blocks past the hole, across the line of sight.
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (z in -12..12) for (y in -60..-48) level.setBlock(BlockPos(48, y, z), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+			}
+			command("relativity bh create 0.5 -54 0.5 2 0")
+			command("tick freeze")
+			val reds = HashMap<Int, Double>()
+			for (chunks in listOf(8, 2)) {
+				runOnClient { it.options.renderDistance().set(chunks) }
+				command("tp @a -11.5 -54 0.5 -90 0")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				waitTicks(80)
+				// Red anywhere: at 8 chunks the wall shows directly and in the ring; at 2 (32 blocks) it's beyond the render
+				// distance but still loaded (the client keeps a few chunks more), so only the lens's cut keeps it out.
+				reds[chunks] = fraction(takeScreenshot("render_distance_$chunks")) { r, g, b -> r > 50 && r > 3 * g && r > 3 * b }
+			}
+			CreateRelativity.LOGGER.info("Red (the wall) on screen: render distance 8 → {}%, 2 → {}%", "%.2f".format(reds.getValue(8) * 100), "%.2f".format(reds.getValue(2) * 100))
+			command("time set midnight")
+			server.runOnServer { minecraft -> minecraft.overworld().setBlock(BlockPos(4, -60, 0), Blocks.TORCH.defaultBlockState(), 2) }
+			runOnClient { it.options.renderDistance().set(6) }
+			command("tp @a -9.5 -46 0.5 -90 45")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(80)
+			takeScreenshot("midnight")
+			runOnClient {
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+			}
+			assertTrue(reds.getValue(8) > 0.002) { "The wall within the render distance doesn't show (${reds.getValue(8) * 100}% red)" }
+			assertTrue(reds.getValue(2) < 0.0002) { "The wall beyond the render distance shows (${reds.getValue(2) * 100}% red)" }
+		}
+	}
+
+	/**
+	 * Flywheel's instanced parts bend with the vertex lens (its shaders get the lens too): a wall of Create shafts
+	 * across the lensed view, drawn by Flywheel and then (visualization off) through vanilla's renderers, which the
+	 * vertex lens is known to bend; the two screenshots should match.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.flywheelBends() {
+		if (!ClientTestInput.selected("flywheelBends")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			val shaft = com.simibubi.create.AllBlocks.SHAFT.get().defaultBlockState()
+				.setValue(net.minecraft.world.level.block.RotatedPillarBlock.AXIS, net.minecraft.core.Direction.Axis.Z)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (z in -8..8) for (y in -60..-50 step 2) level.setBlock(BlockPos(6, y, z), shaft, 2)
+			}
+			command("relativity bh create 0.5 -55 0.5 2 0")
+			command("tick freeze")
+			command("tp @a -12.5 -55 0.5 -90 0")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			val instanced = takeScreenshot("flywheel_instanced")
+			// Flywheel drops the block entities it draws from sections as they're built: rebuild them all.
+			runOnClient {
+				VertexLens.flywheelOff = true
+				it.levelRenderer.allChanged()
+			}
+			waitTicks(40)
+			settle()
+			val vanilla = takeScreenshot("flywheel_vanilla")
+			runOnClient {
+				VertexLens.flywheelOff = false
+				it.levelRenderer.allChanged()
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+			}
+			val differing = Files.newInputStream(instanced).use { NativeImage.read(it) }.use { a ->
+				Files.newInputStream(vanilla).use { NativeImage.read(it) }.use { b ->
+					var count = 0L
+					for (y in 0 until a.height) for (x in 0 until a.width) {
+						val p = a.getPixelRGBA(x, y)
+						val q = b.getPixelRGBA(x, y)
+						var diff = 0
+						for (k in 0..2) diff = maxOf(diff, Math.abs((p shr (8 * k) and 0xFF) - (q shr (8 * k) and 0xFF)))
+						if (diff > 40) count += 1
+					}
+					count.toDouble() / (a.width.toLong() * a.height)
+				}
+			}
+			CreateRelativity.LOGGER.info("Flywheel vs vanilla shafts under the vertex lens: {}% of pixels differ", "%.2f".format(differing * 100))
+			assertTrue(differing < 0.01) { "Flywheel's shafts aren't bent like vanilla's: ${differing * 100}% of pixels differ" }
+		}
+	}
+
+	/** Debug look at the Kerr vertex lens: where the path table places vertices, and where it falls back. */
+	@ClientGameTest
+	fun ClientGameTestContext.kerrVertex() {
+		if (!ClientTestInput.selected("kerrVertex")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -32..32) for (z in -32..32) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+			}
+			command("relativity bh create 0.5 -54 0.5 2 0.9")
+			command("tick freeze")
+			command("tp @a -14.5 -54 0.5 -90 10")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			takeScreenshot("kerr_vertex")
+			runOnClient { VertexLens.kerrDebug = true }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_placed")
+			runOnClient {
+				VertexLens.kerrDebug = false
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+			}
+		}
+	}
+
+	/**
+	 * A user's scene: r_s 10 at the edge of an ocean, the camera 1.4 r_s from it. Screenshots for a look (the lens, how
+	 * its sky pixels' paths end, the CPU reference's picture); nothing asserted.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.oceanScene() {
+		if (!ClientTestInput.selected("oceanScene")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(12)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld(seed = "-3745315768298803473") {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			command("relativity bh create -15.63 82.64 -146.02 10.03 0")
+			command("tick freeze")
+			for ((pose, at) in listOf("pose" to "-2.38 81.47 -149.14 -135 26", "save" to "-2.38 81.47 -149.14 -135 5.25")) {
+				command("tp @a $at")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				waitTicks(40)
+				settle()
+				val vertexShot = takeScreenshot("ocean_$pose")
+				runOnClient { BlackHoleLens.marchDebug = true }
+				waitTicks(10)
+				takeScreenshot("ocean_${pose}_outcome")
+				runOnClient { BlackHoleLens.marchDebug = false }
+				// The CPU reference picture of the same view (coarse grid, map colours).
+				val columns = 240
+				val rows = computeOnClient { columns * it.window.height / it.window.width }
+				val picture = IntArray(columns * rows)
+				for (first in 0 until rows step 4) {
+					val part = computeOnClient { minecraft ->
+						LensReference.picture(minecraft, SpacetimeField.blackHoles(minecraft.level!!).single(), columns, rows, 400.0, first until minOf(first + 4, rows))
+					}
+					for (row in first until minOf(first + 4, rows)) System.arraycopy(part, row * columns, picture, row * columns, columns)
+				}
+				NativeImage(columns, rows, false).use { image ->
+					for (row in 0 until rows) for (column in 0 until columns) {
+						val argb = picture[row * columns + column]
+						image.setPixelRGBA(column, row, (argb and 0xFF00FF00.toInt()) or ((argb shr 16) and 0xFF) or ((argb and 0xFF) shl 16))
+					}
+					image.writeToFile(vertexShot.resolveSibling("ocean_${pose}_reference_picture.png"))
+				}
+			}
+			runOnClient {
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+			}
+		}
+	}
+
+	/**
+	 * GPU time of the post pass fullscreen (the display's resolution), split by stage: the pipeline's fixed cost (tables
+	 * skipped, frame passed through), the tables (scene and Kerr), the lens pass; and for comparison marching every sky
+	 * pixel. Logged, not asserted (it's for profiling; clocks vary).
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.performance() {
+		if (!ClientTestInput.selected("performance")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(12)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val random = java.util.Random(11)
+				val colours = listOf(Blocks.WHITE_CONCRETE, Blocks.BLUE_CONCRETE, Blocks.RED_CONCRETE)
+				for (x in -48..48) for (z in -48..48) for (y in -60..-30) {
+					if ((x * x + (y + 54) * (y + 54) + z * z) < 400 || random.nextFloat() > 0.03f) continue
+					level.setBlock(BlockPos(x, y, z), colours[random.nextInt(3)].defaultBlockState(), 2)
+				}
+			}
+			command("tick freeze")
+			val size = computeOnClient { "${it.window.width}x${it.window.height}" }
+			val lines = mutableListOf<String>()
+			for ((name, rs, spin, at) in listOf(
+				listOf("small", 2.0, 0.0, "-14.5 -54 0.5 -90 5"),
+				listOf("small_spin", 2.0, 0.9, "-14.5 -54 0.5 -90 5"),
+				listOf("large", 6.0, 0.0, "-20.5 -54 0.5 -90 5"),
+				listOf("large_spin", 6.0, 0.9, "-20.5 -54 0.5 -90 5"),
+			)) {
+				command("relativity bh clear")
+				command("relativity bh create 0.5 -54 0.5 $rs $spin")
+				command("tp @a $at")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				waitTicks(40)
+				settle()
+				fun time(setup: () -> Unit): Double {
+					runOnClient {
+						BlackHoleLens.rawFrame = false
+						BlackHoleLens.skipTables = false
+						BlackHoleLens.marchEveryPixel = false
+						BlackHoleLens.profileFlags = 0
+						setup()
+					}
+					return measure(BlackHoleLens.KerrMode.TABLE)
+				}
+				val fixed = time { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
+				val tables = time { BlackHoleLens.rawFrame = true }
+				val lens = time {}
+				val full = time { BlackHoleLens.marchEveryPixel = true }
+				// The march's parts (every pixel marched): without geometry, Euler bending, neither.
+				val parts = listOf(2, 4, 6).map { flags -> time { BlackHoleLens.marchEveryPixel = true; BlackHoleLens.profileFlags = flags } }
+				runOnClient {
+					BlackHoleLens.profileFlags = 0
+					BlackHoleLens.marchStepsDebug = true
+				}
+				waitTicks(5)
+				val stepsShot = takeScreenshot("performance_${name}_steps")
+				runOnClient { BlackHoleLens.marchStepsDebug = false }
+				val meanSteps = Files.newInputStream(stepsShot).use { NativeImage.read(it) }.use { image ->
+					var sum = 0.0
+					for (y in 0 until image.height) for (x in 0 until image.width) sum += (image.getPixelRGBA(x, y) and 0xFF) / 255.0 * 64
+					sum / (image.width.toLong() * image.height)
+				}
+				takeScreenshot("performance_$name")
+				runOnClient { BlackHoleLens.remarchDebug = true }
+				waitTicks(5)
+				val shot = takeScreenshot("performance_${name}_remarched")
+				runOnClient { BlackHoleLens.remarchDebug = false }
+				val sceneRemarched = fraction(shot) { r, _, _ -> r > 128 }
+				val kerrRemarched = fraction(shot) { _, _, b -> b > 128 }
+				lines += ("%s: fixed %.2f, tables %.2f, lens pass %.2f (total %.2f; re-marched %.1f%% scene, %.1f%% Kerr);" +
+					" march every pixel %.2f (%.1f steps a pixel; without geometry %.2f, Euler %.2f, neither %.2f)").format(
+					name, fixed, tables - fixed, lens - tables, lens, sceneRemarched * 100, kerrRemarched * 100,
+					full, meanSteps, parts[0], parts[1], parts[2],
+				)
+			}
+			runOnClient {
+				BlackHoleLens.rawFrame = false
+				BlackHoleLens.skipTables = false
+				BlackHoleLens.marchEveryPixel = false
+				BlackHoleLens.timeGpu = false
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+			}
+			CreateRelativity.LOGGER.info("Lens GPU ms at {}:\n{}", size, lines.joinToString("\n"))
+		}
+	}
+
+	/**
 	 * The geometry the lens traces where the frame can't show (LensVoxels) is every block's full render: block models
 	 * of any shape, cutout plants, a block entity's renderer (a chest), and Flywheel-drawn Create shafts and cogs.
 	 * Each gets quads in the grid; screenshots of the hole in front of them show how they come out bent.
 	 */
 	@ClientGameTest
 	fun ClientGameTestContext.modelsAroundHole() {
+		if (!ClientTestInput.selected("modelsAroundHole")) return
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(6)
 			minecraft.options.hideGui = true
@@ -196,12 +514,8 @@ class LensClientGameTest {
 			val counts = computeOnClient { minecraft -> placed.keys.associate { (name, pos) -> name to LensVoxels.quadsAt(minecraft.level!!, pos) } }
 			val steady = (0 until 20).map { waitTick(); computeOnClient { LensVoxels.updateMillis } }.sorted()[10]
 			CreateRelativity.LOGGER.info("Lens geometry: quads per block {}; filling took up to {} ms a frame, then {} ms", counts, "%.2f".format(worst), "%.2f".format(steady))
-			takeScreenshot("models_table")
-			runOnClient { VertexLens.forced = true }
-			waitTicks(10)
-			takeScreenshot("models_vertex")
+			takeScreenshot("models")
 			runOnClient {
-				VertexLens.forced = null
 				BlackHoleLens.timeGpu = false
 				it.options.hideGui = false
 				SpacetimeDebugRenderer.hidden = false
@@ -213,8 +527,8 @@ class LensClientGameTest {
 
 	/**
 	 * One view of a hole (r_s 2, [spin]) at (0.5, -54, 0.5) from [at] ("x y z yaw pitch"), traced on the CPU and drawn by
-	 * each lens mode: post-pass table and vertex lensing, with each source for what the frame can't show (voxels, the
-	 * default; nothing). Logs accuracy and cost (medians over 20 frames); adds the default modes' misses to [failures].
+	 * the lens, with each source for what the sky's bent paths meet (voxels, the default; nothing). Logs accuracy and
+	 * the post pass's cost (medians over 20 frames); adds the default's misses to [failures].
 	 */
 	private fun TestSingleplayerContext.lensPose(name: String, spin: Double, at: String, failures: MutableList<String>) = with(clientContext) {
 		command("relativity bh clear")
@@ -235,16 +549,12 @@ class LensClientGameTest {
 		}
 		val wrongBy = HashMap<String, Double>()
 		val traced = camera()
-		// Render modes (post-pass table, vertex lensing) by what answers for surfaces the frame can't show.
-		val modes = listOf(
-			Triple("table", BlackHoleLens.Unseen.VOXELS, false), Triple("vertex", BlackHoleLens.Unseen.VOXELS, true),
-			Triple("table_none", BlackHoleLens.Unseen.NONE, false), Triple("vertex_none", BlackHoleLens.Unseen.NONE, true),
-		)
-		for ((mode, unseen, vertex) in modes) {
+		// The lens, with and without the geometry round the hole for the sky's bent paths.
+		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE)
+		for ((mode, unseen) in modes) {
 			runOnClient {
 				BlackHoleLens.unseen = unseen
 				BlackHoleLens.timeGpu = true
-				VertexLens.forced = vertex
 			}
 			// The player isn't frozen with the world, and can drift: back to the pose, motion stopped.
 			command("tp @a $at")
@@ -268,16 +578,11 @@ class LensClientGameTest {
 				name, mode, "%.1f".format(wrong * 100), "%.2f".format(median[0]), "%.2f".format(median[1]),
 			)
 		}
-		runOnClient {
-			BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
-			VertexLens.forced = null
-		}
-		// Within 4%, or (where the reference's classes are rough, e.g. shaded block sides) a point of the best mode.
-		val best = wrongBy.values.min()
-		for (mode in listOf("table", "vertex")) {
-			val wrong = wrongBy.getValue(mode)
-			if (wrong > maxOf(0.04, best + 0.01)) failures += "$name ($mode): ${wrong * 100}% of pixels in the wrong class"
-		}
+		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS }
+		// Within 4%, or (where the reference's classes are rough, e.g. shaded block sides) a point of the lens without
+		// the geometry.
+		val wrong = wrongBy.getValue("lens")
+		if (wrong > maxOf(0.04, wrongBy.getValue("lens_none") + 0.01)) failures += "$name: ${wrong * 100}% of pixels in the wrong class"
 	}
 
 	/** The camera's position and look direction. */
@@ -295,15 +600,30 @@ class LensClientGameTest {
 	 * A singleplayer world for [block], deleted afterwards: Archie's withSingleplayer leaves every test world in
 	 * run/saves.
 	 */
-	private fun ClientGameTestContext.withTestWorld(block: TestSingleplayerContext.() -> Unit) {
-		val world = worldBuilder().create()
+	private fun ClientGameTestContext.withTestWorld(seed: String? = null, block: TestSingleplayerContext.() -> Unit) {
+		runOnClient { ClientTestInput.lock(it) }
+		waitTicks(20) // the window resizes
+		// Superflat (seed 1), or the default world type with a given seed.
+		val builder = worldBuilder()
+		if (seed != null) builder.setUseConsistentSettings(false).adjustSettings { it.seed = seed }
+		val world = builder.create()
 		val save = world.saveDirectory
 		try {
 			world.block()
 		} finally {
 			world.close()
+			runOnClient { ClientTestInput.unlock(it) }
 			if (save.parent?.fileName?.toString() == "saves") save.toFile().deleteRecursively()
 		}
+	}
+
+	/** Waits (up to 30 s) until every chunk section in view is drawn and the lens's grids are in, then a second more. */
+	private fun ClientGameTestContext.settle() {
+		for (i in 0 until 600) {
+			if (computeOnClient { it.levelRenderer.hasRenderedAllSections() && LensVoxels.ready }) break
+			waitTick()
+		}
+		waitTicks(20)
 	}
 
 	/** Runs a command as the server (Archie's runCommand fails on its reflective call here). */

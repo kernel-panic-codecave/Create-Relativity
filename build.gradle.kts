@@ -146,7 +146,31 @@ dependencies {
     // POMs list optional integrations (JEI, Curios, CC: Tweaked, compasses) as hard deps.
     modImplementation("dev.simulated_team.simulated:simulated-neoforge-$mcVersion:${property("simulated_version")}") { isTransitive = false }
     modRuntimeOnly("dev.eriksonn.aeronautics:aeronautics-neoforge-$mcVersion:${property("simulated_version")}") { isTransitive = false }
+
 }
+
+// Dev-only compatibility runs (nothing shipped): -PwithSodium adds Sodium (its own chunk renderer and shaders),
+// -PwithIris adds Sodium and Iris (shader packs, from run/shaderpacks). They go into run/mods as downloaded, not
+// through Loom: its remap drops META-INF/jarjar/metadata.json, so the real mods nested inside never load.
+val compatMods: Configuration = configurations.create("compatMods") { isTransitive = false }
+val withIris = providers.gradleProperty("withIris").isPresent
+val withSodium = withIris || providers.gradleProperty("withSodium").isPresent
+dependencies {
+    if (withSodium) compatMods("maven.modrinth:sodium:mc$mcVersion-0.8.13-neoforge")
+    if (withIris) compatMods("maven.modrinth:iris:1.8.14-beta.1+$mcVersion-neoforge")
+}
+val syncCompatMods by tasks.registering {
+    description = "Puts the -PwithSodium / -PwithIris mods in run/mods (as compat-*.jar), or takes them out."
+    val files = compatMods
+    val mods = layout.projectDirectory.dir("run/mods").asFile
+    inputs.files(files)
+    doLast {
+        mods.mkdirs()
+        mods.listFiles { file -> file.name.startsWith("compat-") }?.forEach { it.delete() }
+        for (file in files) file.copyTo(mods.resolve("compat-" + file.name))
+    }
+}
+tasks.matching { it.name.startsWith("run") }.configureEach { dependsOn(syncCompatMods) }
 
 kotlin {
     jvmToolchain(21)

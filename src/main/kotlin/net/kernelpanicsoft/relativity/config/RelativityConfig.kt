@@ -105,15 +105,10 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.lensing.comment"),
 				default = true,
 			)
-			val overscan by intSlider(
-				title = Component.translatable("config.create_relativity.render.overscan"),
-				comment = Component.translatable("config.create_relativity.render.overscan.comment"),
-				min = 0, max = 50, default = 15,
-			)
-			val vertexLensing by boolean(
-				title = Component.translatable("config.create_relativity.render.vertex_lensing"),
-				comment = Component.translatable("config.create_relativity.render.vertex_lensing.comment"),
-				default = false,
+			val traceBlocks by boolean(
+				title = Component.translatable("config.create_relativity.render.trace_blocks"),
+				comment = Component.translatable("config.create_relativity.render.trace_blocks.comment"),
+				default = true,
 			)
 			val lightDelay by boolean(
 				title = Component.translatable("config.create_relativity.render.light_delay"),

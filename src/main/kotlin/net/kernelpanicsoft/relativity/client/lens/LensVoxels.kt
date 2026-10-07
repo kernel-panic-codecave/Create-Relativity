@@ -13,24 +13,25 @@ import org.lwjgl.opengl.GL15
 import org.lwjgl.opengl.GL30
 import org.lwjgl.opengl.GL31
 import org.lwjgl.system.MemoryUtil
-import kotlin.math.ceil
 import kotlin.math.floor
 
 /**
- * The world round the nearest hole, for bent light paths to trace where the camera's frame can't show what they reach
- * (lens_scene.glsl's sceneGeometryHit):
+ * The world round the nearest hole, for the sky's bent light paths to trace (the Einstein ring and the images round it)
+ * (lens_scene.glsl's geometryHit):
  *
- * - **Fine grid** ([SIZE]³ one-block cells, R32UI): each cell's quads, as (start << 8) | count into the quad buffer.
+ * - **Grid** ([SIZE]³ one-block cells, R32UI): each cell's quads, as (start << 8) | count into the quad buffer.
  * - **Quad buffer** (a texture buffer, [QUAD_TEXELS] RGBA32F texels per quad): the real vertex data of what each block
  *   draws ([BlockQuads]), relative to the cell. Every copy of a block state shares one run; cells a block entity draws
  *   into get their own run (a slab), the cell's block plus the entity's quads, re-recorded in turn.
- * - **Coarse grid** ([SIZE]³ cells of [coarseCell] blocks, RGBA8): a colour and occupancy per cell, for what's beyond
- *   the fine grid. Its cells grow with the hole (64 r_s across at least).
+ * - **Light grid** ([SIZE]³, RG8, alongside the fine grid): each cell's sky and block light (0-15 as 0-1), sampled
+ *   with linear filtering half a block in front of the face a ray hits, through the game's lightmap.
+ * - **Tint grid** ([SIZE]³, RG32UI, alongside the fine grid): each cell's block tint and fluid tint (RGB), as the game
+ *   computes them there (biome colours), for the quads flagged as tinted ([BlockQuads.Quad.tint]).
  * - **Texture slots**: the GL textures quads sample, up to [TEXTURE_SLOTS]; quads past that use their flat colour.
  *
- * Both grids fill z slices for up to [BUDGET_MILLIS] a frame until complete, then re-read only slices whose sections
- * changed (block updates, light and chunk arrivals, via LevelRendererMixin), at most [REFRESH_SLICES] fine and
- * [COARSE_REFRESH_SLICES] coarse a frame; they start over when the hole moves to another block.
+ * The grids fill z slices for up to [BUDGET_MILLIS] a frame until complete, then re-read only slices whose sections
+ * changed (block updates, light and chunk arrivals, via LevelRendererMixin), at most [REFRESH_SLICES] a frame; they
+ * start over when the hole moves to another block. Paths that leave the grid meet nothing (the sky).
  */
 object LensVoxels {
 	const val SIZE = 128
@@ -38,17 +39,18 @@ object LensVoxels {
 	const val QUAD_TEXELS = 6
 	private const val BUDGET_MILLIS = 3.0
 	private const val REFRESH_SLICES = 4
-	private const val COARSE_REFRESH_SLICES = 1
 	private const val ENTITIES_PER_FRAME = 4
 	private const val STATIC_QUADS = 1 shl 17
 	private const val SLAB_QUADS = 255
 	private const val SLABS = 512
 	private const val QUADS = STATIC_QUADS + SLAB_QUADS * SLABS
 
-	/** Fine grid (GL_TEXTURE_3D, R32UI), coarse grid (GL_TEXTURE_3D, RGBA8), quad buffer texture (GL_TEXTURE_BUFFER). */
+	/** Grid (GL_TEXTURE_3D, R32UI), light and tint grids (GL_TEXTURE_3D), quad buffer texture (GL_TEXTURE_BUFFER). */
 	var grid = 0
 		private set
-	var coarse = 0
+	var light = 0
+		private set
+	var tint = 0
 		private set
 	var quadTexture = 0
 		private set
@@ -58,11 +60,11 @@ object LensVoxels {
 	var origin: BlockPos? = null
 		private set
 
-	/** The coarse grid's minimum corner (world block position) and its cell size (blocks). */
-	var coarseOrigin: BlockPos? = null
-		private set
-	var coarseCell = 2
-		private set
+	/**
+	 * Water's surface as it blends over what's under it: its top's mean texel, untinted (RGB 0-1), and its opacity.
+	 * Paths pass through tinted fluids (lens_scene.glsl); what they reach under one gets this, times the fluid's tint.
+	 */
+	val waterSurface = floatArrayOf(0.7f, 0.7f, 0.7f, 0.7f)
 
 	/** GL ids of the textures in slots 0 until [TEXTURE_SLOTS] (0: unused). */
 	val textureSlots = IntArray(TEXTURE_SLOTS)
@@ -73,20 +75,19 @@ object LensVoxels {
 		private set
 
 	private var filled = 0
-	private var coarseFilled = 0
 	private val dirty = java.util.BitSet(SIZE)
-	private val coarseDirty = java.util.BitSet(SIZE)
 	private val gridSlice = MemoryUtil.memAllocInt(SIZE * SIZE)
-	private val coarseSlice = MemoryUtil.memAlloc(SIZE * SIZE * 4)
+	private val lightSlice = MemoryUtil.memAlloc(SIZE * SIZE * 2)
+	private val tintSlice = MemoryUtil.memAllocInt(SIZE * SIZE * 2)
 
 	private val quadData = FloatArray(QUADS * QUAD_TEXELS * 4)
 	private var staticQuads = 0
 	private var dirtyFrom = Int.MAX_VALUE
 	private var dirtyTo = -1
 
-	/** Per block state: its run ((start << 8) | count, 0 for nothing) and its colour from afar (ARGB, alpha 0 for none). */
+	/** Per block state: its run ((start << 8) | count, 0 for nothing) and which tints its quads use. */
 	private val stateRuns = HashMap<BlockState, Int>()
-	private val stateColors = HashMap<BlockState, Int>()
+	private val stateTints = HashMap<BlockState, Int>()
 
 	/** Block entities in the grid, re-recorded in turn, and the cells each draws into (world cell → slab). */
 	private val entities = LinkedHashSet<BlockPos>()
@@ -96,8 +97,8 @@ object LensVoxels {
 	private val slabCounts = IntArray(SLABS)
 	private val freeSlabs = ArrayDeque((0 until SLABS).toList())
 
-	/** True once both grids are in. */
-	val ready: Boolean get() = origin != null && filled >= SIZE && coarseFilled >= SIZE
+	/** True once the grids are in. */
+	val ready: Boolean get() = origin != null && filled >= SIZE
 
 	/** How many quads the fine grid holds for the block at [pos] (its own, or its block entity's slab); -1 outside it. */
 	fun quadsAt(level: ClientLevel, pos: BlockPos): Int {
@@ -115,13 +116,9 @@ object LensVoxels {
 		if (sectionX * 16 - corner.x in -15 until SIZE && sectionY * 16 - corner.y in -15 until SIZE && z0 in -15 until SIZE) {
 			dirty.set(maxOf(z0, 0), minOf(z0 + 16, SIZE))
 		}
-		val coarseCorner = coarseOrigin ?: return
-		val c0 = Math.floorDiv(sectionZ * 16 - coarseCorner.z, coarseCell)
-		val c1 = Math.floorDiv(sectionZ * 16 + 15 - coarseCorner.z, coarseCell)
-		if (c1 >= 0 && c0 < SIZE) coarseDirty.set(maxOf(c0, 0), minOf(c1 + 1, SIZE))
 	}
 
-	/** Advances both grids round [hole] (nearest first) by this frame's work. */
+	/** Advances the grids round [hole] (nearest first) by this frame's work. */
 	fun update(level: ClientLevel, hole: BlackHole?, partialTick: Float) {
 		val started = System.nanoTime()
 		try {
@@ -132,8 +129,6 @@ object LensVoxels {
 			ensureTextures()
 			val holePos = BlockPos.containing(hole.x, hole.y, hole.z)
 			val corner = holePos.offset(-SIZE / 2, -SIZE / 2, -SIZE / 2)
-			val cell = ceil(maxOf(256.0, 64.0 * hole.schwarzschildRadius) / SIZE).toInt().coerceIn(2, 16)
-			val coarseCorner = holePos.offset(-SIZE * cell / 2, -SIZE * cell / 2, -SIZE * cell / 2)
 			if (corner != origin) {
 				for (pos in entityCells.keys.toList()) dropEntity(pos)
 				origin = corner
@@ -142,35 +137,19 @@ object LensVoxels {
 				entities.clear()
 				entityCursor = null
 			}
-			if (coarseCorner != coarseOrigin || cell != coarseCell) {
-				coarseOrigin = coarseCorner
-				coarseCell = cell
-				coarseFilled = 0
-				coarseDirty.clear()
-			}
-			// While filling, slices until this frame's budget is spent (at least one per grid); then dirty ones only.
+			// While filling, slices until this frame's budget is spent (at least one); then dirty ones only.
 			val deadline = started + (BUDGET_MILLIS * 1e6).toLong()
 			var count = 0
 			while (true) {
 				val filling = filled < SIZE
 				val z = if (filling) filled else dirty.nextSetBit(0).takeIf { it >= 0 } ?: break
 				dirty.clear(z)
-				readSlice(level, corner, z, holePos)
+				readSlice(level, corner, z)
 				if (filling) filled += 1
 				count += 1
 				if (if (filling) System.nanoTime() >= deadline else count >= REFRESH_SLICES) break
 			}
-			count = 0
-			while (true) {
-				val filling = coarseFilled < SIZE
-				val z = if (filling) coarseFilled else coarseDirty.nextSetBit(0).takeIf { it >= 0 } ?: break
-				coarseDirty.clear(z)
-				readCoarseSlice(level, coarseCorner, cell, z, holePos)
-				if (filling) coarseFilled += 1
-				count += 1
-				if (if (filling) System.nanoTime() >= deadline else count >= COARSE_REFRESH_SLICES) break
-			}
-			repeat(minOf(ENTITIES_PER_FRAME, entities.size)) { recordNextEntity(level, partialTick, holePos) }
+			repeat(minOf(ENTITIES_PER_FRAME, entities.size)) { recordNextEntity(level, partialTick) }
 			uploadQuads()
 		} finally {
 			updateMillis = (System.nanoTime() - started) / 1e6
@@ -178,15 +157,24 @@ object LensVoxels {
 	}
 
 	/** Reads fine slice [z]: each cell's run (a block entity's slab where it draws), from the chunk sections. */
-	private fun readSlice(level: ClientLevel, corner: BlockPos, z: Int, holePos: BlockPos) {
+	private fun readSlice(level: ClientLevel, corner: BlockPos, z: Int) {
 		val worldZ = corner.z + z
 		for (i in 0 until SIZE * SIZE) gridSlice.put(i, 0)
+		for (i in 0 until SIZE * SIZE * 2) tintSlice.put(i, -1)
+		val pos = BlockPos.MutableBlockPos()
+		val colors = Minecraft.getInstance().blockColors
 		forEachState(level, corner.x, corner.y, worldZ) { x, y, state, chunk ->
 			if (state.hasBlockEntity()) {
 				val worldPos = BlockPos(corner.x + x, corner.y + y, worldZ)
 				if (chunk.getBlockEntity(worldPos) != null) entities += worldPos
 			}
-			gridSlice.put(y * SIZE + x, run(level, state, holePos))
+			gridSlice.put(y * SIZE + x, run(level, state))
+			val tints = stateTints[state] ?: 0
+			if (tints != 0) {
+				pos.set(corner.x + x, corner.y + y, worldZ)
+				if (tints and (1 shl BlockQuads.TINT_BLOCK) != 0) tintSlice.put((y * SIZE + x) * 2, colors.getColor(state, level, pos, 0))
+				if (tints and (1 shl BlockQuads.TINT_FLUID) != 0) tintSlice.put((y * SIZE + x) * 2 + 1, fluidTint(level, state, pos))
+			}
 		}
 		for ((key, slab) in cellSlabs) {
 			val x = BlockPos.getX(key) - corner.x
@@ -196,50 +184,34 @@ object LensVoxels {
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, grid)
 		unpackDefaults()
 		GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, z, SIZE, SIZE, 1, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, gridSlice)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, tint)
+		unpackDefaults()
+		GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, z, SIZE, SIZE, 1, GL30.GL_RG_INTEGER, GL11.GL_UNSIGNED_INT, tintSlice)
+		readLightSlice(level, corner, z)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, light)
+		unpackDefaults()
+		GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, z, SIZE, SIZE, 1, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, lightSlice)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
 	}
 
-	/**
-	 * Reads coarse slice [z]: per cell, the colour of what fills two points on its vertical centre line (a quarter and
-	 * three quarters up; none: empty). Each column's chunk is looked up once.
-	 */
-	private fun readCoarseSlice(level: ClientLevel, corner: BlockPos, cell: Int, z: Int, holePos: BlockPos) {
-		val chunks = level.chunkSource
-		for (i in 0 until SIZE * SIZE * 4) coarseSlice.put(i, 0)
+	/** Sky and block light of slice [z] (17 per level, so 15 maps to 255), per cell, from the light engine's sections. */
+	private fun readLightSlice(level: ClientLevel, corner: BlockPos, z: Int) {
+		val engine = level.lightEngine
+		val sky = engine.getLayerListener(net.minecraft.world.level.LightLayer.SKY)
+		val block = engine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK)
+		val worldZ = corner.z + z
 		val pos = BlockPos.MutableBlockPos()
-		val pz = corner.z + z * cell + cell / 2
-		for (x in 0 until SIZE) {
-			val px = corner.x + x * cell + cell / 2
-			val chunk = chunks.getChunk(px shr 4, pz shr 4, false) ?: continue
-			for (y in 0 until SIZE) {
-				var r = 0
-				var g = 0
-				var b = 0
-				var n = 0
-				for (k in 0..1) {
-					val state = chunk.getBlockState(pos.set(px, corner.y + y * cell + (if (k == 0) cell / 4 else 3 * cell / 4), pz))
-					if (state.isAir) continue
-					run(level, state, holePos)
-					val color = stateColors[state] ?: 0
-					if (color ushr 24 == 0) continue
-					r += (color shr 16) and 0xFF
-					g += (color shr 8) and 0xFF
-					b += color and 0xFF
-					n += 1
-				}
-				if (n == 0) continue
-				val at = (y * SIZE + x) * 4
-				coarseSlice.put(at, (r / n).toByte())
-				coarseSlice.put(at + 1, (g / n).toByte())
-				coarseSlice.put(at + 2, (b / n).toByte())
-				coarseSlice.put(at + 3, 255.toByte())
-			}
+		for (y in 0 until SIZE) for (x in 0 until SIZE) {
+			pos.set(corner.x + x, corner.y + y, worldZ)
+			val at = (y * SIZE + x) * 2
+			lightSlice.put(at, (sky.getLightValue(pos) * 17).toByte())
+			lightSlice.put(at + 1, (block.getLightValue(pos) * 17).toByte())
 		}
-		GL11.glBindTexture(GL12.GL_TEXTURE_3D, coarse)
-		unpackDefaults()
-		GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, z, SIZE, SIZE, 1, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, coarseSlice)
-		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
 	}
+
+	/** The fluid tint at [pos] (RGB), as the fluid renderer computes it. */
+	private fun fluidTint(level: ClientLevel, state: BlockState, pos: BlockPos): Int =
+		net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions.of(state.fluidState).getTintColor(state.fluidState, level, pos)
 
 	/** Calls [each] for every non-air block of the [SIZE] × [SIZE] slice at z = [worldZ] from ([x0], [y0]), by section. */
 	private inline fun forEachState(level: ClientLevel, x0: Int, y0: Int, worldZ: Int, each: (Int, Int, BlockState, LevelChunk) -> Unit) {
@@ -271,10 +243,10 @@ object LensVoxels {
 	}
 
 	/** [state]'s run of quads, recorded on first sight. */
-	private fun run(level: ClientLevel, state: BlockState, holePos: BlockPos): Int {
+	private fun run(level: ClientLevel, state: BlockState): Int {
 		stateRuns[state]?.let { return it }
-		val quads = BlockQuads.stateQuads(state, level, holePos).take(SLAB_QUADS)
-		stateColors[state] = averageColor(quads)
+		val quads = BlockQuads.stateQuads(state, level).take(SLAB_QUADS)
+		stateTints[state] = quads.fold(0) { mask, quad -> if (quad.tint != BlockQuads.TINT_NONE) mask or (1 shl quad.tint) else mask }
 		if (quads.isEmpty() || staticQuads + quads.size > STATIC_QUADS) {
 			stateRuns[state] = 0
 			return 0
@@ -290,7 +262,7 @@ object LensVoxels {
 	private fun slabRun(slab: Int) = ((STATIC_QUADS + slab * SLAB_QUADS) shl 8) or slabCounts[slab]
 
 	/** Re-records the next block entity in turn: its quads go into the cells they reach, each with that cell's block. */
-	private fun recordNextEntity(level: ClientLevel, partialTick: Float, holePos: BlockPos) {
+	private fun recordNextEntity(level: ClientLevel, partialTick: Float) {
 		var cursor = entityCursor
 		if (cursor == null || !cursor.hasNext()) cursor = entities.toList().iterator().also { entityCursor = it }
 		if (!cursor.hasNext()) return
@@ -323,7 +295,7 @@ object LensVoxels {
 			val z = BlockPos.getZ(key) - corner.z
 			if (x !in 0 until SIZE || y !in 0 until SIZE || z !in 0 until SIZE) continue
 			val slab = cellSlabs[key] ?: freeSlabs.removeFirstOrNull() ?: continue
-			val own = BlockQuads.stateQuads(level.getBlockState(BlockPos.of(key)), level, holePos)
+			val own = BlockQuads.stateQuads(level.getBlockState(BlockPos.of(key)), level)
 			val all = (own + extra).take(SLAB_QUADS)
 			val start = STATIC_QUADS + slab * SLAB_QUADS
 			for ((i, quad) in all.withIndex()) writeQuad(start + i, quad)
@@ -348,7 +320,7 @@ object LensVoxels {
 			val y = BlockPos.getY(key) - corner.y
 			val z = BlockPos.getZ(key) - corner.z
 			if (x in 0 until SIZE && y in 0 until SIZE && z in 0 until SIZE) {
-				setCell(x, y, z, run(level, level.getBlockState(BlockPos.of(key)), BlockPos.of(key)))
+				setCell(x, y, z, run(level, level.getBlockState(BlockPos.of(key))))
 			}
 		}
 	}
@@ -368,7 +340,8 @@ object LensVoxels {
 
 	/**
 	 * Writes [quad] at [index]: texels 0-3 its corners (xyz) with, in w, its texture slot (-1: none, use the flat
-	 * colour), its vertex colour and its flat colour (the bits of ARGB ints), and 0; texels 4-5 its texture coordinates.
+	 * colour), its vertex colour and its flat colour (the bits of ARGB ints), and its tint flag; texels 4-5 its texture
+	 * coordinates.
 	 */
 	private fun writeQuad(index: Int, quad: BlockQuads.Quad) {
 		val at = index * QUAD_TEXELS * 4
@@ -380,7 +353,7 @@ object LensVoxels {
 		quadData[at + 3] = textureSlot(quad.textureId).toFloat()
 		quadData[at + 7] = Float.fromBits(quad.color)
 		quadData[at + 11] = Float.fromBits(quad.flatColor)
-		quadData[at + 15] = 0f
+		quadData[at + 15] = quad.tint.toFloat()
 		for (i in 0..7) quadData[at + 16 + i] = quad.uvs[i]
 		dirtyFrom = minOf(dirtyFrom, index)
 		dirtyTo = maxOf(dirtyTo, index)
@@ -414,29 +387,22 @@ object LensVoxels {
 		dirtyTo = -1
 	}
 
-	private fun averageColor(quads: List<BlockQuads.Quad>): Int {
-		var r = 0f
-		var g = 0f
-		var b = 0f
-		var weight = 0f
-		for (quad in quads) {
-			val color = quad.flatColor
-			if (color ushr 24 == 0) continue
-			val w = quad.area
-			r += w * ((color shr 16) and 0xFF)
-			g += w * ((color shr 8) and 0xFF)
-			b += w * (color and 0xFF)
-			weight += w
-		}
-		if (weight <= 0f) return 0
-		return (0xFF shl 24) or ((r / weight).toInt() shl 16) or ((g / weight).toInt() shl 8) or (b / weight).toInt()
-	}
-
 	/** Creates the (empty) textures, so the lens shaders always have something valid bound to their samplers. */
 	fun ensureTextures() {
 		if (grid != 0) return
+		val level = Minecraft.getInstance().level
+		if (level != null) {
+			BlockQuads.stateQuads(net.minecraft.world.level.block.Blocks.WATER.defaultBlockState(), level)
+				.firstOrNull { it.tint == BlockQuads.TINT_FLUID && it.normal[1] > 0.7f }
+				?.let { quad ->
+					val mean = quad.meanColor
+					for (k in 0..2) waterSurface[k] = ((mean shr (16 - 8 * k)) and 0xFF) / 255f
+					waterSurface[3] = (mean ushr 24) / 255f
+				}
+		}
 		grid = texture3d(GL30.GL_R32UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT)
-		coarse = texture3d(GL11.GL_RGBA8, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE)
+		light = texture3d(GL30.GL_RG8, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, GL11.GL_LINEAR)
+		tint = texture3d(GL30.GL_RG32UI, GL30.GL_RG_INTEGER, GL11.GL_UNSIGNED_INT)
 		quadBuffer = GL15.glGenBuffers()
 		GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, quadBuffer)
 		GL15.glBufferData(GL31.GL_TEXTURE_BUFFER, QUADS.toLong() * QUAD_TEXELS * 16, GL15.GL_DYNAMIC_DRAW)
@@ -447,12 +413,15 @@ object LensVoxels {
 		GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0)
 	}
 
-	private fun texture3d(internalFormat: Int, format: Int, type: Int): Int {
+	private fun texture3d(internalFormat: Int, format: Int, type: Int, filter: Int = GL11.GL_NEAREST): Int {
 		val id = GL11.glGenTextures()
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, id)
 		GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, internalFormat, SIZE, SIZE, SIZE, 0, format, type, null as java.nio.ByteBuffer?)
-		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
-		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
+		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, filter)
+		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, filter)
+		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE)
+		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
+		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
 		return id
 	}

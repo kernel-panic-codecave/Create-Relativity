@@ -17,20 +17,19 @@ import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.client.Minecraft
 import net.minecraft.world.level.Level
 import net.neoforged.neoforge.client.event.ClientTickEvent
-import net.neoforged.neoforge.client.event.ViewportEvent
 import net.neoforged.neoforge.common.NeoForge
 import org.joml.Matrix4f
 import org.joml.Vector4f
 import java.util.concurrent.CompletableFuture
 
 /**
- * Gravitational lensing of the rendered frame by every black hole, as a Veil post pipeline (black_hole_lens.json).
- *
- * Each view ray's bent path is followed through the scene (lens_scene.glsl; the nearest spinning hole through Kerr)
- * to the first surface the frame shows, else one in the voxel grid round the hole ([LensVoxels]), else the sky. The
- * paths come from quarter-resolution tables (kerr_table.fsh, scene_table.fsh), which the lens pass interpolates,
- * marching per pixel only where neighbouring entries disagree. [SchwarzschildLens]' table (built once at startup,
- * normalised by r_s) still gives the shadow's edge with vertex lensing.
+ * The post pass of the black-hole lens, as a Veil post pipeline (black_hole_lens.json), after the vertex lens
+ * ([VertexLens]) has drawn the world where its light appears: the shadow over what lies beyond the hole, the
+ * accretion disk, and in the sky (where nothing was drawn) each view ray's bent path (lens_scene.glsl; the nearest
+ * spinning hole through Kerr) to the geometry round the hole ([LensVoxels]) or the sky: the Einstein ring and the
+ * images round it. The paths come from quarter-resolution tables (kerr_table.fsh, scene_table.fsh), which the lens
+ * pass interpolates, marching per pixel only where neighbouring entries disagree. [SchwarzschildLens]' table (built
+ * once at startup, normalised by r_s) gives the shadow's edge.
  */
 object BlackHoleLens {
 	val PIPELINE = CreateRelativity.id("black_hole_lens")
@@ -44,7 +43,7 @@ object BlackHoleLens {
 
 	/**
 	 * Holes bending light less than this (≈ r_s / distance, in radians: about a pixel) are skipped. With none left the
-	 * lens and overscan switch off.
+	 * lens switches off.
 	 */
 	private const val MIN_BENDING = 1e-3
 
@@ -56,13 +55,7 @@ object BlackHoleLens {
 	private val holeUniforms = Array(MAX_HOLES) { Vector4f() }
 	private val spinUniforms = Array(MAX_HOLES) { Vector4f() }
 
-	/**
-	 * tan(½ vertical FOV) of what the player actually sees, while the level is being rendered wider than that
-	 * (overscan) so lensed rays near the screen edges still find rendered pixels; 0 when not overscanning.
-	 */
-	private var displayTanHalfFov = 0.0
-
-	/** Paints each pixel by how its bent path ended (black_hole_lens.fsh, LensMode 1); only GameTests change it. */
+	/** Paints each pixel by how its bent path ended, every pixel marched (black_hole_lens.fsh, LensMode 1); only GameTests change it. */
 	@JvmField
 	var marchDebug = false
 
@@ -78,7 +71,19 @@ object BlackHoleLens {
 	@JvmField
 	var rawFrame = false
 
-	/** What answers for surfaces the camera's frame can't show (lens_scene.glsl's UnseenSource). */
+	/** Paints pixels re-marched at full resolution (LensMode 6): red scene, blue Kerr; only GameTests change it. */
+	@JvmField
+	var remarchDebug = false
+
+	/** Disables parts of the march for profiling (lens_scene.glsl's ProfileFlags); only GameTests change it. */
+	@JvmField
+	var profileFlags = 0
+
+	/** With [rawFrame], also skips the tables (LensMode 5): the pipeline's fixed cost, for profiling. */
+	@JvmField
+	var skipTables = false
+
+	/** What the sky's bent paths can meet (lens_scene.glsl's UnseenSource). */
 	enum class Unseen {
 		/** Nothing: those paths show the sky. */
 		NONE,
@@ -115,28 +120,27 @@ object BlackHoleLens {
 	private var timerFrame = 0
 	private var timerRunning = false
 
+	/** The level's terrain fog this frame, as set for the translucent blocks (the lens fogs traced surfaces the same). */
+	private var fogStart = 0f
+	private var fogEnd = 1e9f
+	private var fogShape = 1
+	private val fogColor = floatArrayOf(0f, 0f, 0f, 0f)
+
+	private fun onRenderStage(event: net.neoforged.neoforge.client.event.RenderLevelStageEvent) {
+		if (event.stage != net.neoforged.neoforge.client.event.RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return
+		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) return
+		fogStart = com.mojang.blaze3d.systems.RenderSystem.getShaderFogStart()
+		fogEnd = com.mojang.blaze3d.systems.RenderSystem.getShaderFogEnd()
+		fogShape = com.mojang.blaze3d.systems.RenderSystem.getShaderFogShape().index
+		com.mojang.blaze3d.systems.RenderSystem.getShaderFogColor().copyInto(fogColor)
+	}
+
 	fun init() {
+		NeoForge.EVENT_BUS.addListener(net.neoforged.neoforge.client.event.RenderLevelStageEvent::class.java, ::onRenderStage)
 		table = CompletableFuture.supplyAsync { SchwarzschildLens.buildTable(LUT_WIDTH, LUT_HEIGHT) }
 		NeoForge.EVENT_BUS.addListener(ClientTickEvent.Post::class.java) { onClientTick() }
 		NeoForge.EVENT_BUS.addListener(ForgeVeilPostProcessingEvent.Pre::class.java, ::onPrePostProcessing)
 		NeoForge.EVENT_BUS.addListener(ForgeVeilPostProcessingEvent.Post::class.java, ::onPostPostProcessing)
-		NeoForge.EVENT_BUS.addListener(ViewportEvent.ComputeFov::class.java, ::onComputeFov)
-	}
-
-	/**
-	 * Widens the level's field of view by the configured margin while the lens is active; the lens pass crops back
-	 * to the real FOV. The hand (which doesn't use the configured FOV) and perspective renders are left alone.
-	 */
-	private fun onComputeFov(event: ViewportEvent.ComputeFov) {
-		if (!event.usedConfiguredFov() || VeilLevelPerspectiveRenderer.isRenderingPerspective()) return
-		val margin = RelativityConfig.Client.Render.overscan / 100.0
-		if (margin <= 0.0 || !VeilRenderSystem.renderer().postProcessingManager.isActive(PIPELINE)) {
-			displayTanHalfFov = 0.0
-			return
-		}
-		val tanHalf = kotlin.math.tan(Math.toRadians(event.fov / 2.0))
-		displayTanHalfFov = tanHalf
-		event.fov = minOf(Math.toDegrees(2.0 * kotlin.math.atan(tanHalf * (1.0 + margin))), 170.0)
 	}
 
 	private fun onClientTick() {
@@ -169,14 +173,7 @@ object BlackHoleLens {
 			GL15.glEndQuery(GL33.GL_TIME_ELAPSED)
 			timerRunning = false
 		}
-		val window = Minecraft.getInstance().window
-		val aspect = window.width.toFloat() / window.height
-		val projection = if (displayTanHalfFov > 0.0) {
-			Matrix4f().setPerspective((2.0 * kotlin.math.atan(displayTanHalfFov)).toFloat(), aspect, 0.05f, 4096f)
-		} else {
-			Matrix4f(com.mojang.blaze3d.systems.RenderSystem.getProjectionMatrix())
-		}
-		SpacetimeDebugRenderer.renderAfterLens(projection)
+		SpacetimeDebugRenderer.renderAfterLens(Matrix4f(com.mojang.blaze3d.systems.RenderSystem.getProjectionMatrix()))
 	}
 
 	/**
@@ -233,7 +230,6 @@ object BlackHoleLens {
 		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
 			// Veil runs stage passes inside perspective renders (other level views) too; they stay unlensed.
 			uniform("HoleCount") { setInt(0) }
-			uniform("DisplayTanHalfFov") { setFloat(0f) }
 			return
 		}
 		val minecraft = Minecraft.getInstance()
@@ -247,18 +243,21 @@ object BlackHoleLens {
 			)
 			spinUniforms[i].set(hole.spin.toFloat(), 0f, 0f, 0f)
 		}
-		uniform("DisplayTanHalfFov") { setFloat(displayTanHalfFov.toFloat()) }
 		uploadDisk(::uniform, level, holes.firstOrNull(), minecraft)
 		uniform("HoleCount") { setInt(holes.size) }
 		uniform("Holes") { setVectors(*holeUniforms) }
 		uniform("HoleSpins") { setVectors(*spinUniforms) }
 		uniform("KerrTableEnabled") { setInt(kerrMode.ordinal) }
-		uniform("LensMode") { setInt(if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0) }
-		uniform("VertexLensing") { setInt(if (VertexLens.activeThisFrame) 1 else 0) }
+		uniform("LensMode") { setInt(if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
-		val fog = com.mojang.blaze3d.systems.RenderSystem.getShaderFogColor()
 		pipeline.getUniformSafe("SkyColor").setVector(sky.x.toFloat(), sky.y.toFloat(), sky.z.toFloat())
-		pipeline.getUniformSafe("FogColor").setVector(fog[0], fog[1], fog[2])
+		pipeline.getUniformSafe("FogColor").setVector(fogColor[0], fogColor[1], fogColor[2], fogColor[3])
+		uniform("FogStart") { setFloat(fogStart) }
+		uniform("FogEnd") { setFloat(fogEnd) }
+		uniform("FogShape") { setInt(fogShape) }
+		uniform("ProfileFlags") { setInt(profileFlags) }
+		LensVoxels.waterSurface.let { w -> pipeline.getUniformSafe("WaterSurface").setVector(w[0], w[1], w[2], w[3]) }
+		uniform("RenderDistance") { setFloat(minecraft.gameRenderer.renderDistance) }
 
 		// Every sampler gets a real texture, whatever the mode: Veil binds missing ones to a placeholder on unit 0 and
 		// renumbers the rest, and a mismatch there (the voxels' integer 3D sampler) makes the whole draw invalid.
@@ -267,25 +266,23 @@ object BlackHoleLens {
 		val atlas = minecraft.textureManager.getTexture(net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS).id
 		for (shader in listOfNotNull(lens) + tables) {
 			shader.setTexture("Voxels", GL12.GL_TEXTURE_3D, LensVoxels.grid)
-			shader.setTexture("VoxelCoarse", GL12.GL_TEXTURE_3D, LensVoxels.coarse)
+			shader.setTexture("VoxelLight", GL12.GL_TEXTURE_3D, LensVoxels.light)
+			shader.setTexture("VoxelTint", GL12.GL_TEXTURE_3D, LensVoxels.tint)
 			shader.setTexture("VoxelQuads", org.lwjgl.opengl.GL31.GL_TEXTURE_BUFFER, LensVoxels.quadTexture)
 			for (slot in 0 until LensVoxels.TEXTURE_SLOTS) {
 				shader.setTexture("VoxelTex$slot", GL11.GL_TEXTURE_2D, LensVoxels.textureSlots[slot].takeIf { it != 0 } ?: atlas)
 			}
 		}
-		var source = unseen
-		if (unseen == Unseen.VOXELS) {
+		val lightmap = (minecraft.gameRenderer.lightTexture() as net.kernelpanicsoft.relativity.mixin.client.LightTextureAccessor).`create_relativity$location`()
+		lens?.setTexture("Lightmap", GL11.GL_TEXTURE_2D, minecraft.textureManager.getTexture(lightmap).id)
+		var source = if (RelativityConfig.Client.Render.traceBlocks) unseen else Unseen.NONE
+		if (source == Unseen.VOXELS) {
 			LensVoxels.update(level, holes.firstOrNull(), minecraft.timer.getGameTimeDeltaPartialTick(false))
 			val origin = LensVoxels.origin
-			val coarseOrigin = LensVoxels.coarseOrigin
-			if (origin != null && coarseOrigin != null) {
+			if (origin != null) {
 				uniform("VoxelOrigin") {
 					setVector((origin.x - camera.x).toFloat(), (origin.y - camera.y).toFloat(), (origin.z - camera.z).toFloat())
 				}
-				uniform("CoarseOrigin") {
-					setVector((coarseOrigin.x - camera.x).toFloat(), (coarseOrigin.y - camera.y).toFloat(), (coarseOrigin.z - camera.z).toFloat())
-				}
-				uniform("CoarseCell") { setFloat(LensVoxels.coarseCell.toFloat()) }
 			}
 			if (!LensVoxels.ready) source = Unseen.NONE
 		}

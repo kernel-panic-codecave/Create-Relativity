@@ -1,0 +1,14 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "net.kernelpanicsoft.relativity.mixin.compat",
+  "plugin": "net.kernelpanicsoft.relativity.mixin.compat.CompatMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "sodium.GlProgramBuilderMixin",
+    "iris.TransformPatcherMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -45,11 +45,15 @@ object BlockQuads {
 	@JvmStatic
 	fun isRecording(): Boolean = recording
 
-	/** [state] drawn on its own at the origin (no neighbours, tinted as at [tintAt] in [level]). */
-	fun stateQuads(state: BlockState, level: Level, tintAt: BlockPos): List<Quad> =
-		record { buffers ->
+	/**
+	 * [state] drawn on its own at the origin (no neighbours), untinted: quads the game tints by position (biome colours,
+	 * through the level's getBlockTint) come out white and carry [Quad.tint] ([TINT_BLOCK] for the block's model,
+	 * [TINT_FLUID] for its fluid), for the lens to tint per cell. Found by drawing twice, under white and black tints.
+	 */
+	fun stateQuads(state: BlockState, level: Level): List<Quad> {
+		fun model(tint: Int) = record { buffers ->
 			val minecraft = Minecraft.getInstance()
-			val alone = Alone(state, level, tintAt)
+			val alone = Alone(state, level, tint)
 			val random = RandomSource.create(42L)
 			if (state.renderShape == net.minecraft.world.level.block.RenderShape.MODEL) {
 				val model = minecraft.blockRenderer.getBlockModel(state)
@@ -57,11 +61,25 @@ object BlockQuads {
 					minecraft.blockRenderer.renderBatched(state, BlockPos.ZERO, alone, PoseStack(), buffers.getBuffer(type), false, random, ModelData.EMPTY, type)
 				}
 			}
+		}
+		fun fluid(tint: Int) = record { buffers ->
 			val fluid = state.fluidState
 			if (!fluid.isEmpty) {
-				minecraft.blockRenderer.renderLiquid(BlockPos.ZERO, alone, buffers.getBuffer(RenderType.translucent()), state, fluid)
+				Minecraft.getInstance().blockRenderer.renderLiquid(BlockPos.ZERO, Alone(state, level, tint), buffers.getBuffer(RenderType.translucent()), state, fluid)
 			}
 		}
+		return flagTinted(model(0xFFFFFF), model(0), TINT_BLOCK) + flagTinted(fluid(0xFFFFFF), fluid(0), TINT_FLUID)
+	}
+
+	const val TINT_NONE = 0
+	const val TINT_BLOCK = 1
+	const val TINT_FLUID = 2
+
+	/** [white]'s quads, flagged [flag] where [black] (the same draw under a black tint) differs in colour. */
+	private fun flagTinted(white: List<Quad>, black: List<Quad>, flag: Int): List<Quad> {
+		if (white.size != black.size) return white
+		return white.mapIndexed { i, quad -> if (quad.color != black[i].color) quad.withTint(flag) else quad }
+	}
 
 	/** What [entity]'s renderer draws, relative to its block; empty if it has no renderer. */
 	fun entityQuads(entity: BlockEntity, partialTick: Float): List<Quad> {
@@ -93,7 +111,48 @@ object BlockQuads {
 	 * A recorded quad (a triangle has its last vertex repeated): corner positions (x, y, z each) and texture coordinates
 	 * (u, v each), the first vertex's colour (ARGB), the texture it samples (null: untextured) and its GL id.
 	 */
-	class Quad(val positions: FloatArray, val uvs: FloatArray, val color: Int, val texture: Texels?, val textureId: Int) {
+	class Quad(
+		val positions: FloatArray,
+		val uvs: FloatArray,
+		val color: Int,
+		val texture: Texels?,
+		val textureId: Int,
+		/** [TINT_NONE], or which per-position tint the game multiplies in ([TINT_BLOCK], [TINT_FLUID]). */
+		val tint: Int = TINT_NONE,
+	) {
+		fun withTint(flag: Int) = Quad(positions, uvs, color, texture, textureId, flag)
+
+		/** Unit normal by winding (vanilla quads wind counter-clockwise seen from the front). */
+		val normal: FloatArray get() {
+			val p = positions
+			val ax = p[6] - p[0]
+			val ay = p[7] - p[1]
+			val az = p[8] - p[2]
+			val bx = p[9] - p[3]
+			val by = p[10] - p[4]
+			val bz = p[11] - p[5]
+			val cx = ay * bz - az * by
+			val cy = az * bx - ax * bz
+			val cz = ax * by - ay * bx
+			val l = sqrt(cx * cx + cy * cy + cz * cz)
+			return if (l < 1e-9f) floatArrayOf(0f, 0f, 0f) else floatArrayOf(cx / l, cy / l, cz / l)
+		}
+
+		/** Its mean texel (all pixels, sampled 4 × 4, alpha included) times vertex colour, ARGB: how a translucent quad blends. */
+		val meanColor: Int by lazy {
+			val sums = IntArray(4)
+			for (i in 0..3) for (j in 0..3) {
+				val s = (i + 0.5f) / 4f
+				val t = (j + 0.5f) / 4f
+				val u = (1 - s) * (1 - t) * uvs[0] + s * (1 - t) * uvs[2] + s * t * uvs[4] + (1 - s) * t * uvs[6]
+				val v = (1 - s) * (1 - t) * uvs[1] + s * (1 - t) * uvs[3] + s * t * uvs[5] + (1 - s) * t * uvs[7]
+				val texel = texture?.at(u, v) ?: -1
+				for (k in 0..3) sums[k] += (texel shr (24 - 8 * k)) and 0xFF
+			}
+			fun channel(k: Int) = sums[k] / 16 * ((color shr (24 - 8 * k)) and 0xFF) / 255
+			(channel(0) shl 24) or (channel(1) shl 16) or (channel(2) shl 8) or channel(3)
+		}
+
 		/** Its colour seen from afar: texture (opaque pixels, sampled 4 × 4) times vertex colour, ARGB; alpha 0 if none. */
 		val flatColor: Int by lazy {
 			var r = 0
@@ -135,7 +194,7 @@ object BlockQuads {
 
 		/** This quad moved by ([dx], [dy], [dz]). */
 		fun moved(dx: Float, dy: Float, dz: Float) =
-			Quad(FloatArray(12) { positions[it] + if (it % 3 == 0) dx else if (it % 3 == 1) dy else dz }, uvs, color, texture, textureId)
+			Quad(FloatArray(12) { positions[it] + if (it % 3 == 0) dx else if (it % 3 == 1) dy else dz }, uvs, color, texture, textureId, tint)
 
 		/** Axis-aligned bounds (min x, y, z, max x, y, z). */
 		fun bounds(): FloatArray {
@@ -150,7 +209,7 @@ object BlockQuads {
 
 	/** Records quads per render type; lines and other modes are dropped. */
 	private class Recorder : MultiBufferSource {
-		private val consumers = HashMap<RenderType, Consumer>()
+		private val consumers = LinkedHashMap<RenderType, Consumer>() // in draw order
 
 		override fun getBuffer(type: RenderType): VertexConsumer = consumers.getOrPut(type) { Consumer(type) }
 
@@ -275,13 +334,13 @@ object BlockQuads {
 	}
 
 	/**
-	 * A world with just [state] at the origin, tinted as [level] tints [tintAt], and no face shading: what a block looks
+	 * A world with just [state] at the origin, every biome tint [tint] (RGB), and no face shading: what a block looks
 	 * like on its own, the same anywhere.
 	 */
-	private class Alone(private val state: BlockState, private val level: Level, private val tintAt: BlockPos) : BlockAndTintGetter {
+	private class Alone(private val state: BlockState, private val level: Level, private val tint: Int) : BlockAndTintGetter {
 		override fun getShade(direction: Direction, shade: Boolean) = 1f
 		override fun getLightEngine(): LevelLightEngine = level.lightEngine
-		override fun getBlockTint(pos: BlockPos, resolver: ColorResolver) = level.getBlockTint(tintAt, resolver)
+		override fun getBlockTint(pos: BlockPos, resolver: ColorResolver) = tint
 		override fun getBlockEntity(pos: BlockPos): BlockEntity? = null
 		override fun getBlockState(pos: BlockPos): BlockState = if (pos == BlockPos.ZERO) state else Blocks.AIR.defaultBlockState()
 		override fun getFluidState(pos: BlockPos): FluidState = if (pos == BlockPos.ZERO) state.fluidState else Fluids.EMPTY.defaultFluidState()

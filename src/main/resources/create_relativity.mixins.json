@@ -21,12 +21,16 @@
     "client.network.PacketEntityIdAccessors$EntityEvent",
     "client.network.PacketEntityIdAccessors$SectionBlocks",
     "client.GameRendererPickMixin",
-    "client.GameRendererShadersAccessor",
     "client.FrustumMixin",
     "client.RenderTypeTextureAccessors$Composite",
     "client.RenderTypeTextureAccessors$State",
     "client.RenderTypeTextureAccessors$Texture",
-    "client.flywheel.VisualizationManagerImplMixin"
+    "client.flywheel.VisualizationManagerImplMixin",
+    "client.flywheel.CompilationMixin",
+    "client.flywheel.ProgramLinkerMixin",
+    "client.LightTextureAccessor",
+    "client.MouseHandlerMixin",
+    "client.ShaderInstanceMixin"
   ],
   "injectors": {
     "defaultRequire": 1

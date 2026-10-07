@@ -1,12 +1,11 @@
 #veil:buffer veil:camera VeilCamera
 #include create_relativity:lens_scene
 
-// Gravitational lensing by black holes.
-//
-// Each view ray's bent path is followed through the scene (lens_scene.glsl; spinning holes through Kerr, kerr.glsl),
-// from reduced-resolution tables (kerr_table.fsh, scene_table.fsh) where they're accurate and marched per pixel where
-// not: to the first surface the camera's frame shows, else one in the voxel grid round the hole (LensVoxels), else the
-// sky. Then the accretion disk on top, and with vertex lensing (VertexLens) only the shadow and the sky.
+// Gravitational lensing by black holes, after the vertex lens (VertexLens) has drawn the world where its light
+// appears: the shadow over what lies beyond the hole, and in the sky the bent paths of view rays (lens_scene.glsl;
+// spinning holes through Kerr, kerr.glsl) to the geometry round the hole (LensVoxels) or the sky: the Einstein ring
+// and the images round it. From reduced-resolution tables (kerr_table.fsh, scene_table.fsh) where they're accurate,
+// marched per pixel where not. Then the accretion disk on top.
 
 uniform sampler2D DiffuseSampler0;
 uniform sampler2D LensLookup;
@@ -21,9 +20,12 @@ uniform int KerrTableEnabled; // 0: march every pixel, 1: use the Kerr table, 2:
                               // 3: output the table's error (main)
 uniform sampler2D SceneTable; // scene_table.fsh output, at reduced resolution
 uniform vec3 SkyColor;          // the sky overhead and at the horizon (fog), for paths that escape with nothing else
-uniform vec3 FogColor;          // to show
-uniform int LensMode; // 0: the lens; debug: 1 paints each pixel by its path's outcome, 2 by its full-resolution
-                      // march's step count (0 where the table served), 3 marches every pixel, 4 passes the frame through
+uniform sampler2D Lightmap;     // the game's lightmap (block light x sky light)
+uniform vec4 WaterSurface;      // LensVoxels.waterSurface: water's surface (untinted RGB) and opacity
+uniform vec4 FogColor;          // to show; also the terrain fog's colour (alpha its strength)
+uniform int LensMode; // 0: the lens; debug: 1 paints each sky pixel by its path's outcome, 2 by its full-resolution
+                      // march's step count (every pixel marched), 3 marches every pixel, 4 passes the frame through,
+                      // 5 also skips the tables; 6 paints pixels re-marched at full resolution (red: scene, blue: Kerr)
 
 in vec2 texCoord;
 out vec4 fragColor;
@@ -118,6 +120,9 @@ float secondDifference(vec3 v[16]) {
     return worst;
 }
 
+bool sceneRemarched = false; // debug (LensMode 6)
+bool kerrRemarched = false;
+
 // The nearest hole's Kerr ray through this output pixel, interpolated from the table where that's accurate to about
 // half a pixel: the inner 2x2 entries share a fate and a disk image, and the 4x4 around them is smooth enough
 // (judged by second differences: the deflection's against a pixel's angle, the disk hit point's against its own
@@ -167,10 +172,10 @@ KerrRay kerrNearest(vec3 dir, vec2 uv) {
         // (D2 / 8) / (step / pixelsPerTexel).
         float limit = 8.0 / (float(textureSize(DiffuseSampler0, 0).y) / float(size.y)) * TABLE_TOLERANCE;
         if (a0.w == 0.0) {
-            vec3 exitA = displayRay((vec2(base) + 0.5) / vec2(size)) + a0.xyz;
-            vec3 exitB = displayRay((vec2(base + ivec2(1, 0)) + 0.5) / vec2(size)) + b0.xyz;
-            vec3 exitC = displayRay((vec2(base + ivec2(0, 1)) + 0.5) / vec2(size)) + c0.xyz;
-            vec3 exitD = displayRay((vec2(base + ivec2(1, 1)) + 0.5) / vec2(size)) + d0.xyz;
+            vec3 exitA = viewRay((vec2(base) + 0.5) / vec2(size)) + a0.xyz;
+            vec3 exitB = viewRay((vec2(base + ivec2(1, 0)) + 0.5) / vec2(size)) + b0.xyz;
+            vec3 exitC = viewRay((vec2(base + ivec2(0, 1)) + 0.5) / vec2(size)) + c0.xyz;
+            vec3 exitD = viewRay((vec2(base + ivec2(1, 1)) + 0.5) / vec2(size)) + d0.xyz;
             float step = max(max(length(exitA - exitB), length(exitA - exitC)), max(length(exitD - exitB), length(exitD - exitC)));
             agree = secondDifference(deflection) < limit * step;
         }
@@ -184,6 +189,7 @@ KerrRay kerrNearest(vec3 dir, vec2 uv) {
         vec2 diskRadii = vec2(0.0);
         if (Disk.x > 0.0) diskRadii = Disk.yz;
         ray = kerrMarch(Holes[0].xyz, Holes[0].w, HoleSpins[0].x, dir, diskRadii);
+        kerrRemarched = true;
         if (KerrTableEnabled == 2) ray.diskG = -1.0; // flags the pixel for main()
         return ray;
     }
@@ -216,11 +222,11 @@ vec4 kerrDisk(KerrRay ray, float sceneDist) {
 // ---- Scene table ----
 
 // The bent path of this pixel's view ray: interpolated from the scene table where its inner 2x2 entries share an
-// outcome and the 4x4 around them is smooth (second differences against the change per texel, as for the Kerr table:
-// for frame hits in output pixels, for directions in radians); otherwise marched here.
+// outcome and the 4x4 around them is smooth (second differences against the change per texel, as for the Kerr table,
+// in radians); otherwise marched here.
 SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
     if (sceneUnbent(dir, sceneDist)) return sceneHit(SCENE_UNBENT, vec3(0.0));
-    if (LensMode == 3) return marchScene(dir, sceneDist);
+    if (LensMode == 3 || LensMode == 2 || LensMode == 1) return marchScene(dir, sceneDist); // debug views: every pixel marched
     ivec2 size = textureSize(SceneTable, 0);
     vec2 pos = uv * vec2(size) - 0.5;
     ivec2 base = clamp(ivec2(floor(pos)), ivec2(1), size - 3);
@@ -232,11 +238,15 @@ SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
     int outcome = int(a.w + 0.5);
     bool agree = a.w == b.w && a.w == c.w && a.w == d.w && outcome != SCENE_UNBENT && outcome != 0;
     if (agree && outcome == SCENE_FELL_IN) return sceneHit(SCENE_FELL_IN, vec3(0.0));
+    if (agree && outcome >= SCENE_VOXEL) {
+        // Surface hits blend only within one face plane: across a step, the blend would float in the air beside it.
+        int axis = ((outcome - SCENE_VOXEL) % 6) / 2;
+        float plane = a.xyz[axis];
+        agree = abs(b.xyz[axis] - plane) < 0.01 && abs(c.xyz[axis] - plane) < 0.01 && abs(d.xyz[axis] - plane) < 0.01;
+    }
     if (agree) {
-        // Frame hits compare in output pixels, directions in radians.
         vec2 frameSize = vec2(textureSize(DiffuseSampler0, 0));
         vec3 scale = vec3(1.0);
-        if (outcome == SCENE_FRAME) scale = vec3(frameSize, 0.0);
         if (outcome >= SCENE_VOXEL) scale = vec3(1.0 / max(length(a.xyz), 1e-3)); // positions, as angles from the camera
         vec3 v[16];
         bool same[16];
@@ -256,12 +266,14 @@ SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
             if (!same[k + 12]) v[k + 12] = 2.0 * v[k + 8] - v[k + 4];
         }
         float pixelsPerTexel = frameSize.y / float(size.y);
-        float natural = pixelsPerTexel;
-        if (outcome != SCENE_FRAME) natural *= pixelAngle();
+        float natural = pixelsPerTexel * pixelAngle();
         float step = max(max(max(length(v[5] - v[6]), length(v[5] - v[9])), max(length(v[10] - v[6]), length(v[10] - v[9]))), natural);
         if (agree) agree = secondDifference(v) < 8.0 / pixelsPerTexel * TABLE_TOLERANCE * step;
     }
-    if (!agree) return marchScene(dir, sceneDist);
+    if (!agree) {
+        sceneRemarched = true;
+        return marchScene(dir, sceneDist);
+    }
     vec3 value = mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
     if (outcome == SCENE_ESCAPED) value = normalize(value);
     return sceneHit(outcome, value);
@@ -274,21 +286,44 @@ float faceShade(vec3 n) {
     return n.x * n.x * 0.6 + n.z * n.z * 0.8 + n.y * n.y * vertical;
 }
 
+// The lightmap's colour for sky and block light levels (0-15), sampled as vanilla's minecraft_sample_lightmap does.
+vec3 lightmapColor(float sky, float block) {
+    return texture(Lightmap, clamp(vec2(block, sky) / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0))).rgb;
+}
+
+// Light at camera-relative point p, from the light grid (linear, so smooth across cells); full sky outside it.
+vec3 lightAt(vec3 p) {
+    vec3 g = (p - VoxelOrigin) / float(VOXEL_SIZE);
+    if (any(lessThan(g, vec3(0.0))) || any(greaterThan(g, vec3(1.0)))) return lightmapColor(15.0, 0.0);
+    vec2 levels = texture(VoxelLight, g).rg * 15.0;
+    return lightmapColor(levels.r, levels.g);
+}
+
+// Mip level for a texture seen at distance d: about a texel (16 per block) per pixel.
+float mipFor(float d) {
+    return max(log2(d * pixelAngle() * 16.0), 0.0);
+}
+
 // The colour of the quad at `at` (camera-relative), hit facing along `face`: the quad that contains the point in its
-// cell (or the cell across the face), its pixel there, shaded by its normal.
+// cell (or the cell across the face; of quads drawn over one another, the later), its pixel there, shaded by its
+// normal (by winding: its front) and lit by the light in front of it.
 vec3 geometryColor(vec3 at, int face) {
     int axis = face / 2;
     vec3 n = vec3(0.0);
     n[axis] = -1.0;
     if (face - 2 * axis == 1) n[axis] = 1.0;
+    float lod = mipFor(length(at));
     for (int side = 0; side < 2; side += 1) {
         vec3 g = at - VoxelOrigin - n * (0.002 - 0.004 * float(side));
         ivec3 cell = ivec3(floor(g));
         if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(VOXEL_SIZE)))) continue;
         uint run = texelFetch(Voxels, cell, 0).r;
+        uvec2 tints = texelFetch(VoxelTint, cell, 0).rg;
         int start = int(run >> 8u);
         int count = min(int(run & 255u), MAX_CELL_QUADS);
         vec3 p = at - VoxelOrigin - vec3(cell);
+        bool found = false;
+        vec3 shown = vec3(0.0);
         for (int i = 0; i < count; i += 1) {
             int q = start + i;
             int base = q * QUAD_TEXELS;
@@ -310,7 +345,8 @@ vec3 geometryColor(vec3 at, int face) {
                 if (area < 1e-9) continue;
                 normal /= area;
                 vec3 r = p - p0;
-                if (abs(dot(r, normal)) > 0.01) continue;
+                if (abs(dot(r, normal)) > 0.01 || abs(dot(normal, n)) < 0.5) continue; // in the face hit, not an edge's other face
+                if (int(texelFetch(VoxelQuads, base + 3).w + 0.5) == 2) continue; // water: seen through
                 // Barycentrics of p projected on the triangle.
                 float d00 = dot(e1, e1);
                 float d01 = dot(e1, e2);
@@ -321,36 +357,39 @@ vec3 geometryColor(vec3 at, int face) {
                 vec2 bary = vec2(d11 * d20 - d01 * d21, d00 * d21 - d01 * d20) / den;
                 if (bary.x < -0.01 || bary.y < -0.01 || bary.x + bary.y > 1.01) continue;
                 vec3 color;
-                if (!quadPixel(q, k == 1, clamp(bary, 0.0, 1.0), color)) continue;
-                return color * faceShade(normal);
+                if (!quadPixel(q, k == 1, clamp(bary, 0.0, 1.0), lod, tints, color)) continue;
+                shown = color * faceShade(normal) * lightAt(at + normal * 0.5);
+                found = true;
+                // Under water (the cell in front holds a tinted fluid): its surface blended over, as the game draws it.
+                vec3 front = at - VoxelOrigin + normal * 0.5;
+                ivec3 frontCell = ivec3(floor(front));
+                if (all(greaterThanEqual(frontCell, ivec3(0))) && all(lessThan(frontCell, ivec3(VOXEL_SIZE)))) {
+                    uint fluid = texelFetch(VoxelTint, frontCell, 0).g;
+                    // (The surface is lit as open water: full sky light.)
+                    if (fluid != 0xFFFFFFFFu) shown = mix(shown, WaterSurface.rgb * unpackTint(fluid) * lightmapColor(15.0, 0.0), WaterSurface.a);
+                }
             }
         }
+        if (found) return shown;
     }
     return vec3(0.5);
 }
 
-// A coarse cell's colour at `at`, shaded by the face hit.
-vec3 coarseColor(vec3 at, int face) {
-    int axis = face / 2;
-    vec3 n = vec3(0.0);
-    n[axis] = -1.0;
-    if (face - 2 * axis == 1) n[axis] = 1.0;
-    ivec3 cell = clamp(ivec3(floor((at - CoarseOrigin) / CoarseCell - n * 0.01)), ivec3(0), ivec3(VOXEL_SIZE - 1));
-    return texelFetch(VoxelCoarse, cell, 0).rgb * faceShade(-n);
+// Vanilla's linear fog on a traced surface at camera-relative point p.
+vec3 linearFog(vec3 color, vec3 p) {
+    float distance = fogDistance(p);
+    if (distance <= FogStart) return color;
+    float fog = 1.0;
+    if (distance < FogEnd) fog = smoothstep(FogStart, FogEnd, distance);
+    return mix(color, FogColor.rgb, fog * FogColor.a);
 }
 
 // The colour a bent path ends on.
 vec3 sceneColor(SceneHit hit, vec4 original) {
-    if (hit.outcome == SCENE_FRAME) return texture(DiffuseSampler0, hit.value.xy).rgb;
-    if (hit.outcome >= SCENE_COARSE) return coarseColor(hit.value, hit.outcome - SCENE_COARSE);
-    if (hit.outcome >= SCENE_VOXEL) return geometryColor(hit.value, hit.outcome - SCENE_VOXEL);
+    if (hit.outcome >= SCENE_VOXEL) return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL), hit.value);
     if (hit.outcome == SCENE_FELL_IN) return vec3(0.0);
-    if (hit.outcome == SCENE_ESCAPED) {
-        // The frame's own sky, unless vertex lensing drew hidden triangles out at the far plane where sky would be.
-        vec3 f = frameOf(hit.value * 1e4);
-        if (VertexLensing == 0 && f.z > 0.5 && texture(DiffuseDepthSampler, f.xy).r >= SKY_DEPTH) return texture(DiffuseSampler0, f.xy).rgb;
-        return mix(FogColor, SkyColor, smoothstep(0.0, 0.4, hit.value.y));
-    }
+    // The sky by direction (the frame's own sky pixels may hold hidden triangles drawn out at the far plane).
+    if (hit.outcome == SCENE_ESCAPED) return mix(FogColor.rgb, SkyColor, smoothstep(0.0, 0.4, hit.value.y));
     return original.rgb;
 }
 
@@ -440,12 +479,9 @@ bool inShadow(vec3 dir, KerrRay first) {
 }
 
 void main() {
-    // With overscan the frame is wider than the screen: an output pixel's own content sits elsewhere in it.
-    vec3 dir = displayRay(texCoord);
-    vec2 ownUv = texCoord;
-    if (DisplayTanHalfFov > 0.0) ownUv = frameUv(dir);
-    vec4 original = texture(DiffuseSampler0, ownUv);
-    if (HoleCount == 0 || LensMode == 4) { fragColor = original; return; } // 4: the frame as rendered (debug)
+    vec3 dir = viewRay(texCoord);
+    vec4 original = texture(DiffuseSampler0, texCoord);
+    if (HoleCount == 0 || LensMode == 4 || LensMode == 5) { fragColor = original; return; } // the frame as rendered (profiling)
     if (KerrTableEnabled == 3) {
         // The table's error against a full march of this pixel: red, the exit direction's (a quarter per sample
         // spacing: a pixel's angle, or the exit direction's change per pixel where the lens squeezes the background);
@@ -468,12 +504,12 @@ void main() {
         fragColor = vec4(clamp(exitError / 4.0, 0.0, 1.0), fate, clamp(diskError / 4.0, 0.0, 1.0), 1.0);
         return;
     }
-    float sceneDist = sceneDistance(ownUv);
+    float sceneDist = sceneDistance(texCoord);
     // The nearest hole, if spinning, is marched once for both its lens and its disk.
     KerrRay first = kerrNearest(dir, texCoord);
     vec3 scene;
     SceneHit hit = sceneHit(0, vec3(0.0));
-    if (VertexLensing == 1 && sceneDist < 1e29) {
+    if (sceneDist < 1e29) {
         // Geometry is already where its light appears; only the shadow can hide it (if it lies beyond the hole).
         scene = original.rgb;
         if (inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
@@ -486,9 +522,11 @@ void main() {
     fragColor = vec4(mix(scene, disk.rgb, disk.a), 1.0);
     if (LensMode == 2) fragColor = vec4(vec3(float(marchSteps) / 64.0), 1.0);
     if (LensMode == 1) {
-        // grey none, green unbent, red frame, white escaped, black fell in, yellow voxel
-        vec3 outcome[7] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0), vec3(0.0), vec3(1.0, 1.0, 0.0));
+        // grey none (drawn geometry), green unbent, white escaped (cyan: out of steps), black fell in, yellow geometry
+        vec3 outcome[7] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0), vec3(1.0, 1.0, 0.0));
         fragColor = vec4(outcome[min(hit.outcome, SCENE_VOXEL)], 1.0);
+        if (hit.outcome == SCENE_ESCAPED && marchSteps >= SCENE_STEPS) fragColor = vec4(0.0, 1.0, 1.0, 1.0); // out of steps: cyan
     }
     if (KerrTableEnabled == 2 && first.diskG < -0.5) fragColor = vec4(1.0, 0.0, 0.0, 1.0);
+    if (LensMode == 6) fragColor = vec4(float(sceneRemarched), 0.0, float(kerrRemarched), 1.0);
 }

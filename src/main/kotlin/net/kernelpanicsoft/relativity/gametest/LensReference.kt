@@ -87,6 +87,59 @@ internal object LensReference {
 		}
 	}
 
+	/**
+	 * The view as the reference sees it, for a look: per grid pixel (ARGB) the hit block's map colour shaded by its face
+	 * (fluids passed through), light blue for paths that escape, black for captured ones, grey past [maxLength].
+	 */
+	fun picture(minecraft: Minecraft, hole: BlackHole, columns: Int, rows: Int, maxLength: Double, only: IntRange): IntArray {
+		val camera = minecraft.gameRenderer.mainCamera
+		val eye = camera.position
+		val look = Vector3d(camera.lookVector)
+		val up = Vector3d(camera.upVector)
+		val right = Vector3d(camera.leftVector).negate()
+		val tanHalf = tan(Math.toRadians(minecraft.options.fov().get().toDouble()) / 2.0)
+		val aspect = minecraft.window.width.toDouble() / minecraft.window.height
+		val level = minecraft.level!!
+		val capture = 1.02 * hole.equatorialExtent(hole.horizonRadius)
+		val origin = DoubleArray(3)
+		GameFrame.toPhysics(Vector3d(eye.x - hole.x, eye.y - hole.y, eye.z - hole.z), origin)
+		val out = IntArray(columns * rows)
+		for (row in only) for (column in 0 until columns) {
+			val x = ((column + 0.5) / columns * 2.0 - 1.0) * tanHalf * aspect
+			val y = (1.0 - (row + 0.5) / rows * 2.0) * tanHalf
+			val view = Vector3d(look).add(Vector3d(right).mul(x)).add(Vector3d(up).mul(y)).normalize()
+			val direction = DoubleArray(3)
+			GameFrame.toPhysics(view, direction)
+			val path = NullRay.trace(hole.spacetime(), origin, direction, maxLength, capture, maxSegment = 0.5, arriving = true)
+			var color = if (path.end == NullRay.End.CAPTURED) 0xFF000000.toInt() else 0xFF99BBFF.toInt()
+			var previous: Vec3? = null
+			for (point in path.points) {
+				val game = GameFrame.toGame(point, 0, Vector3d())
+				val at = Vec3(game.x + hole.x, game.y + hole.y, game.z + hole.z)
+				val from = previous
+				previous = at
+				if (from == null) continue
+				val hit = level.clip(ClipContext(from, at, ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, CollisionContext.empty()))
+				if (hit.type == HitResult.Type.BLOCK) {
+					val blockHit = hit as BlockHitResult
+					val state = level.getBlockState(blockHit.blockPos)
+					val shade = when (blockHit.direction) {
+						net.minecraft.core.Direction.UP -> 1.0
+						net.minecraft.core.Direction.DOWN -> 0.5
+						net.minecraft.core.Direction.NORTH, net.minecraft.core.Direction.SOUTH -> 0.8
+						else -> 0.6
+					}
+					val map = state.getMapColor(level, blockHit.blockPos).col
+					color = (0xFF shl 24) or
+						(((map shr 16 and 0xFF) * shade).toInt() shl 16) or (((map shr 8 and 0xFF) * shade).toInt() shl 8) or ((map and 0xFF) * shade).toInt()
+					break
+				}
+			}
+			out[row * columns + column] = color
+		}
+		return out
+	}
+
 	private fun classify(block: Block, hit: BlockHitResult): Kind? = when {
 		block == Blocks.WHITE_CONCRETE -> Kind.WHITE
 		block == Blocks.BLUE_CONCRETE -> Kind.BLUE

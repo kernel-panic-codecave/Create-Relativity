@@ -11,10 +11,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public abstract class VisualizationManagerImplMixin {
 	/**
 	 * While the lens records a block entity's full render, Flywheel reports no visualization, so renderers
-	 * that defer to Flywheel instances (Create's kinetic blocks) emit the same model quads themselves.
+	 * that defer to Flywheel instances (Create's kinetic blocks) emit the same model quads themselves. GameTests
+	 * also turn it off (VertexLens.flywheelOff) to compare Flywheel's lensed instances with the vanilla path.
 	 */
 	@Inject(method = "supportsVisualization", at = @At("HEAD"), cancellable = true)
 	private static void create_relativity$recordForLens(LevelAccessor level, CallbackInfoReturnable<Boolean> cir) {
-		if (BlockQuads.isRecording()) cir.setReturnValue(false);
+		if (BlockQuads.isRecording() || net.kernelpanicsoft.relativity.client.lens.VertexLens.flywheelOff) cir.setReturnValue(false);
 	}
 }

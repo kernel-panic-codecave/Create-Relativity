@@ -45,7 +45,7 @@ object SpacetimeDebugRenderer {
 	fun render(event: RenderLevelStageEvent) {
 		if (event.stage != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return
 		if (!RelativityConfig.Client.Debug.showRadii || hidden) return
-		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) return // keep gizmos out of the lens capture
+		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) return // keep gizmos out of other level views
 		if (BlackHoleLens.active) return // drawn undistorted after the lens instead
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
@@ -58,8 +58,8 @@ object SpacetimeDebugRenderer {
 	}
 
 	/**
-	 * Draws the gizmos over the finished, lensed frame with [projection] (the screen's own, not the overscanned
-	 * one), depth testing off: they're markers, not scenery.
+	 * Draws the gizmos over the finished, lensed frame with [projection], depth testing off: they're markers, not
+	 * scenery.
 	 */
 	fun renderAfterLens(projection: Matrix4f) {
 		if (!RelativityConfig.Client.Debug.showRadii || hidden) return

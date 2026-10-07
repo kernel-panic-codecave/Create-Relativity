@@ -1,0 +1,7 @@
+{
+  "target": [
+    "sodium:shaders/blocks/block_layer_opaque.vsh"
+  ],
+  "redirect": "create_relativity:vertex_lens_sodium.glsl",
+  "debug": true
+}

@@ -1,17 +1,22 @@
 // Light paths through the scene around black holes, shared by the scene table pass (scene_table.fsh) and the lens
-// pass (black_hole_lens.fsh). Needs VeilCamera.
+// pass (black_hole_lens.fsh), for the pixels where the vertex lens (VertexLens) drew nothing: the sky, where bent
+// light shows the shadow, the Einstein ring and the images round it. Needs VeilCamera.
 
 #include create_relativity:kerr
 
 uniform sampler2D DiffuseDepthSampler;
-uniform int UnseenSource; // what answers for surfaces the camera's frame can't (off screen, hidden, or with vertex
-                          // lensing on): 0 nothing (the sky), 1 the geometry round the hole (LensVoxels)
+uniform float RenderDistance; // blocks: traced geometry farther than this (by the fog's distance measure) isn't drawn
+uniform float FogStart;       // the level's terrain fog this frame (vanilla's linear fog)
+uniform float FogEnd;
+uniform int FogShape;         // 0 sphere, 1 cylinder
+uniform int ProfileFlags;     // profiling only (0 normally): 2 skips geometry, 4 uses Euler for bending, 8 ignores the
+                              // render distance
+uniform int UnseenSource; // what bent paths can meet: 0 nothing (the sky), 1 the geometry round the hole (LensVoxels)
 uniform usampler3D Voxels;      // LensVoxels' fine grid: per one-block cell, its quads as (start << 8) | count
 uniform samplerBuffer VoxelQuads; // its quads, 6 texels each (LensVoxels.writeQuad), relative to their cell
-uniform sampler3D VoxelCoarse;  // LensVoxels' coarse grid: colour and occupancy per CoarseCell-block cell
+uniform usampler3D VoxelTint;  // LensVoxels' tint grid: block (r) and fluid (g) tint per fine cell, RGB bits
+uniform sampler3D VoxelLight;   // LensVoxels' light grid: sky (r) and block (g) light per fine cell, 0-15 as 0-1
 uniform vec3 VoxelOrigin;       // the fine grid's minimum corner, relative to the camera
-uniform vec3 CoarseOrigin;      // the coarse grid's minimum corner, relative to the camera
-uniform float CoarseCell;       // the coarse grid's cell size (blocks)
 uniform sampler2D VoxelTex0;    // the textures quads sample (LensVoxels.textureSlots)
 uniform sampler2D VoxelTex1;
 uniform sampler2D VoxelTex2;
@@ -20,10 +25,6 @@ uniform sampler2D VoxelTex4;
 uniform sampler2D VoxelTex5;
 uniform sampler2D VoxelTex6;
 uniform sampler2D VoxelTex7;
-uniform int VertexLensing; // 1: world geometry was already bent in the vertex shaders (VertexLens), so the frame's
-                           // depth and colour can't stand for unbent geometry: paths only meet what the capture saw
-uniform float DisplayTanHalfFov;    // > 0: the frame was rendered wider than the screen (overscan); this is the
-                                    // screen's tan(vertical FOV / 2), and output pixels are cropped back to it
 
 #define MAX_HOLES 8
 uniform int HoleCount;
@@ -37,22 +38,7 @@ vec3 viewRay(vec2 uv) {
     return normalize((VeilCamera.IViewMat * vec4(view.xyz / view.w, 0.0)).xyz);
 }
 
-// Distance to the surface at uv; the sky (nothing drawn) counts as infinitely far.
-// Ray through an output pixel: the screen's own FOV when overscanning, otherwise the frame's.
-vec3 displayRay(vec2 uv) {
-    if (DisplayTanHalfFov <= 0.0) return viewRay(uv);
-    float aspect = VeilCamera.ProjMat[1][1] / VeilCamera.ProjMat[0][0];
-    vec2 ndc = uv * 2.0 - 1.0;
-    vec3 view = vec3(ndc.x * DisplayTanHalfFov * aspect, ndc.y * DisplayTanHalfFov, -1.0);
-    return normalize((VeilCamera.IViewMat * vec4(view, 0.0)).xyz);
-}
-
-// Where a world direction lands in the (possibly overscanned) frame.
-vec2 frameUv(vec3 dir) {
-    vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(dir, 0.0));
-    return clip.xy / clip.w * 0.5 + 0.5;
-}
-
+// Distance to the surface drawn at uv; the sky (nothing drawn) counts as infinitely far.
 float sceneDistance(vec2 uv) {
     float depth = texture(DiffuseDepthSampler, uv).r;
     if (depth >= SKY_DEPTH) return 1e30;
@@ -62,19 +48,26 @@ float sceneDistance(vec2 uv) {
 
 // Angle between neighbouring output pixels (radians).
 float pixelAngle() {
-    float tanHalf = DisplayTanHalfFov;
-    if (tanHalf <= 0.0) tanHalf = 1.0 / VeilCamera.ProjMat[1][1];
-    return 2.0 * tanHalf / float(textureSize(DiffuseDepthSampler, 0).y);
+    return 2.0 / VeilCamera.ProjMat[1][1] / float(textureSize(DiffuseDepthSampler, 0).y);
 }
 
 // ---- Light paths through the scene ----
 // The view ray is followed along its bent path, d^2x/ds^2 = -(3/2) r_s h^2 x / r^5 per hole (h = |x * dx/ds|, the
-// Schwarzschild photon orbit in Cartesian form, superposed), and stopped at the first surface it reaches: one the
-// camera sees (the frame's depth) or, where the camera's view is blocked, one the capture at the hole sees. If the
-// nearest hole spins, near it the path follows the Kerr-Schild Hamiltonian instead (kerr.glsl; that hole alone).
+// Schwarzschild photon orbit in Cartesian form, superposed), and stopped at the first surface it reaches in the
+// geometry round the hole. If the nearest hole spins, near it the path follows the Kerr-Schild Hamiltonian instead
+// (kerr.glsl; that hole alone).
 
 const int SCENE_STEPS = 160;
-const float SCENE_FAR = 1024.0;   // beyond this the path counts as escaped
+// Path length past which a path counts as escaped: twice the render distance (it can curve back), at least 64 blocks.
+float sceneFar() {
+    return max(2.0 * RenderDistance, 64.0);
+}
+
+// Vanilla's fog distance of camera-relative point p.
+float fogDistance(vec3 p) {
+    if (FogShape == 0) return length(p);
+    return max(length(p.xz), abs(p.y));
+}
 const float SETTLED = 60.0;       // r_s from every hole, heading away: bending is done, steps grow freely
 
 vec3 lightBend(vec3 x, vec3 v) {
@@ -86,26 +79,6 @@ vec3 lightBend(vec3 x, vec3 v) {
         a -= 1.5 * Holes[i].w * dot(hv, hv) * d / (r2 * r2 * sqrt(r2));
     }
     return a;
-}
-
-// Where camera-relative point p lands in the frame (xy) and whether it's in front of the camera and on screen (z).
-vec3 frameOf(vec3 p) {
-    vec3 view = (VeilCamera.ViewMat * vec4(p, 0.0)).xyz;
-    if (view.z >= -1e-3) return vec3(0.0);
-    vec4 clip = VeilCamera.ProjMat * vec4(view, 1.0);
-    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
-    float inside = 0.0;
-    if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)))) inside = 1.0;
-    return vec3(uv, inside);
-}
-
-// How far the camera's view of p is blocked in front of it (> 0: p is behind the visible surface by that much); a
-// large negative number where p is off screen, or where the frame's geometry is already bent (vertex lensing).
-float behindFrame(vec3 p, out vec2 uv) {
-    vec3 f = frameOf(p);
-    uv = f.xy;
-    if (f.z < 0.5 || VertexLensing == 1) return -1e30;
-    return length(p) - sceneDistance(uv);
 }
 
 // The angle (radians, as seen from the camera) by which the holes shift what the straight view ray hits at distance
@@ -152,27 +125,25 @@ void weakPath(vec3 dir, float t, out vec3 x, out vec3 v) {
 
 // Outcomes of a view ray's bent path (SceneHit).
 const int SCENE_UNBENT = 1;  // the bend can't show: the original pixel
-const int SCENE_FRAME = 2;
 const int SCENE_ESCAPED = 4;
 const int SCENE_FELL_IN = 5;
-const int SCENE_VOXEL = 6;   // 6..11: a quad of the fine grid, facing along a face (2 axis, + 1 for +axis)
-const int SCENE_COARSE = 12; // 12..17: a coarse cell's face
+const int SCENE_VOXEL = 6;   // 6..11: a quad of the grid, facing along a face (2 axis, + 1 for +axis)
 
 // ---- Geometry round the hole (LensVoxels) ----
 const int VOXEL_SIZE = 128;   // LensVoxels.SIZE
-const int VOXEL_STEPS = 48;   // most cells walked per path step, per grid
+const int VOXEL_STEPS = 48;   // most cells walked per path step
 const int QUAD_TEXELS = 6;    // LensVoxels.QUAD_TEXELS
 const int MAX_CELL_QUADS = 64;
 
-vec4 voxelTexel(int slot, vec2 uv) {
-    if (slot == 0) return textureLod(VoxelTex0, uv, 0.0);
-    if (slot == 1) return textureLod(VoxelTex1, uv, 0.0);
-    if (slot == 2) return textureLod(VoxelTex2, uv, 0.0);
-    if (slot == 3) return textureLod(VoxelTex3, uv, 0.0);
-    if (slot == 4) return textureLod(VoxelTex4, uv, 0.0);
-    if (slot == 5) return textureLod(VoxelTex5, uv, 0.0);
-    if (slot == 6) return textureLod(VoxelTex6, uv, 0.0);
-    if (slot == 7) return textureLod(VoxelTex7, uv, 0.0);
+vec4 voxelTexel(int slot, vec2 uv, float lod) {
+    if (slot == 0) return textureLod(VoxelTex0, uv, lod);
+    if (slot == 1) return textureLod(VoxelTex1, uv, lod);
+    if (slot == 2) return textureLod(VoxelTex2, uv, lod);
+    if (slot == 3) return textureLod(VoxelTex3, uv, lod);
+    if (slot == 4) return textureLod(VoxelTex4, uv, lod);
+    if (slot == 5) return textureLod(VoxelTex5, uv, lod);
+    if (slot == 6) return textureLod(VoxelTex6, uv, lod);
+    if (slot == 7) return textureLod(VoxelTex7, uv, lod);
     return vec4(1.0);
 }
 
@@ -200,19 +171,28 @@ bool triangleHit(vec3 o, vec3 d, vec3 p0, vec3 p1, vec3 p2, out float t, out vec
     return true;
 }
 
+vec3 unpackTint(uint c) {
+    return vec3(float((c >> 16u) & 255u), float((c >> 8u) & 255u), float(c & 255u)) / 255.0;
+}
+
 // Quad q's texture coordinates at barycentrics bary of its first (second) triangle, and whether the pixel there shows
-// (cutout pixels don't); colour the pixel times the vertex colour, or the flat colour without a texture.
-bool quadPixel(int q, bool second, vec2 bary, out vec3 color) {
+// (cutout pixels don't, judged at mip level 0); colour the pixel (at mip level lod) times the vertex colour and, for a
+// tinted quad, its cell's tint (tints: block, fluid), or the flat colour without a texture.
+bool quadPixel(int q, bool second, vec2 bary, float lod, uvec2 tints, out vec3 color) {
     int base = q * QUAD_TEXELS;
     vec4 c0 = texelFetch(VoxelQuads, base);
     vec4 c1 = texelFetch(VoxelQuads, base + 1);
     vec4 c2 = texelFetch(VoxelQuads, base + 2);
+    int tint = int(texelFetch(VoxelQuads, base + 3).w + 0.5);
+    vec3 tinted = vec3(1.0);
+    if (tint == 1) tinted = unpackTint(tints.x);
+    if (tint == 2) tinted = unpackTint(tints.y);
     vec4 uv01 = texelFetch(VoxelQuads, base + 4);
     vec4 uv23 = texelFetch(VoxelQuads, base + 5);
     int slot = int(c0.w);
     if (slot < 0) {
         vec4 plain = unpackColor(c2.w);
-        color = plain.rgb;
+        color = plain.rgb * tinted;
         return plain.a > 0.5;
     }
     // Triangles (0, 1, 2) and (0, 2, 3).
@@ -223,13 +203,15 @@ bool quadPixel(int q, bool second, vec2 bary, out vec3 color) {
         uvB = uv23.zw;
     }
     vec2 uv = uv01.xy * (1.0 - bary.x - bary.y) + uvA * bary.x + uvB * bary.y;
-    vec4 texel = voxelTexel(slot, uv);
-    color = texel.rgb * unpackColor(c1.w).rgb;
-    return texel.a > 0.1;
+    if (voxelTexel(slot, uv, 0.0).a <= 0.1) return false;
+    color = voxelTexel(slot, uv, lod).rgb * unpackColor(c1.w).rgb * tinted;
+    return true;
 }
 
+const float COPLANAR_T = 1e-4; // hits this close count as the same surface: the later-drawn quad (an overlay) wins
+
 // The nearest shown quad of cell run `run` hit by o + t d (cell-local) for t in [t0, t1]: t, the quad and triangle, and
-// the face normal turned toward the ray.
+// the face normal turned toward the ray. Of quads drawn over one another, the later one (as the game draws them).
 bool cellHit(uint run, vec3 o, vec3 d, float t0, float t1, out float tHit, out vec3 normal) {
     int start = int(run >> 8u);
     int count = min(int(run & 255u), MAX_CELL_QUADS);
@@ -251,9 +233,11 @@ bool cellHit(uint run, vec3 o, vec3 d, float t0, float t1, out float tHit, out v
             }
             float t;
             vec2 bary;
-            if (!triangleHit(o, d, p0, pb, pc, t, bary) || t < t0 || t >= tHit) continue;
+            if (!triangleHit(o, d, p0, pb, pc, t, bary) || t < t0 || t >= t1) continue;
+            if (found && t > tHit + COPLANAR_T) continue;
+            if (int(texelFetch(VoxelQuads, base + 3).w + 0.5) == 2) continue; // tinted fluid (water): seen through
             vec3 color;
-            if (!quadPixel(q, k == 1, bary, color)) continue;
+            if (!quadPixel(q, k == 1, bary, 0.0, uvec2(0u), color)) continue;
             tHit = t;
             normal = normalize(cross(pb - p0, pc - p0));
             if (dot(normal, d) > 0.0) normal = -normal;
@@ -327,8 +311,8 @@ int faceOf(vec3 n) {
     return face;
 }
 
-// What segment a -> b (camera-relative) first meets of the geometry round the hole: the fine grid's quads, else (past
-// the fine grid) the coarse grid's cells. Where (at) and the outcome (SCENE_VOXEL or SCENE_COARSE, plus the face).
+// What segment a -> b (camera-relative) first meets of the geometry round the hole (the grid's quads): where (at), and
+// the outcome (SCENE_VOXEL plus the face).
 bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
     vec3 d = b - a;
     Walk w;
@@ -350,44 +334,13 @@ bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
             if (cellExit >= exit || !walkStep(w, VOXEL_SIZE)) break;
         }
     }
-    // Coarse cells, only for the part of the segment outside the fine grid (inside it, the fine grid has the answer).
-    vec3 fineMin = (VoxelOrigin - CoarseOrigin) / CoarseCell;
-    vec3 fineMax = fineMin + float(VOXEL_SIZE) / CoarseCell;
-    vec3 g0 = (a - CoarseOrigin) / CoarseCell;
-    vec3 g1 = (b - CoarseOrigin) / CoarseCell;
-    if (all(greaterThanEqual(g0, fineMin)) && all(lessThanEqual(g0, fineMax))
-        && all(greaterThanEqual(g1, fineMin)) && all(lessThanEqual(g1, fineMax))) return false;
-    if (!walkStart(g0, d / CoarseCell, VOXEL_SIZE, w, exit)) return false;
-    vec3 dc = d / CoarseCell;
-    int axis = -1;
-    for (int n = 0; n < VOXEL_STEPS; n += 1) {
-        vec3 lo = vec3(w.cell);
-        bool insideFine = all(greaterThanEqual(lo, fineMin)) && all(lessThanEqual(lo + 1.0, fineMax));
-        if (!insideFine && texelFetch(VoxelCoarse, w.cell, 0).a > 0.5) {
-            at = a + d * w.t;
-            if (axis < 0) {
-                vec3 ad = abs(dc);
-                axis = 0;
-                if (ad.y >= ad.x && ad.y >= ad.z) axis = 1;
-                if (ad.z >= ad.x && ad.z >= ad.y) axis = 2;
-            }
-            outcome = SCENE_COARSE + 2 * axis;
-            if (w.stepDir[axis] < 0) outcome += 1;
-            return true;
-        }
-        if (walkExit(w) >= exit) break;
-        if (w.next.x <= w.next.y && w.next.x <= w.next.z) axis = 0;
-        else if (w.next.y <= w.next.z) axis = 1;
-        else axis = 2;
-        if (!walkStep(w, VOXEL_SIZE)) break;
-    }
     return false;
 }
 
 // Where the bent path of view ray dir (camera-relative) ends up.
 struct SceneHit {
-    int outcome;  // SCENE_UNBENT, SCENE_FRAME, SCENE_ESCAPED, SCENE_FELL_IN, or SCENE_VOXEL / SCENE_COARSE + face
-    vec3 value;   // frame: uv (xy); escaped: final direction; geometry: the point hit, camera-relative
+    int outcome;  // SCENE_UNBENT, SCENE_ESCAPED, SCENE_FELL_IN, or SCENE_VOXEL + face
+    vec3 value;   // escaped: final direction; geometry: the point hit, camera-relative
 };
 
 SceneHit sceneHit(int outcome, vec3 value) {
@@ -415,7 +368,7 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
     // surface before it, as the straight ray's own hit is farther), the first-order path is exact enough to start from.
     float tight = 0.1 * pixelAngle();
     float lo = 0.0;
-    float hi = min(sceneDist, SCENE_FAR);
+    float hi = min(sceneDist, sceneFar());
     if (weakShift(dir, hi) < tight) lo = hi;
     for (int k = 0; k < 12 && lo < hi; k += 1) {
         float mid = 0.5 * (lo + hi);
@@ -425,7 +378,6 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
     vec3 v;
     weakPath(dir, lo, x, v);
     float traveled = lo;
-    vec2 uv;
 
     // Kerr state, started where the path first comes under the nearest hole's influence: local position, momentum.
     bool kerr = abs(HoleSpins[0].x) >= MIN_KERR_SPIN;
@@ -493,48 +445,32 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
             vNext = normalize(toGame(k4x));
         } else {
             vec3 k1v = lightBend(x, v);
+            if ((ProfileFlags & 4) != 0) {
+                xNext = x + ds * v;
+                vNext = normalize(v + ds * k1v);
+            } else {
             vec3 k2v = lightBend(x + 0.5 * ds * v, v + 0.5 * ds * k1v);
             vec3 k3v = lightBend(x + 0.5 * ds * (v + 0.5 * ds * k1v), v + 0.5 * ds * k2v);
             vec3 k4v = lightBend(x + ds * (v + 0.5 * ds * k2v), v + ds * k3v);
             xNext = x + ds * (v + ds / 6.0 * (k1v + k2v + k3v));
             vNext = normalize(v + ds / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v));
+            }
         }
         for (int i = 0; i < HoleCount; i += 1) {
             if ((i > 0 || !kerr) && length(xNext - Holes[i].xyz) < 1.01 * Holes[i].w) return sceneHit(SCENE_FELL_IN, vec3(0.0));
         }
-        float thickness = 1.5 * ds + 0.02 * length(xNext);
-
-        // A surface the camera sees: refine the crossing by bisection along this step.
-        float gap = behindFrame(xNext, uv);
-        if (gap >= 0.0 && gap < thickness) {
-            vec3 a = x;
-            vec3 b = xNext;
-            for (int k = 0; k < 8; k += 1) {
-                vec3 m = 0.5 * (a + b);
-                vec2 mUv;
-                if (behindFrame(m, mUv) >= 0.0) b = m; else a = m;
-            }
-            behindFrame(b, uv);
-            return sceneHit(SCENE_FRAME, vec3(uv, 0.0));
-        }
-        // A surface the voxel grid has, only where the camera's view can't tell (off screen, or behind a surface the
-        // camera sees); taken from the frame (it has the lighting) if the camera sees that point too. Where the camera
-        // sees empty space, it is.
-        bool unseen = gap >= thickness || gap < -1e29;
-        if (UnseenSource == 1 && unseen) {
+        if (UnseenSource == 1 && (ProfileFlags & 2) == 0) {
             vec3 at;
             int outcome;
-            if (geometryHit(x, xNext, at, outcome)) {
-                vec2 hitUv;
-                float seen = behindFrame(at, hitUv);
-                if (abs(seen) < thickness) return sceneHit(SCENE_FRAME, vec3(hitUv, 0.0));
+            // Past the render distance there's nothing drawn, so nothing to meet.
+            if (geometryHit(x, xNext, at, outcome) && (fogDistance(at) <= RenderDistance || (ProfileFlags & 8) != 0)) {
                 return sceneHit(outcome, at);
             }
         }
         x = xNext;
         v = vNext;
         traveled += ds;
-        if (traveled > SCENE_FAR) break;
+        if (traveled > sceneFar()) break;
     }
 
     return sceneHit(SCENE_ESCAPED, v); // the sky, or anything beyond reach, in the final direction
