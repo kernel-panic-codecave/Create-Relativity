@@ -101,6 +101,10 @@ object VertexLens {
 	@JvmField
 	var kerrOff = false
 
+	/** Draws the Kerr path table but leaves the vertices' Kerr solve off (debug; GameTests: timing). */
+	@JvmField
+	var kerrSolveOff = false
+
 	/**
 	 * Debug (GameTests): 1 hides vertices a spinning hole's path table didn't place; 2 those it placed on paths going
 	 * out, 3 coming in; 0 none.
@@ -160,7 +164,7 @@ object VertexLens {
 				maxOf(16, (window.width * kerrMargin / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * kerrMargin / KERR_TABLE_DIVISOR).toInt()),
 			)
 		}
-		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null, kerr)
+		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null, kerr && !kerrSolveOff)
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)

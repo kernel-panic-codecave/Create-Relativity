@@ -564,6 +564,10 @@ class LensClientGameTest {
 			minecraft.options.hideGui = true
 			SpacetimeDebugRenderer.hidden = true
 			minecraft.options.bobView().set(false)
+			// Frame rate as fast as it goes (the whole frame: the game, the vertex lens everywhere, the passes).
+			minecraft.options.enableVsync().set(false)
+			minecraft.window.updateVsync(false)
+			minecraft.options.framerateLimit().set(260)
 		}
 		withTestWorld {
 			waitTicks(60)
@@ -584,6 +588,15 @@ class LensClientGameTest {
 			command("tick freeze")
 			val size = computeOnClient { "${it.window.width}x${it.window.height}" }
 			val lines = mutableListOf<String>()
+			// Average frames a second (the game's counter, over three seconds).
+			fun ClientGameTestContext.fps(): Double {
+				waitTicks(30)
+				return (0 until 3).map { waitTicks(20); computeOnClient { it.fps }.toDouble() }.average()
+			}
+			command("relativity bh clear")
+			command("tp @a -14.5 -54 0.5 -90 5")
+			settle()
+			lines += "no hole: %.0f fps".format(fps())
 			for ((name, rs, spin, at) in listOf(
 				listOf("small", 2.0, 0.0, "-14.5 -54 0.5 -90 5"),
 				listOf("small_spin", 2.0, 0.9, "-14.5 -54 0.5 -90 5"),
@@ -606,6 +619,16 @@ class LensClientGameTest {
 					}
 					return measure(BlackHoleLens.KerrMode.TABLE)
 				}
+				// The parts: the post pass cut to a copy; then the vertex lens's Kerr solve off, then the Kerr path pass too.
+				val fpsLens = fps()
+				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
+				val fpsVertex = fps()
+				runOnClient { VertexLens.kerrSolveOff = true }
+				val fpsPaths = fps()
+				runOnClient { VertexLens.kerrSolveOff = false; VertexLens.kerrOff = true }
+				val fpsSchwarzschild = fps()
+				runOnClient { VertexLens.kerrOff = false; BlackHoleLens.rawFrame = false; BlackHoleLens.skipTables = false }
+				lines += "%s: %.0f fps with the lens; post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f".format(name, fpsLens, fpsVertex, fpsPaths, fpsSchwarzschild)
 				val fixed = time { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val tables = time { BlackHoleLens.rawFrame = true }
 				val lens = time {}
