@@ -118,6 +118,18 @@ SR kinematics:
   with deltas sent at most every 2 ticks.
 - Commands: `/relativity bh create <mass>`, `/relativity bh feed`, `/relativity wormhole link`, `/relativity c <value>`,
   `/relativity debug geodesics`.
+- **Sampled metric field (planned)**: the metric (or the light-bending acceleration) on a coarse 3D grid per chunk/region,
+  computed off-thread and rebuilt only when sources change (they move or grow). Observer-independent, so it caches
+  well. The GPU then follows light through the field instead of closed-form Schwarzschild/Kerr, so several holes, moving
+  holes, gravity generators (§10) and other sources share one code path for lensing, physics and the debug view. The
+  per-observer parts (path tables, image map, §9.2) stay as they are.
+
+### Spacetime debug view (F3)
+- A new F3 toggle, next to F3+G's chunk borders: a **3D grid warped by spacetime** round every source (frame dragging
+  shown for spinning holes).
+- **Relative to an observer**: the player by default. Right-clicking an entity, ship or black hole while the view is on makes it
+  the reference frame, and right-clicking nothing goes back to the player. Black holes get a clickable bounding box for this.
+- **Geodesic projections**: each entity's and Sable ship's future free-fall path, drawn in the chosen observer's frame.
 
 ---
 
@@ -367,7 +379,32 @@ For each visible source, render a **low-res cubemap** (128–256²) from the sou
 with at most 1 face per frame, with no entities and simplified chunks. Lensed rays that leave the screen region sample
 this cubemap. Rays that land on-screen behind the BH sample the **scene color + depth** directly, which keeps full detail.
 
-### 9.2 Black hole lensing (Schwarzschild fast path)
+### 9.2 Black hole lensing: as built (M9 high-quality lens, now the only lens)
+- **Vertex lens**: every world vertex moves to where its light appears, keeping its true distance so depth testing sorts
+  occlusion. It's injected into vanilla core shaders and Sodium terrain (Veil), Flywheel instancing, and Iris shader-pack programs.
+  - **Not spinning**: a precomputed image table over (camera distance, point distance, angle), built off-thread once.
+  - **Spinning**: a per-frame **Kerr path table** (rays from the camera, followed through the Kerr metric, sampled along
+    each path), inverted into a **Kerr image map**. The map is a 3D texture over points round the hole (log radius × polar angle × azimuth)
+    holding how each image is turned from the straight line of sight. It's solved by Newton's method on the path table, warm-started
+    from last frame, and each vertex reads it with one filtered lookup. Vertices at folds (where two images merge,
+    magnification over 80×) and behind the hole are hidden.
+- **Post pass**: draws the shadow and the disk, and fills what the vertex lens can't show (hidden vertices, the bent sky) by
+  tracing bent paths through **block grids** that record what every block draws (vanilla, Sodium, BERs, Flywheel). One grid
+  sits round the hole and one past it along the camera line. Traced hits end where the world's drawn chunks end, are coloured from the frame
+  where the world drew that point, and are fogged like terrain. The sky comes from the frame, a sky probe, or a
+  same-height search.
+- **Performance target: 60 fps average on a laptop iGPU** (Intel Xe, 2256×1504). Measured by the `performance` client
+  GameTest: frame rate split into the game, the vertex lens, the Kerr path pass, the image map and the post pass.
+  - Baseline (2026-10-07): no hole about 250 fps. Vertex lens without spin about 140 fps. Kerr path pass about 23 ms.
+    Image map 65–140 ms (being cut). Post pass 150–600 ms.
+  - Plan: (1) Kerr image map instead of a per-vertex solve ✅, made cheap with warm starts and staggered retries.
+    (2) Kerr path table cached by direction and rebuilt only when the camera moves relative to the hole.
+    (3) The post pass reads precomputed paths instead of integrating per pixel.
+    (4) The post pass traces at reduced resolution, and full-resolution pixels only look up and shade their hit.
+- Still open: entities and Sable ships in the traced geometry; Distant Horizons LODs as far geometry; a learned colour
+  transform so traced points match shader-pack shading; shader-pack shadows/sky/clouds/tonemapping.
+
+### 9.2a Original plan: Schwarzschild fast path (superseded by 9.2)
 - Spherical symmetry means each ray stays in the plane through the camera, the BH, and the ray direction, so the problem
   reduces to the orbit equation `d²u/dφ² + u = (3/2) r_s u²`.
 - **Precompute a 2D LUT** (impact parameter b × camera distance r) → (deflection angle, captured?, min radius) on the
@@ -481,6 +518,10 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
   - *Tidal Gauge*: redstone output proportional to tidal acceleration.
   - *Lorentz Drive*: an Aeronautics thruster that burns exotic matter/Neutronium to reach high β.
   - *Gravitic Press*, *Casimir Cavity*, *Containment Field Projector*, *Wormhole Anchor*.
+  - *Gravity Generator*: turns energy (Create rotational power: speed sets strength, stress pays for it) into gravity.
+    It warps spacetime in selectable shapes (a point mass, a flat artificial-gravity field, ...) through the sampled metric
+    field (§3). It **collapses into a black hole** when the escape velocity at the edge of its warp reaches c, i.e. its
+    Schwarzschild radius 2GM/c² outgrows the generator. At that point it really is a black hole, so an ordinary one replaces it.
 - **Ponder scenes** for every machine plus "What is an event horizon", "Why big BHs don't spaghettify you",
   "Twin paradox".
 - JEI/EMI recipes, advancements, and a Create-style tooltip summary.
@@ -500,10 +541,10 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 | **M6** ✅ | **Spaghettification** | Tide-tracking body stretch, noodle deformation renderer, ship tearing, death messages, advancement. *Second wow point.* Still open: first-person stretch; ships visibly stretching before they tear; glowing breakup at the end; spin-aware tides. |
 | **M7** ✅ | Time dilation systems | Proper-time local tick rates for block entities, entities, random and scheduled ticks and Sable ships; per-block render clocks (game time, partial tick, Create animation, Flywheel visuals, GPU rotation); SP reference frame following the player; client light-travel delay. Still open: MP `SLOW_PLAYER`/`LEDGER_ONLY` (players currently ledger-only); speed-based dilation for entities (waits on M11 speed limit); extra delay for light passing near a hole; light delay for Sable ships, contraptions and sounds; forced chunk tickets for dilated regions. |
 | **M8** | Sable/Aeronautics integration | Ships orbit, slingshot, get tidally ripped apart. Kinetic dilation overstress. |
-| **M9** | Kerr | Spin from accretion, frame dragging, ergosphere, Kerr ray marcher, Penrose power plant. **High-quality lens preset**: lens nearby geometry in the **vertex shader** (each vertex moved by the bend for its own distance, so depth testing handles occlusion and uncovering, with no near/far cutoff and no doubling), injected into world shaders via Veil (vanilla, Sodium terrain, Flywheel, entities), with a widened culling frustum. The far background, shadow and Einstein ring stay on the post pass. Ray-marching the frame + capture depth is the fallback; see the parked `lens-experiments` branch for the screen-space attempts. **Geodesic picking**: mixin the crosshair `clip` (and projectile raycasts) to march the null geodesic, so you click what you see bent around a hole. |
-| **M10** | **Binary BHs + gravitational waves** | PN inspiral with radiation reaction, NR-fit remnant + kick, QNM ringdown, strain field, ship flexing, ripple shader, chirp audio, interferometer. *Third wow point.* |
+| **M9** 🚧 | Kerr | **Done so far**: Kerr ray marcher; the high-quality vertex lens is the only lens, with spin (path table + image map), in vanilla/Sodium/Flywheel/Iris, with traced block grids for what it can't show (§9.2). **Open**: 60 fps on a laptop iGPU (§9.2 plan); entities and ships in the traced geometry; shader-pack fidelity; the F3 spacetime debug view (§3); geodesic picking; spin from accretion, ergosphere, Penrose plant. Spin from accretion, frame dragging, ergosphere, Kerr ray marcher, Penrose power plant. **High-quality lens preset**: lens nearby geometry in the **vertex shader** (each vertex moved by the bend for its own distance, so depth testing handles occlusion and uncovering, with no near/far cutoff and no doubling), injected into world shaders via Veil (vanilla, Sodium terrain, Flywheel, entities), with a widened culling frustum. The far background, shadow and Einstein ring stay on the post pass. Ray-marching the frame + capture depth is the fallback; see the parked `lens-experiments` branch for the screen-space attempts. **Geodesic picking**: mixin the crosshair `clip` (and projectile raycasts) to march the null geodesic, so you click what you see bent around a hole. |
+| **M10** | **Binary BHs + gravitational waves** | First the sampled metric field (§3), so two holes lens and pull through one path. PN inspiral with radiation reaction, NR-fit remnant + kick, QNM ringdown, strain field, ship flexing, ripple shader, chirp audio, interferometer. *Third wow point.* |
 | **M11** | Special relativity | Speed cap c, 4-momentum thrust, SR post pass, retarded-time rendering / Terrell rotation. |
-| **M12** | Wormholes + warp drive | Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. **Alcubierre warp drive** (§8a): metric + tests, Warp Field Generator, kinematic bubble travel, arrival blast, warp view shader. |
+| **M12** | Wormholes + warp drive | Gravity Generator (§10) on the metric field, collapsing into a hole at v_esc = c. Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. **Alcubierre warp drive** (§8a): metric + tests, Warp Field Generator, kinematic bubble travel, arrival blast, warp view shader. |
 | **M13** | Content and polish | Progression, recipes, Ponders, advancements, configs, Iris fallback, perf pass, MP testing. |
 | **M14** | **Planetoid world type** | Spike (Sable plot size limits, lazy plot generation, entity gravity direction, cross-seam block adjacency). Cube-sphere generator + curvature warp, kinematic N-body orbits, face-relative gravity, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
 | Stretch | | Wormhole time machines + chronology protection, Neutronium-star mergers, GW energy harvesting, charged BHs, space dimension with starfield. |
@@ -526,6 +567,7 @@ spike (M0) comes first because it's the biggest unknown.
 | Superposition of sources isn't real GR | Documented. The dominant source is exact near itself. Mergers use PN + NR fits, not a live NR solve |
 | Planetoid: arbitrary entity gravity direction is a huge mixin surface; Sable plot size/lazy generation unknown | M14 starts with a spike. Gravity is limited to 6 cube-face directions per planet, not arbitrary vectors |
 | Binary lensing cost (no spherical symmetry) | Half-res ray march, adaptive steps, LOW preset falls back to two independent LUT lenses |
+| Lens cost on integrated GPUs | Per-frame work moved into cached tables (image map, direction-indexed path table); post pass at reduced resolution; measured by the `performance` GameTest against a 60 fps target |
 | Scope | Milestones are shippable on their own: an M6 alpha (BHs + spaghetti) is already a fun mod |
 
 ---
