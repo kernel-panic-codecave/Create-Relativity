@@ -182,4 +182,104 @@ class KerrSchildHamiltonianTest {
 			assertTrue(angle < 0.01, "b = $b: exit directions differ by $angle rad")
 		}
 	}
+
+	/**
+	 * Shader (vertex lens, kerr_paths): a ray's closest approach from its constants of motion. E = −p_t, L = x p_y − y p_x,
+	 * Carter's Q = p_θ² + cos²θ (L² / sin²θ − a² E²) with p_θ = (x p_x + y p_y) cotθ − r sinθ p_z (∂/∂θ in Kerr–Schild
+	 * Cartesians at fixed r, φ), then the largest root of R(r) = (E (r² + a²) − a L)² − Δ (Q + (L − a E)²) below r0,
+	 * found by a geometric scan and bisection; null when R stays positive down to the horizon (captured).
+	 */
+	private fun periapsis(x: V, p: V, pt: Double, m: Double, a: Double): Double? {
+		val (r0, _, _) = profile(x, m, a)
+		val e = -pt
+		val l = x.x * p.y - x.y * p.x
+		val cos = x.z / r0
+		val sin = sqrt(maxOf(1.0 - cos * cos, 1e-12))
+		val pTheta = (x.x * p.x + x.y * p.y) * cos / sin - r0 * sin * p.z
+		val q = pTheta * pTheta + cos * cos * (l * l / (sin * sin) - a * a * e * e)
+		fun radial(r: Double): Double {
+			val delta = r * r - 2.0 * m * r + a * a
+			val k = e * (r * r + a * a) - a * l
+			return k * k - delta * (q + (l - a * e) * (l - a * e))
+		}
+		val horizon = m + sqrt(m * m - a * a)
+		var hi = r0
+		val steps = 64
+		val ratio = Math.pow(horizon * 1.02 / r0, 1.0 / steps)
+		for (i in 1..steps) {
+			val lo = hi * ratio
+			if (radial(lo) < 0.0) {
+				var a0 = lo
+				var b0 = hi
+				repeat(30) {
+					val mid = 0.5 * (a0 + b0)
+					if (radial(mid) < 0.0) a0 = mid else b0 = mid
+				}
+				return 0.5 * (a0 + b0)
+			}
+			hi = lo
+		}
+		return null
+	}
+
+	/** The smallest Boyer–Lindquist r a marched ray reaches (fine steps), or null if it's captured. */
+	private fun tracedPeriapsis(start: V, d: V, m: Double, a: Double, escape: Double): Pair<Double?, Triple<V, V, Double>> {
+		var x = start
+		val launch = d * -1.0
+		val (_, h0, l0) = profile(x, m, a)
+		val ld = l0.dot(launch)
+		val qa = 1.0 + h0 * ld * ld
+		val qb = 2.0 * h0 * ld
+		val qc = h0 - 1.0
+		val k = (-qb + sqrt(qb * qb - 4.0 * qa * qc)) / (2.0 * qa)
+		val lu = 1.0 + k * ld
+		val pt = -1.0 + h0 * lu
+		var p = launch * k + l0 * (h0 * lu)
+		val initial = Triple(x, p, pt)
+		fun flow(x: V, p: V): Pair<V, V> = derivative(x, p, pt, m, a).let { (dx, dp) -> dx * -1.0 to dp * -1.0 }
+		val horizon = m + sqrt(m * m - a * a)
+		var smallest = Double.MAX_VALUE
+		repeat(20000) {
+			val (r, _, _) = profile(x, m, a)
+			smallest = minOf(smallest, r)
+			if (r < horizon * 1.02) return null to initial
+			val (k1x, k1p) = flow(x, p)
+			if (x.length() > escape && x.dot(k1x) > 0.0) return smallest to initial
+			val dl = 0.005 * maxOf(r, 0.5 * m) / k1x.length()
+			val (k2x, k2p) = flow(x + k1x * (0.5 * dl), p + k1p * (0.5 * dl))
+			val (k3x, k3p) = flow(x + k2x * (0.5 * dl), p + k2p * (0.5 * dl))
+			val (k4x, k4p) = flow(x + k3x * dl, p + k3p * dl)
+			x = x + (k1x + k2x * 2.0 + k3x * 2.0 + k4x) * (dl / 6.0)
+			p = p + (k1p + k2p * 2.0 + k3p * 2.0 + k4p) * (dl / 6.0)
+		}
+		return smallest to initial
+	}
+
+	@Test
+	fun `closest approach from the constants of motion matches the traced ray`() {
+		val m = 1.0
+		for (spin in listOf(0.0, 0.5, 0.9, -0.9)) {
+			val a = spin * m
+			var checked = 0
+			var captured = 0
+			// Rays from a camera 30 M out, above the equator, aimed past the hole at a spread of offsets.
+			val camera = V(30.0, -4.0, 9.0)
+			for (i in -6..6) for (j in -6..6) {
+				val target = V(0.0, i * 1.1, j * 1.1)
+				val d = (target - camera).let { it * (1.0 / it.length()) }
+				val (traced, initial) = tracedPeriapsis(camera, d, m, a, 60.0)
+				val (x0, p0, pt0) = initial
+				val predicted = periapsis(x0, p0, pt0, m, a)
+				if (traced == null) {
+					assertTrue(predicted == null || predicted < 1.6 * (m + sqrt(m * m - a * a)), "spin $spin offset ($i, $j): captured, but predicted r_min $predicted")
+					captured += 1
+					continue
+				}
+				assertTrue(predicted != null, "spin $spin offset ($i, $j): escapes past r = $traced, but predicted captured")
+				assertEquals(traced, predicted!!, 2e-3 * traced, "spin $spin offset ($i, $j)")
+				checked += 1
+			}
+			assertTrue(checked > 80 && captured > 5, "spin $spin: $checked escaping, $captured captured")
+		}
+	}
 }

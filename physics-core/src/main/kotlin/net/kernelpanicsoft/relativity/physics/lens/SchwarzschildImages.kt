@@ -114,7 +114,10 @@ object SchwarzschildImages {
 			val hits = Array(rays) { crossings(u0, psis[it], targets) }
 			for (j in 0 until nP) {
 				val curve = curve(u0, targets[j], psis, hits, j)
-				for (k in 0 until nPhi) {
+				// On the hole-camera line the light runs radially (straight in or straight out): no correction. The
+				// sweep's first ray is only near it, and a nonzero value there pinches the image round that point.
+				data[j * n0 + i] = 0f
+				for (k in 1 until nPhi) {
 					val phi = phiAt(k / (nPhi - 1.0))
 					val psi = invert(curve, phi)
 					if (!psi.isNaN()) data[(k * nP + j) * n0 + i] = (psi - flatAngle(u0, targets[j], phi)).toFloat()

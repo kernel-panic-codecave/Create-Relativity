@@ -66,4 +66,19 @@ class VertexLensMathTest {
 		assertTrue(checked > 30, "only $checked points checked")
 		assertTrue(failures.isEmpty(), "${failures.size}/$checked: " + failures.take(6).joinToString("; "))
 	}
+
+	@Test
+	fun `points near the hole-camera line are drawn near it, not pinched round it`() {
+		// Hole 10 blocks along +x; points 20 blocks the other way (behind the camera from the hole) and between camera and
+		// hole, a little off the line: drawn about as far off it as they are seen without the hole.
+		val h = doubleArrayOf(10.0, 0.0, 0.0)
+		for (p in listOf(doubleArrayOf(-20.0, 0.04, 0.0), doubleArrayOf(-20.0, 0.0, 0.2), doubleArrayOf(5.0, 0.01, 0.0))) {
+			val drawn = drawnDirection(p, h, 1.0)!!
+			val straight = scale(p, 1.0 / length(p))
+			val axis = if (p[0] < 0) doubleArrayOf(-1.0, 0.0, 0.0) else doubleArrayOf(1.0, 0.0, 0.0)
+			val off = acos(dot(drawn, axis).coerceIn(-1.0, 1.0))
+			val offStraight = acos(dot(straight, axis).coerceIn(-1.0, 1.0))
+			assertTrue(off in 0.5 * offStraight..2.0 * offStraight, "point ${p.toList()}: drawn $off rad off the line, straight $offStraight")
+		}
+	}
 }
