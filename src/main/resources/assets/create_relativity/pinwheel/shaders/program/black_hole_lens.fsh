@@ -1,5 +1,6 @@
 #veil:buffer veil:camera VeilCamera
 #include create_relativity:lens_scene
+#include create_relativity:vertex_lens_core
 
 // Gravitational lensing by black holes, after the vertex lens (VertexLens) has drawn the world where its light
 // appears: the shadow over what lies beyond the hole, and in the sky the bent paths of view rays (lens_scene.glsl;
@@ -19,6 +20,7 @@ uniform sampler2D KerrTable2;
 uniform int KerrTableEnabled; // 0: march every pixel, 1: use the Kerr table, 2: and paint re-marched pixels red,
                               // 3: output the table's error (main)
 uniform sampler2D SceneTable; // scene_table.fsh output, at reduced resolution
+uniform sampler2D SkyProbe;   // sky_probe.fsh: the sky all round (latitude-longitude; alpha 0 where never seen)
 uniform vec3 SkyColor;          // the sky overhead and at the horizon (fog), for paths that escape with nothing else
 uniform sampler2D Lightmap;     // the game's lightmap (block light x sky light)
 uniform vec4 WaterSurface;      // LensVoxels.waterSurface: water's surface (untinted RGB) and opacity
@@ -384,12 +386,63 @@ vec3 linearFog(vec3 color, vec3 p) {
     return mix(color, FogColor.rgb, fog * FogColor.a);
 }
 
+// The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
+// game or a shader pack drew them, already through its tonemapping), else the sky probe's, else a plain gradient.
+vec3 skyAt(vec3 d) {
+    vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(d, 0.0));
+    if (clip.w > 0.0) {
+        vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+        if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) && texture(DiffuseDepthSampler, uv).r >= SKY_DEPTH) {
+            return texture(DiffuseSampler0, uv).rgb;
+        }
+    }
+    vec2 longLat = vec2(atan(d.z, d.x) / (2.0 * PI) + 0.5, asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5);
+    vec4 probe = texture(SkyProbe, longLat);
+    if (probe.a > 0.5) return probe.rgb;
+    // Never seen that way: the sky seen at the same height (it changes mostly with height), then the nearest heights.
+    for (int ring = 0; ring < 16; ring += 1) {
+        vec4 sum = vec4(0.0);
+        for (int k = 0; k < 8; k += 1) {
+            for (int side = -1; side <= 1; side += 2) {
+                vec2 at = vec2(float(k) / 8.0 + 0.5 / 8.0, clamp(longLat.y + float(side * ring) * 0.03, 0.0, 1.0));
+                vec4 seen = texture(SkyProbe, at);
+                sum += vec4(seen.rgb * seen.a, seen.a);
+            }
+        }
+        if (sum.a > 0.5) return sum.rgb / sum.a;
+    }
+    return mix(FogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y));
+}
+
+// Where the world's drawing shows camera-relative point p (the vertex lens put it where its light appears, at its
+// true distance): that pixel's colour, as the game or a shader pack shaded it, if the depth there is p's.
+bool drawnAt(vec3 p, out vec3 color) {
+    color = vec3(0.0);
+    vec4 clip = VeilCamera.ProjMat * vec4((VeilCamera.ViewMat * vec4(p, 0.0)).xyz, 1.0);
+    vec4 bent = relativityBend(clip, VeilCamera.ProjMat);
+    if (bent.w <= 0.0 || bent.z > bent.w) return false; // behind the camera, or hidden (past the far plane)
+    vec2 uv = bent.xy / bent.w * 0.5 + 0.5;
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
+    float distance = length(p);
+    if (abs(sceneDistance(uv) - distance) > 0.3 + 0.01 * distance) return false;
+    color = texture(DiffuseSampler0, uv).rgb;
+    return true;
+}
+
+bool fromDrawing = false; // debug (LensMode 1): the colour came from the world's drawing (drawnAt)
+
 // The colour a bent path ends on.
 vec3 sceneColor(SceneHit hit, vec4 original) {
-    if (hit.outcome >= SCENE_VOXEL) return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL), hit.value);
+    if (hit.outcome >= SCENE_VOXEL) {
+        vec3 drawn;
+        if (drawnAt(hit.value, drawn)) {
+            fromDrawing = true;
+            return drawn; // shaded (and fogged, tonemapped) as the world itself
+        }
+        return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL), hit.value);
+    }
     if (hit.outcome == SCENE_FELL_IN) return vec3(0.0);
-    // The sky by direction (the frame's own sky pixels may hold hidden triangles drawn out at the far plane).
-    if (hit.outcome == SCENE_ESCAPED) return mix(FogColor.rgb, SkyColor, smoothstep(0.0, 0.4, hit.value.y));
+    if (hit.outcome == SCENE_ESCAPED) return skyAt(hit.value);
     return original.rgb;
 }
 
@@ -523,8 +576,10 @@ void main() {
     if (LensMode == 2) fragColor = vec4(vec3(float(marchSteps) / 64.0), 1.0);
     if (LensMode == 1) {
         // grey none (drawn geometry), green unbent, white escaped (cyan: out of steps), black fell in, yellow geometry
+        // (blue: coloured from where the world drew it)
         vec3 outcome[7] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0), vec3(1.0, 1.0, 0.0));
         fragColor = vec4(outcome[min(hit.outcome, SCENE_VOXEL)], 1.0);
+        if (fromDrawing) fragColor = vec4(0.0, 0.6, 1.0, 1.0); // geometry coloured from the drawing: blue
         if (hit.outcome == SCENE_ESCAPED && marchSteps >= SCENE_STEPS) fragColor = vec4(0.0, 1.0, 1.0, 1.0); // out of steps: cyan
     }
     if (KerrTableEnabled == 2 && first.diskG < -0.5) fragColor = vec4(1.0, 0.0, 0.0, 1.0);

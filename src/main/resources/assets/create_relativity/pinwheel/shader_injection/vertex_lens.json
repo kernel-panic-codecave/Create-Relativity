@@ -41,7 +41,9 @@
     "minecraft:shaders/core/rendertype_glint.vsh",
     "minecraft:shaders/core/rendertype_glint_translucent.vsh",
     "minecraft:shaders/core/rendertype_armor_entity_glint.vsh",
-    "minecraft:shaders/core/particle.vsh"
+    "minecraft:shaders/core/particle.vsh",
+    "minecraft:shaders/core/rendertype_clouds.vsh",
+    "minecraft:shaders/core/rendertype_end_gateway.vsh"
   ],
   "redirect": "create_relativity:vertex_lens.glsl",
   "debug": true

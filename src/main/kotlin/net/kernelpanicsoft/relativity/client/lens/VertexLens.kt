@@ -62,7 +62,9 @@ object VertexLens {
 	private const val RELAX_RADIUS = 60.0
 
 	private var table: CompletableFuture<FloatArray>? = null
-	private var texture = 0
+	/** The Schwarzschild image table (GL_TEXTURE_3D); 0 until built. */
+	var texture = 0
+		private set
 	private var buffer = 0
 	private var binding = -1
 	/** Shaders' programs as last linked (Veil recompiles programs in place, so ids change under a shader). */

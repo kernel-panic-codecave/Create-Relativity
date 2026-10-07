@@ -263,6 +263,14 @@ object BlackHoleLens {
 		// renumbers the rest, and a mismatch there (the voxels' integer 3D sampler) makes the whole draw invalid.
 		LensVoxels.ensureTextures()
 		val lens = VeilRenderSystem.renderer().shaderManager.getShader(SHADER)
+		// The lens pass runs the vertex lens's maths (where the world drew a traced point): its block, and its tables
+		// through Veil (which numbers this program's samplers itself).
+		lens?.let {
+			VertexLens.linkProgram(it.program)
+			KerrPaths.ensureTexture()
+			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: LensVoxels.light)
+			it.setTexture("RelativityKerrPaths", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
+		}
 		val atlas = minecraft.textureManager.getTexture(net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS).id
 		for (shader in listOfNotNull(lens) + tables) {
 			shader.setTexture("Voxels", GL12.GL_TEXTURE_3D, LensVoxels.grid)

@@ -152,8 +152,9 @@ int relativityKerrImage(vec3 p, vec3 guess, out vec3 seen) {
 
 // Works in view space (camera at the origin): the projection alone recovers that from the clip position, whatever
 // space the draw's own vertices and model-view matrix use (chunk-relative, world, posed).
+// The bend itself, whether or not the level is being drawn with lensing on (the post pass uses it after).
 vec4 relativityBend(vec4 clip, mat4 proj) {
-    if (RelativityLensData[1].x < 0.5 || RelativityLensData[0].w <= 0.0) return clip;
+    if (RelativityLensData[0].w <= 0.0) return clip;
     vec4 view = inverse(proj) * clip;
     vec3 p = view.xyz / view.w;
     vec3 h = RelativityLensData[0].xyz;
@@ -210,12 +211,13 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
 
 // The lens for draws that may not use the level's projection (vanilla, Sodium, Flywheel: the hand, GUI items...).
 vec4 relativityLens(vec4 clip, mat4 proj) {
-    if (!relativityLevelProjection(proj)) return clip;
+    if (RelativityLensData[1].x < 0.5 || !relativityLevelProjection(proj)) return clip;
     return relativityBend(clip, proj);
 }
 
 // For shader packs' world programs (always the level's view; their projection may be jittered for TAA, which comes
 // through the lens as a slightly moved point): bends with the level's projection from the block.
 vec4 relativityLensLevel(vec4 clip) {
+    if (RelativityLensData[1].x < 0.5) return clip;
     return relativityBend(clip, mat4(RelativityLensData[2], RelativityLensData[3], RelativityLensData[4], RelativityLensData[5]));
 }

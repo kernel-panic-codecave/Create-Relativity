@@ -5,9 +5,15 @@
       "width": "q.screen_width / 4",
       "height": "q.screen_height / 4",
       "color_buffers": [
-        { "format": "RGBA32F" },
-        { "format": "RGBA32F" },
-        { "format": "RGBA32F" }
+        {
+          "format": "RGBA32F"
+        },
+        {
+          "format": "RGBA32F"
+        },
+        {
+          "format": "RGBA32F"
+        }
       ],
       "depth": false
     },
@@ -16,15 +22,49 @@
       "height": "q.screen_height / 4",
       "format": "RGBA32F",
       "depth": false
+    },
+    "sky_probe": {
+      "width": "256",
+      "height": "128",
+      "format": "RGBA16F",
+      "depth": false,
+      "autoClear": false
     }
   },
   "textures": {
-    "KerrTable0": { "type": "framebuffer", "name": "kerr_table", "sampler": 0 },
-    "KerrTable1": { "type": "framebuffer", "name": "kerr_table", "sampler": 1 },
-    "KerrTable2": { "type": "framebuffer", "name": "kerr_table", "sampler": 2 },
-    "SceneTable": { "type": "framebuffer", "name": "scene_table", "sampler": 0 }
+    "KerrTable0": {
+      "type": "framebuffer",
+      "name": "kerr_table",
+      "sampler": 0
+    },
+    "KerrTable1": {
+      "type": "framebuffer",
+      "name": "kerr_table",
+      "sampler": 1
+    },
+    "KerrTable2": {
+      "type": "framebuffer",
+      "name": "kerr_table",
+      "sampler": 2
+    },
+    "SceneTable": {
+      "type": "framebuffer",
+      "name": "scene_table",
+      "sampler": 0
+    },
+    "SkyProbe": {
+      "type": "framebuffer",
+      "name": "sky_probe",
+      "sampler": 0
+    }
   },
   "stages": [
+    {
+      "type": "veil:blit",
+      "shader": "create_relativity:sky_probe",
+      "in": "minecraft:main",
+      "out": "sky_probe"
+    },
     {
       "type": "veil:blit",
       "shader": "create_relativity:kerr_table",

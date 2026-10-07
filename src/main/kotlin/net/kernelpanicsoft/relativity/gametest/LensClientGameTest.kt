@@ -265,6 +265,61 @@ class LensClientGameTest {
 		}
 	}
 
+	/**
+	 * For a look at how the lens fits a shader pack's rendering (run with -PwithIris): shadows cast by walls near the
+	 * hole under a low sun, sky and clouds round it, colours; the same views without the hole. Nothing asserted.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.packScene() {
+		if (!ClientTestInput.selected("packScene")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(8)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set 2000", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -32..32) for (z in -32..32) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+				// Walls and pillars that throw shadows across the floor round the hole.
+				for (z in -10..10) for (y in -60..-55) level.setBlock(BlockPos(8, y, z), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+				for (x in -12..12 step 6) for (y in -60..-52) level.setBlock(BlockPos(x, y, -8), Blocks.OAK_LOG.defaultBlockState(), 2)
+			}
+			command("tick freeze")
+			for ((pose, at) in listOf("side" to "-14.5 -54 0.5 -90 5", "up" to "-10.5 -57 0.5 -90 -30")) {
+				for (withHole in listOf(false, true)) {
+					command("relativity bh clear")
+					if (withHole) command("relativity bh create 0.5 -54 0.5 2 0")
+					command("tp @a $at")
+					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+					waitTicks(40)
+					settle()
+					takeScreenshot("pack_${pose}_" + if (withHole) "hole" else "plain")
+					if (withHole) {
+						runOnClient { BlackHoleLens.marchDebug = true }
+						waitTicks(5)
+						takeScreenshot("pack_${pose}_outcome")
+						runOnClient { BlackHoleLens.marchDebug = false }
+					}
+				}
+			}
+			runOnClient {
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+			}
+		}
+	}
+
 	/** Debug look at the Kerr vertex lens: where the path table places vertices, and where it falls back. */
 	@ClientGameTest
 	fun ClientGameTestContext.kerrVertex() {

@@ -80,6 +80,11 @@ object KerrPaths {
 		return true
 	}
 
+	/** Makes sure the table texture exists (empty until drawn), for samplers that must always have one. */
+	fun ensureTexture() {
+		if (texture == 0) ensureTarget(16, 16)
+	}
+
 	private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
 
 	private fun ensureTarget(width: Int, height: Int) {
