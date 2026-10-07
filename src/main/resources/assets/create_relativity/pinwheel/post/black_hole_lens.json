@@ -23,6 +23,12 @@
       "format": "RGBA32F",
       "depth": false
     },
+    "scene_refine": {
+      "width": "q.screen_width / 2",
+      "height": "q.screen_height / 2",
+      "format": "RGBA32F",
+      "depth": false
+    },
     "sky_probe": {
       "width": "256",
       "height": "128",
@@ -52,6 +58,11 @@
       "name": "scene_table",
       "sampler": 0
     },
+    "SceneTable2": {
+      "type": "framebuffer",
+      "name": "scene_refine",
+      "sampler": 0
+    },
     "SkyProbe": {
       "type": "framebuffer",
       "name": "sky_probe",
@@ -75,6 +86,12 @@
       "shader": "create_relativity:scene_table",
       "in": "minecraft:main",
       "out": "scene_table"
+    },
+    {
+      "type": "veil:blit",
+      "shader": "create_relativity:scene_refine",
+      "in": "minecraft:main",
+      "out": "scene_refine"
     },
     {
       "type": "veil:blit",

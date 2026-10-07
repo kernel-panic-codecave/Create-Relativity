@@ -13,7 +13,9 @@ uniform float LensFogEnd;     // Veil sets those from the render state when bind
 uniform int LensFogShape;     // 0 sphere, 1 cylinder
 uniform vec4 LensFogColor;    // the terrain fog's colour (alpha its strength)
 uniform int ProfileFlags;     // profiling only (0 normally): 2 skips geometry, 4 uses Euler for bending, 8 ignores the
-                              // render distance; 16 draws fogged geometry as drawn; 32 (LensMode 1) paints traced hits' fog distance
+                              // render distance; 16 draws fogged geometry as drawn; 32 (LensMode 1) paints traced hits' fog distance; 64 no full-resolution
+                              // re-march; 128 a plain sky; 256 no (Schwarzschild) disk; 512 marches where the half-res
+                              // table's neighbours disagree
 uniform int UnseenSource; // what bent paths can meet: 0 nothing (the sky), 1 the geometry round the hole (LensVoxels)
 uniform usampler3D Voxels;      // LensVoxels' fine grid: per one-block cell, its quads as (start << 8) | count
 uniform samplerBuffer VoxelQuads; // its quads, 6 texels each (LensVoxels.writeQuad), relative to their cell
@@ -396,6 +398,99 @@ SceneHit sceneHit(int outcome, vec3 value) {
     hit.outcome = outcome;
     hit.value = value;
     return hit;
+}
+
+const float TABLE_TOLERANCE = 0.5;
+
+// Largest second difference of a 4x4 neighbourhood (row-major, xyz only) along rows and columns through its inner
+// 2x2; bilinear interpolation inside that 2x2 is off by about an eighth of it.
+float secondDifference(vec3 v[16]) {
+    float worst = 0.0;
+    for (int k = 1; k <= 2; k += 1) {
+        worst = max(worst, length(v[k * 4] - 2.0 * v[k * 4 + 1] + v[k * 4 + 2]));
+        worst = max(worst, length(v[k * 4 + 1] - 2.0 * v[k * 4 + 2] + v[k * 4 + 3]));
+        worst = max(worst, length(v[k] - 2.0 * v[k + 4] + v[k + 8]));
+        worst = max(worst, length(v[k + 4] - 2.0 * v[k + 8] + v[k + 12]));
+    }
+    return worst;
+}
+
+// Whether the frame shows sky anywhere within radius pixels of uv (a 3x3 pattern over that square).
+bool skyNear(vec2 uv, float radius) {
+    vec2 pixel = radius / vec2(textureSize(DiffuseDepthSampler, 0));
+    for (int j = -1; j <= 1; j += 1) {
+        for (int i = -1; i <= 1; i += 1) {
+            if (texture(DiffuseDepthSampler, uv + vec2(i, j) * pixel).r >= SKY_DEPTH) return true;
+        }
+    }
+    return false;
+}
+
+// A scene table's paths at uv (one marched path per texel, scene_table.fsh / scene_refine.fsh), interpolated where its
+// neighbours agree: the same outcome (a surface hit only within one face plane) and smooth enough that interpolating
+// is within TABLE_TOLERANCE of a pixel. False where they don't; nearest then holds the nearest marched entry
+// (outcome 0 if none).
+bool sceneTableAt(sampler2D table, vec2 uv, out SceneHit hit, out SceneHit nearest) {
+    ivec2 size = textureSize(table, 0);
+    vec2 pos = uv * vec2(size) - 0.5;
+    ivec2 base = clamp(ivec2(floor(pos)), ivec2(1), size - 3);
+    vec2 f = pos - vec2(base);
+    vec4 a = texelFetch(table, base, 0);
+    vec4 b = texelFetch(table, base + ivec2(1, 0), 0);
+    vec4 c = texelFetch(table, base + ivec2(0, 1), 0);
+    vec4 d = texelFetch(table, base + ivec2(1, 1), 0);
+    // The nearest marched entry, nearest first.
+    vec4 corners[4] = vec4[](a, b, c, d);
+    vec2 offsets[4] = vec2[](vec2(0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0));
+    nearest = sceneHit(0, vec3(0.0));
+    float best = 1e9;
+    for (int k = 0; k < 4; k += 1) {
+        float distance = length(f - offsets[k]);
+        if (corners[k].w > 0.5 && distance < best) {
+            best = distance;
+            nearest = sceneHit(int(corners[k].w + 0.5), corners[k].xyz);
+        }
+    }
+    if (nearest.outcome == SCENE_ESCAPED) nearest.value = normalize(nearest.value);
+    hit = nearest;
+    int outcome = int(a.w + 0.5);
+    bool agree = a.w == b.w && a.w == c.w && a.w == d.w && outcome != SCENE_UNBENT && outcome != 0;
+    if (agree && outcome == SCENE_FELL_IN) return true;
+    if (agree && outcome >= SCENE_VOXEL) {
+        // Surface hits blend only within one face plane: across a step, the blend would float in the air beside it.
+        int axis = ((outcome - SCENE_VOXEL) % 6) / 2;
+        float plane = a.xyz[axis];
+        agree = abs(b.xyz[axis] - plane) < 0.01 && abs(c.xyz[axis] - plane) < 0.01 && abs(d.xyz[axis] - plane) < 0.01;
+    }
+    if (!agree) return false;
+    vec2 frameSize = vec2(textureSize(DiffuseDepthSampler, 0));
+    vec3 scale = vec3(1.0);
+    if (outcome >= SCENE_VOXEL) scale = vec3(1.0 / max(length(a.xyz), 1e-3)); // positions, as angles from the camera
+    vec3 v[16];
+    bool same[16];
+    for (int j = 0; j < 4; j += 1) {
+        for (int i = 0; i < 4; i += 1) {
+            vec4 entry = texelFetch(table, base + ivec2(i - 1, j - 1), 0);
+            v[j * 4 + i] = entry.xyz * scale;
+            same[j * 4 + i] = entry.w == a.w;
+        }
+    }
+    // Outer entries with another outcome (across an edge just outside the 2x2) are extrapolated from the inner ones,
+    // so only the inner 2x2 has to agree. (The corners aren't used.)
+    for (int k = 1; k <= 2; k += 1) {
+        if (!same[k * 4]) v[k * 4] = 2.0 * v[k * 4 + 1] - v[k * 4 + 2];
+        if (!same[k * 4 + 3]) v[k * 4 + 3] = 2.0 * v[k * 4 + 2] - v[k * 4 + 1];
+        if (!same[k]) v[k] = 2.0 * v[k + 4] - v[k + 8];
+        if (!same[k + 12]) v[k + 12] = 2.0 * v[k + 8] - v[k + 4];
+    }
+    float pixelsPerTexel = frameSize.y / float(size.y);
+    float natural = pixelsPerTexel * pixelAngle();
+    float step = max(max(max(length(v[5] - v[6]), length(v[5] - v[9])), max(length(v[10] - v[6]), length(v[10] - v[9]))), natural);
+    if (secondDifference(v) >= 8.0 / pixelsPerTexel * TABLE_TOLERANCE * step) return false;
+    vec3 value = mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
+    if (outcome == SCENE_ESCAPED) value = normalize(value);
+    hit = sceneHit(outcome, value);
+    return true;
 }
 
 // Whether the holes shift what the straight view ray hits (at sceneDist) by too little to show.

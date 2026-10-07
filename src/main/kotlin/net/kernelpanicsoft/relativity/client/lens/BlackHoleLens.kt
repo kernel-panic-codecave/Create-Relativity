@@ -35,7 +35,7 @@ object BlackHoleLens {
 	val PIPELINE = CreateRelativity.id("black_hole_lens")
 	val LOOKUP_TEXTURE = CreateRelativity.id("lens_lookup")
 	private val SHADER = CreateRelativity.id("black_hole_lens")
-	private val TABLE_SHADERS = listOf(CreateRelativity.id("kerr_table"), CreateRelativity.id("scene_table"))
+	private val TABLE_SHADERS = listOf(CreateRelativity.id("kerr_table"), CreateRelativity.id("scene_table"), CreateRelativity.id("scene_refine"))
 
 	/** Must match LUT_SIZE in black_hole_lens.fsh. */
 	private const val LUT_WIDTH = 512

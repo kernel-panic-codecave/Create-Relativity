@@ -19,7 +19,7 @@ uniform sampler2D KerrTable1;
 uniform sampler2D KerrTable2;
 uniform int KerrTableEnabled; // 0: march every pixel, 1: use the Kerr table, 2: and paint re-marched pixels red,
                               // 3: output the table's error (main)
-uniform sampler2D SceneTable; // scene_table.fsh output, at reduced resolution
+uniform sampler2D SceneTable2; // scene_refine.fsh output: the paths at half resolution
 uniform sampler2D SkyProbe;   // sky_probe.fsh: the sky all round (latitude-longitude; alpha 0 where never seen)
 uniform vec3 SkyColor;          // the sky overhead and at the horizon (fog), for paths that escape with nothing else
 uniform sampler2D Lightmap;     // the game's lightmap (block light x sky light)
@@ -39,7 +39,6 @@ const float DISK_STEP = 0.03; // radians of orbit angle per step
 
 // Kerr table (kerr_table.fsh, at reduced resolution): pixels it would place off by more than about this many sample
 // spacings are marched at full resolution instead.
-const float TABLE_TOLERANCE = 0.5;
 
 // Table axes are sqrt(u0) and sqrt(psi / pi), sampled at texel centres.
 vec2 lookup(float u0, float psi) {
@@ -107,19 +106,6 @@ vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega
 }
 
 // ---- Kerr ----
-
-// Largest second difference of a 4x4 neighbourhood (row-major, xyz only) along rows and columns through its inner
-// 2x2; bilinear interpolation inside that 2x2 is off by about an eighth of it.
-float secondDifference(vec3 v[16]) {
-    float worst = 0.0;
-    for (int k = 1; k <= 2; k += 1) {
-        worst = max(worst, length(v[k * 4] - 2.0 * v[k * 4 + 1] + v[k * 4 + 2]));
-        worst = max(worst, length(v[k * 4 + 1] - 2.0 * v[k * 4 + 2] + v[k * 4 + 3]));
-        worst = max(worst, length(v[k] - 2.0 * v[k + 4] + v[k + 8]));
-        worst = max(worst, length(v[k + 4] - 2.0 * v[k + 8] + v[k + 12]));
-    }
-    return worst;
-}
 
 bool sceneRemarched = false; // debug (LensMode 6)
 bool kerrRemarched = false;
@@ -228,56 +214,15 @@ vec4 kerrDisk(KerrRay ray, float sceneDist) {
 SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
     if (sceneUnbent(dir, sceneDist)) return sceneHit(SCENE_UNBENT, vec3(0.0));
     if (LensMode == 3 || LensMode == 2 || LensMode == 1) return marchScene(dir, sceneDist); // debug views: every pixel marched
-    ivec2 size = textureSize(SceneTable, 0);
-    vec2 pos = uv * vec2(size) - 0.5;
-    ivec2 base = clamp(ivec2(floor(pos)), ivec2(1), size - 3);
-    vec2 f = pos - vec2(base);
-    vec4 a = texelFetch(SceneTable, base, 0);
-    vec4 b = texelFetch(SceneTable, base + ivec2(1, 0), 0);
-    vec4 c = texelFetch(SceneTable, base + ivec2(0, 1), 0);
-    vec4 d = texelFetch(SceneTable, base + ivec2(1, 1), 0);
-    int outcome = int(a.w + 0.5);
-    bool agree = a.w == b.w && a.w == c.w && a.w == d.w && outcome != SCENE_UNBENT && outcome != 0;
-    if (agree && outcome == SCENE_FELL_IN) return sceneHit(SCENE_FELL_IN, vec3(0.0));
-    if (agree && outcome >= SCENE_VOXEL) {
-        // Surface hits blend only within one face plane: across a step, the blend would float in the air beside it.
-        int axis = ((outcome - SCENE_VOXEL) % 6) / 2;
-        float plane = a.xyz[axis];
-        agree = abs(b.xyz[axis] - plane) < 0.01 && abs(c.xyz[axis] - plane) < 0.01 && abs(d.xyz[axis] - plane) < 0.01;
-    }
-    if (agree) {
-        vec2 frameSize = vec2(textureSize(DiffuseSampler0, 0));
-        vec3 scale = vec3(1.0);
-        if (outcome >= SCENE_VOXEL) scale = vec3(1.0 / max(length(a.xyz), 1e-3)); // positions, as angles from the camera
-        vec3 v[16];
-        bool same[16];
-        for (int j = 0; j < 4; j += 1) {
-            for (int i = 0; i < 4; i += 1) {
-                vec4 entry = texelFetch(SceneTable, base + ivec2(i - 1, j - 1), 0);
-                v[j * 4 + i] = entry.xyz * scale;
-                same[j * 4 + i] = entry.w == a.w;
-            }
-        }
-        // Outer entries with another outcome (across an edge just outside the 2x2) are extrapolated from the inner
-        // ones, so only the inner 2x2 has to agree. (The corners aren't used.)
-        for (int k = 1; k <= 2; k += 1) {
-            if (!same[k * 4]) v[k * 4] = 2.0 * v[k * 4 + 1] - v[k * 4 + 2];
-            if (!same[k * 4 + 3]) v[k * 4 + 3] = 2.0 * v[k * 4 + 2] - v[k * 4 + 1];
-            if (!same[k]) v[k] = 2.0 * v[k + 4] - v[k + 8];
-            if (!same[k + 12]) v[k + 12] = 2.0 * v[k + 8] - v[k + 4];
-        }
-        float pixelsPerTexel = frameSize.y / float(size.y);
-        float natural = pixelsPerTexel * pixelAngle();
-        float step = max(max(max(length(v[5] - v[6]), length(v[5] - v[9])), max(length(v[10] - v[6]), length(v[10] - v[9]))), natural);
-        if (agree) agree = secondDifference(v) < 8.0 / pixelsPerTexel * TABLE_TOLERANCE * step;
-    }
-    if (!agree) {
-        sceneRemarched = true;
-        return marchScene(dir, sceneDist);
-    }
-    vec3 value = mix(mix(a.xyz, b.xyz, f.x), mix(c.xyz, d.xyz, f.x), f.y);
-    if (outcome == SCENE_ESCAPED) value = normalize(value);
-    return sceneHit(outcome, value);
+    SceneHit hit;
+    SceneHit nearest;
+    if (sceneTableAt(SceneTable2, uv, hit, nearest)) return hit;
+    // Neighbours that disagree (an edge in what the paths meet): the nearest one's, as the half-resolution table
+    // was marched there; at most a pixel off. (Marching here instead costs most of the pass: on a GPU, a few such pixels
+    // make every pixel near them wait as long.)
+    sceneRemarched = true;
+    if (nearest.outcome == 0 || (ProfileFlags & 512) != 0) return marchScene(dir, sceneDist);
+    return nearest;
 }
 
 // Vanilla's face shading for normal n: top 1, bottom 0.5, north/south 0.8, east/west 0.6, blended.
@@ -388,6 +333,7 @@ vec3 linearFog(vec3 color, vec3 p) {
 // The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
 // game or a shader pack drew them, already through its tonemapping), else the sky probe's, else a plain gradient.
 vec3 skyAt(vec3 d) {
+    if ((ProfileFlags & 128) != 0) return mix(LensFogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y)); // timing
     vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(d, 0.0));
     if (clip.w > 0.0) {
         vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
@@ -573,7 +519,7 @@ void main() {
         scene = sceneColor(hit, original);
     }
     vec4 disk = kerrDisk(first, sceneDist);
-    if (first.status == 2) disk = diskSample(dir, sceneDist);
+    if (first.status == 2 && (ProfileFlags & 256) == 0) disk = diskSample(dir, sceneDist);
     fragColor = vec4(mix(scene, disk.rgb, disk.a), 1.0);
     if (LensMode == 2) fragColor = vec4(vec3(float(marchSteps) / 64.0), 1.0);
     if (LensMode == 1) {
