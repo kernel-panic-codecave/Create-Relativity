@@ -75,6 +75,9 @@ object LensVoxels {
 		private set
 
 	private var filled = 0
+
+	/** The level the grids hold (another world, or dimension, starts them over). */
+	private var gridLevel = java.lang.ref.WeakReference<ClientLevel>(null)
 	private val dirty = java.util.BitSet(SIZE)
 	private val gridSlice = MemoryUtil.memAllocInt(SIZE * SIZE)
 	private val lightSlice = MemoryUtil.memAlloc(SIZE * SIZE * 2)
@@ -129,7 +132,8 @@ object LensVoxels {
 			ensureTextures()
 			val holePos = BlockPos.containing(hole.x, hole.y, hole.z)
 			val corner = holePos.offset(-SIZE / 2, -SIZE / 2, -SIZE / 2)
-			if (corner != origin) {
+			if (corner != origin || gridLevel.get() !== level) {
+				gridLevel = java.lang.ref.WeakReference(level)
 				for (pos in entityCells.keys.toList()) dropEntity(pos)
 				origin = corner
 				filled = 0

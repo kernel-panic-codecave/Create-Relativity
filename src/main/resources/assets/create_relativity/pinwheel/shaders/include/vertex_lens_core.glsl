@@ -11,8 +11,8 @@
 // [6] spinning hole (Kerr; [1].z = 1): xyz centre relative to the camera in game axes, w spin a / M
 // [7] the Kerr path table (KerrPaths): tan of its half extents in view x and y, its size in texels
 // [8..10] view to game axes (a rotation), by column
-// [11] x: Boyer-Lindquist r where the table's paths start coming in (the camera, or its start sphere); y: where they
-//      end going out (the start sphere)
+// [11] x: Boyer-Lindquist r where the table's paths start coming in (the camera, or their sphere); y: where they end
+//      going out (their sphere, past everything drawn)
 layout(std140) uniform RelativityLens {
     vec4 RelativityLensData[12];
 };
@@ -43,8 +43,8 @@ vec2 relativityPathSample(ivec2 t, int j) {
     return (f - 2 * (f / 2)) == 0 ? v.xy : v.zw;
 }
 
-// Where texel t's path is (seen from the hole) at Boyer-Lindquist radius rP, coming in or going out; ok false where
-// the texel has no usable path. Cubic (Catmull-Rom) along the path's samples.
+// Where texel t's path is (seen from the hole, in the ray's frame: kerr_paths.fsh) at Boyer-Lindquist radius rP,
+// coming in or going out; ok false where the texel has no usable path. Cubic (Catmull-Rom) along the path's samples.
 vec2 relativityPathAt(ivec2 t, float rP, bool outbound, out bool ok) {
     vec4 head = texelFetch(RelativityKerrPaths, ivec3(t, 0), 0);
     float rMin = head.x;
@@ -67,8 +67,29 @@ vec2 relativityPathAt(ivec2 t, float rP, bool outbound, out bool ok) {
     return 0.5 * (2.0 * p1 + (p2 - p0) * f + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f2 + (3.0 * p1 - p0 - 3.0 * p2 + p3) * f3);
 }
 
-// The path through table position s (texels) at radius rP, seen from the hole: bilinear between texels.
-vec2 relativityPathImage(vec2 s, float rP, bool outbound, out bool ok) {
+// How far texel t's path at radius rP misses direction n (from the hole, game axes), in its ray's frame: the angle
+// round the hole in the ray's plane (n's taken on the turn nearest the path's) and the offset out of the plane.
+vec2 relativityPathMiss(ivec2 t, vec3 n, float rP, bool outbound, out bool ok) {
+    vec2 path = relativityPathAt(t, rP, outbound, ok);
+    vec2 tanXY = RelativityLensData[7].xy;
+    vec2 size = RelativityLensData[7].zw;
+    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+    vec3 dir = normalize(viewToGame * vec3(((vec2(t) + 0.5) / size * 2.0 - 1.0) * tanXY, -1.0));
+    vec3 e1 = normalize(-RelativityLensData[6].xyz);
+    vec3 normal = cross(e1, dir);
+    if (dot(normal, normal) < 1e-12) {
+        ok = false;
+        return vec2(0.0);
+    }
+    normal = normalize(normal);
+    vec3 side = cross(normal, e1);
+    float angle = atan(dot(n, side), dot(n, e1));
+    angle += 6.28318530718 * floor((path.x - angle) / 6.28318530718 + 0.5);
+    return path - vec2(angle, dot(n, normal));
+}
+
+// The miss at table position s (texels), bilinear between texels.
+vec2 relativityPathImage(vec2 s, vec3 n, float rP, bool outbound, out bool ok) {
     vec2 size = RelativityLensData[7].zw;
     vec2 pos = s - 0.5;
     ivec2 b = ivec2(floor(pos));
@@ -79,26 +100,26 @@ vec2 relativityPathImage(vec2 s, float rP, bool outbound, out bool ok) {
     bool o1;
     bool o2;
     bool o3;
-    vec2 a = relativityPathAt(b, rP, outbound, o0);
-    vec2 c = relativityPathAt(b + ivec2(1, 0), rP, outbound, o1);
-    vec2 d = relativityPathAt(b + ivec2(0, 1), rP, outbound, o2);
-    vec2 e = relativityPathAt(b + ivec2(1, 1), rP, outbound, o3);
+    vec2 a = relativityPathMiss(b, n, rP, outbound, o0);
+    vec2 c = relativityPathMiss(b + ivec2(1, 0), n, rP, outbound, o1);
+    vec2 d = relativityPathMiss(b + ivec2(0, 1), n, rP, outbound, o2);
+    vec2 e = relativityPathMiss(b + ivec2(1, 1), n, rP, outbound, o3);
     ok = o0 && o1 && o2 && o3;
     return mix(mix(a, c, f.x), mix(d, e, f.x), f.y);
 }
 
-// Newton's method from table position s for the path that reaches radius rP (coming in, or going out) where the
-// point seen from the hole as qP is. True if it converged, s then the image's table position.
-bool relativityKerrSolve(inout vec2 s, vec2 qP, float rP, bool outbound) {
-    for (int i = 0; i < 6; i += 1) {
+// Newton's method from table position s for the path that reaches radius rP (coming in, or going out) in direction
+// n from the hole. True if it converged, s then the image's table position.
+bool relativityKerrSolve(inout vec2 s, vec3 n, float rP, bool outbound) {
+    for (int i = 0; i < 8; i += 1) {
         bool ok;
-        vec2 miss = relativityPathImage(s, rP, outbound, ok) - qP;
+        vec2 miss = relativityPathImage(s, n, rP, outbound, ok);
         if (!ok) return false;
         if (dot(miss, miss) < 1e-8) return true;
         bool okX;
         bool okY;
-        vec2 dx = (relativityPathImage(s + vec2(0.5, 0.0), rP, outbound, okX) - qP - miss) / 0.5;
-        vec2 dy = (relativityPathImage(s + vec2(0.0, 0.5), rP, outbound, okY) - qP - miss) / 0.5;
+        vec2 dx = (relativityPathImage(s + vec2(0.5, 0.0), n, rP, outbound, okX) - miss) / 0.5;
+        vec2 dy = (relativityPathImage(s + vec2(0.0, 0.5), n, rP, outbound, okY) - miss) / 0.5;
         if (!okX || !okY) return false;
         mat2 jacobian = mat2(dx, dy);
         float det = determinant(jacobian);
@@ -109,13 +130,13 @@ bool relativityKerrSolve(inout vec2 s, vec2 qP, float rP, bool outbound) {
         s -= step;
     }
     bool ok;
-    vec2 miss = relativityPathImage(s, rP, outbound, ok) - qP;
+    vec2 miss = relativityPathImage(s, n, rP, outbound, ok);
     return ok && dot(miss, miss) < 1e-6;
 }
 
 // The view direction of p's image under a spinning hole ([6]), from Newton's method started at the view direction
-// guess: 1 found; 0 its light doesn't come near the hole (the caller's Schwarzschild image stands: spin barely
-// matters there); -1 not found (at the shadow's edge: hidden, like Schwarzschild's hidden vertices).
+// guess: 1 found; 0 outside the table (off screen: the caller's Schwarzschild image stands); -1 not found (at the
+// shadow's edge: hidden, like Schwarzschild's hidden vertices).
 int relativityKerrImage(vec3 p, vec3 guess, out vec3 seen) {
     seen = guess;
     if (guess.z > -1e-3) return 0;
@@ -126,26 +147,23 @@ int relativityKerrImage(vec3 p, vec3 guess, out vec3 seen) {
     vec3 local = vec3(d.z, d.x, d.y);
     float w = dot(local, local) - a * a;
     float rP = sqrt(max(0.5 * w + sqrt(0.25 * w * w + a * a * local.z * local.z), 1e-12));
-    // The direction from the hole in the table's equal-area coordinates round the hole-to-camera axis.
-    vec3 e1 = normalize(-hole);
-    vec3 e2 = cross(vec3(0.0, 1.0, 0.0), e1);
-    if (dot(e2, e2) < 1e-6) e2 = cross(vec3(1.0, 0.0, 0.0), e1);
-    e2 = normalize(e2);
-    vec3 e3 = cross(e1, e2);
     vec3 n = normalize(d);
-    vec2 qP = vec2(dot(n, e2), dot(n, e3)) / sqrt(max(0.5 * (1.0 + dot(n, e1)), 1e-6));
     vec2 tanXY = RelativityLensData[7].xy;
     vec2 size = RelativityLensData[7].zw;
     vec2 start = ((guess.xy / -guess.z) / tanXY * 0.5 + 0.5) * size;
     vec2 s = start;
     // The image whose light reaches p first along its path (coming in), else going out.
     relativityUnmarched = false;
-    bool solved = rP <= RelativityLensData[11].x && relativityKerrSolve(s, qP, rP, false);
+    bool solved = rP <= RelativityLensData[11].x && relativityKerrSolve(s, n, rP, false);
+    bool outbound = false;
     if (!solved) {
         s = start;
-        solved = relativityKerrSolve(s, qP, rP, true);
+        solved = relativityKerrSolve(s, n, rP, true);
+        outbound = true;
     }
     if (!solved) return relativityUnmarched ? 0 : -1;
+    // Debug: hide the vertices solved going out (2) or coming in (3).
+    if ((RelativityLensData[1].w > 1.5 && RelativityLensData[1].w < 2.5 && outbound) || (RelativityLensData[1].w > 2.5 && !outbound)) return -1;
     seen = normalize(vec3((s / size * 2.0 - 1.0) * tanXY, -1.0));
     return 1;
 }
@@ -199,7 +217,7 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
         vec3 kerr;
         int found = relativityKerrImage(p, seen, kerr);
         if (found == 1) return proj * vec4(kerr * length(p), 1.0);
-        if (found < 0 || RelativityLensData[1].w > 0.5) image.g = 0.0; // hidden (debug: everything not placed by Kerr)
+        if (found < 0 || (RelativityLensData[1].w > 0.5 && RelativityLensData[1].w < 1.5)) image.g = 0.0; // hidden (debug 1: all not placed by Kerr)
     }
     if (image.g < 0.5 || nearAxis) {
         vec4 hidden = proj * vec4(-e1 * length(p), 1.0);

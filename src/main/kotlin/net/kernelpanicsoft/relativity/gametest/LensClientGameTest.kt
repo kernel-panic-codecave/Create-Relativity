@@ -339,7 +339,7 @@ class LensClientGameTest {
 			)) command(command)
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
-				for (x in -32..32) for (z in -32..32) {
+				for (x in -80..48) for (z in -48..48) {
 					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
 					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
 				}
@@ -351,11 +351,31 @@ class LensClientGameTest {
 			waitTicks(40)
 			settle()
 			takeScreenshot("kerr_vertex")
-			runOnClient { VertexLens.kerrDebug = true }
-			waitTicks(10)
-			takeScreenshot("kerr_vertex_placed")
+			// (The post pass's tracing off, so what the vertex lens leaves out shows as sky.)
+			for ((mode, label) in listOf(1 to "placed", 2 to "inbound", 3 to "outbound")) {
+				runOnClient {
+					VertexLens.kerrDebug = mode
+					BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE
+				}
+				waitTicks(10)
+				takeScreenshot("kerr_vertex_$label")
+			}
 			runOnClient {
-				VertexLens.kerrDebug = false
+				VertexLens.kerrDebug = 0
+				BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
+				VertexLens.kerrOff = true
+			}
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_schwarzschild")
+			runOnClient { VertexLens.kerrOff = false }
+			// From farther off, where the edge of the path table's reach (and the switch to the Schwarzschild image)
+			// falls on screen.
+			command("tp @a -60.5 -50 0.5 -90 5")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			takeScreenshot("kerr_vertex_far")
+			runOnClient {
 				it.options.hideGui = false
 				SpacetimeDebugRenderer.hidden = false
 			}

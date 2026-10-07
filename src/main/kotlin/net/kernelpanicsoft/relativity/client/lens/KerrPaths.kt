@@ -37,9 +37,10 @@ object KerrPaths {
 
 	/**
 	 * Draws the table for a hole at [holeGame] (camera-relative, game axes) with Schwarzschild radius [rs] and [spin],
-	 * over view directions within [tanX], [tanY] of the view axis, [width] × [height] texels. False if it can't.
+	 * paths followed out to [pathRadius] from it, over view directions within [tanX], [tanY] of the view axis,
+	 * [width] × [height] texels. False if it can't.
 	 */
-	fun draw(holeGame: Vector3f, rs: Float, spin: Float, viewToGame: Matrix3f, tanX: Float, tanY: Float, width: Int, height: Int): Boolean {
+	fun draw(holeGame: Vector3f, rs: Float, spin: Float, pathRadius: Float, viewToGame: Matrix3f, tanX: Float, tanY: Float, width: Int, height: Int): Boolean {
 		if (failed || !ensureProgram()) return false
 		ensureTarget(width, height)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
@@ -62,6 +63,7 @@ object KerrPaths {
 			GL20.glUniform3f(uniform("HoleGame"), holeGame.x, holeGame.y, holeGame.z)
 			GL20.glUniform1f(uniform("HoleRs"), rs)
 			GL20.glUniform1f(uniform("HoleSpin"), spin)
+			GL20.glUniform1f(uniform("PathRadius"), pathRadius)
 			val matrix = stack.mallocFloat(9)
 			viewToGame.get(matrix)
 			GL20.glUniformMatrix3fv(uniform("ViewToGame"), false, matrix)

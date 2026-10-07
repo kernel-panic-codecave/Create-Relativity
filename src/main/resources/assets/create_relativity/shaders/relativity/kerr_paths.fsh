@@ -2,15 +2,19 @@
 // through the spinning hole, followed back in time (kerr.glsl, prepended), recorded as where it is seen from the hole
 // at fixed points along it. A path is parameterised by sigma = +-sqrt(r - r_min) (Boyer-Lindquist r, its closest
 // approach r_min; minus coming in, plus going out), smooth through the closest approach, sampled at
-// sigma = sigma_max (k / 7)^2: on the way in from where the march starts (the camera, or the start sphere), on the
-// way out to the start sphere. Each sample is the direction from the hole in equal-area coordinates round the
-// hole-to-camera axis (relativityPathQ), continuous everywhere but straight behind the hole.
+// sigma = sigma_max (k / 7)^2: on the way in from where the march starts (the camera, or the PathRadius sphere), on
+// the way out to that sphere. Every texel's ray is traced, however far it passes, so the vertex lens never switches
+// to the Schwarzschild image on screen (a visible seam). Each sample is the direction from the hole in the ray's own
+// frame (pathAngles): the angle round the hole in the plane of the camera, the hole and the ray's start (from the
+// camera's direction, unwrapped, so it keeps counting past behind the hole), and how far out of that plane the spin
+// has dragged it. Smooth along every path, including where it crosses the line behind the hole.
 
 uniform vec3 HoleGame;    // camera-relative, game axes
 uniform float HoleRs;
 uniform float HoleSpin;
 uniform mat3 ViewToGame;
 uniform vec2 TableTan;    // tan of the table's half extents in view x and y
+uniform float PathRadius; // where paths start (if the camera's outside it) and end: past everything drawn
 
 in vec2 texCoord;
 layout(location = 0) out vec4 Path0; // r_min, status (0 unmarched, 1 escapes, 2 captured, 3 incomplete), closest approach
@@ -22,18 +26,19 @@ layout(location = 5) out vec4 Path5; // out 2, out 3
 layout(location = 6) out vec4 Path6; // out 4, out 5
 layout(location = 7) out vec4 Path7; // out 6, out 7 (the start sphere)
 
-vec3 pathE1;
-vec3 pathE2;
-vec3 pathE3;
+vec3 pathE1;     // hole to camera
+vec3 pathSide;   // in the ray's plane, perpendicular to pathE1, toward the ray's side
+vec3 pathNormal; // the ray's plane's normal
+float pathTurn = 0.0; // the last angle, for unwrapping
 
-// Equal-area (Lambert) coordinates of unit direction n round pathE1: 2 sin(psi / 2) (cos chi, sin chi).
-vec2 pathQ(vec3 n) {
-    vec2 t = vec2(dot(n, pathE2), dot(n, pathE3));
-    return t / sqrt(max(0.5 * (1.0 + dot(n, pathE1)), 1e-6));
-}
-
-vec2 qOfLocal(vec3 x) {
-    return pathQ(normalize(toGame(x)));
+// The angle round the hole in the ray's plane (unwrapped against the last one) and the offset out of it, of the
+// photon at local point x.
+vec2 pathAngles(vec3 x) {
+    vec3 n = normalize(toGame(x));
+    float angle = atan(dot(n, pathSide), dot(n, pathE1));
+    angle += 6.28318530718 * floor((pathTurn - angle) / 6.28318530718 + 0.5);
+    pathTurn = angle;
+    return vec2(angle, dot(n, pathNormal));
 }
 
 // Largest root of the radial potential below r0 (the closest approach), or -1 if it stays positive to the horizon.
@@ -70,22 +75,19 @@ void main() {
     Path4 = vec4(0.0); Path5 = vec4(0.0); Path6 = vec4(0.0); Path7 = vec4(0.0);
     float rs = HoleRs;
     if (rs <= 0.0 || abs(HoleSpin) < MIN_KERR_SPIN) return;
-    pathE1 = normalize(-HoleGame);
-    pathE2 = cross(vec3(0.0, 1.0, 0.0), pathE1);
-    if (dot(pathE2, pathE2) < 1e-6) pathE2 = cross(vec3(1.0, 0.0, 0.0), pathE1);
-    pathE2 = normalize(pathE2);
-    pathE3 = cross(pathE1, pathE2);
-
     vec3 dir = normalize(ViewToGame * vec3((texCoord * 2.0 - 1.0) * TableTan, -1.0));
+    pathE1 = normalize(-HoleGame);
+    pathNormal = cross(pathE1, dir);
+    if (dot(pathNormal, pathNormal) < 1e-12) return; // straight at the hole: falls in
+    pathNormal = normalize(pathNormal);
+    pathSide = cross(pathNormal, pathE1);
     float rc = length(HoleGame);
     float along = dot(HoleGame, dir);
-    float impact = length(HoleGame - dir * along);
-    if (impact > KERR_REGION * rs || (along < 0.0 && rc > KERR_REGION * rs)) return;
 
     float m = 0.5 * rs;
     float a = HoleSpin * m;
     float horizon = m + sqrt(max(m * m - a * a, 0.0));
-    float startRadius = KERR_START * rs;
+    float startRadius = PathRadius;
     float t0 = 0.0;
     if (rc > startRadius) t0 = along - sqrt(max(along * along - (rc * rc - startRadius * startRadius), 0.0));
     vec3 x = toLocal(dir * t0 - HoleGame);
@@ -111,7 +113,7 @@ void main() {
 
     vec2 qIn[8];
     vec2 qOut[8];
-    vec2 q = qOfLocal(x);
+    vec2 q = pathAngles(x);
     for (int k = 0; k < 8; k += 1) {
         qIn[k] = q;
         qOut[k] = q;
@@ -122,7 +124,7 @@ void main() {
     float rPrevious = r;
     vec2 qPrevious = q;
     bool done = false;
-    for (int s = 0; s < 2 * KERR_STEPS && !done; s += 1) {
+    for (int s = 0; s < 3 * KERR_STEPS && !done; s += 1) {
         if (r < horizon * 1.02) {
             if (status == 1.0) status = 3.0;
             break;
@@ -140,7 +142,7 @@ void main() {
         x += dl / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         p += dl / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
         r = kerrBackward(x, p, pt, m, a, k1x, k1p);
-        q = qOfLocal(x);
+        q = pathAngles(x);
         if (!goingOut) {
             // Down through the inbound samples, then the closest approach where r turns.
             while (nextIn >= 1) {

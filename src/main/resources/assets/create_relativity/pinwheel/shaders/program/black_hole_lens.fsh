@@ -429,6 +429,8 @@ bool drawnAt(vec3 p, out vec3 color) {
     return true;
 }
 
+const float GRID_FADE = 12.0; // blocks before the grid's edge over which traced geometry fades into the sky
+
 bool fromDrawing = false; // debug (LensMode 1): the colour came from the world's drawing (drawnAt)
 
 // The colour a bent path ends on.
@@ -439,7 +441,11 @@ vec3 sceneColor(SceneHit hit, vec4 original) {
             fromDrawing = true;
             return drawn; // shaded (and fogged, tonemapped) as the world itself
         }
-        return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL), hit.value);
+        vec3 traced = linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL), hit.value);
+        // Toward the grid's edge (past it, paths meet nothing: sky), into the sky beyond, rather than a sharp cut.
+        vec3 g = hit.value - VoxelOrigin;
+        float inside = min(min(min(g.x, g.y), g.z), min(min(float(VOXEL_SIZE) - g.x, float(VOXEL_SIZE) - g.y), float(VOXEL_SIZE) - g.z));
+        return mix(skyAt(normalize(hit.value - Holes[0].xyz)), traced, smoothstep(0.0, GRID_FADE, inside));
     }
     if (hit.outcome == SCENE_FELL_IN) return vec3(0.0);
     if (hit.outcome == SCENE_ESCAPED) return skyAt(hit.value);

@@ -52,8 +52,12 @@ object VertexLens {
 	private const val KERR_TABLE_DIVISOR = 6
 	private const val KERR_MARGIN = 1.3f
 
-	/** kerr.glsl's KERR_START: where the table's paths start (or end) at the latest. */
+	/** kerr.glsl's KERR_START: the least the table's paths reach from the hole (r_s). */
 	private const val KERR_START = 80.0
+
+	/** How far the Kerr path table's paths reach from [hole]: past everything drawn (the render distance round the camera). */
+	private fun pathRadius(hole: BlackHole, cameraDistance: Double): Double =
+		maxOf(KERR_START * hole.schwarzschildRadius, cameraDistance + 1.5 * Minecraft.getInstance().gameRenderer.renderDistance)
 
 	/** Spin from which the hole is treated as Kerr (kerr.glsl's MIN_KERR_SPIN): images found on [KerrPaths]' table. */
 	private const val MIN_KERR_SPIN = 0.05
@@ -89,9 +93,16 @@ object VertexLens {
 	@JvmField
 	var skipTable = false
 
-	/** Hides vertices a spinning hole's path table didn't place (debug; GameTests). */
+	/** Bends a spinning hole as if it didn't spin (debug; GameTests). */
 	@JvmField
-	var kerrDebug = false
+	var kerrOff = false
+
+	/**
+	 * Debug (GameTests): 1 hides vertices a spinning hole's path table didn't place; 2 those it placed on paths going
+	 * out, 3 coming in; 0 none.
+	 */
+	@JvmField
+	var kerrDebug = 0
 
 	/** Turns Flywheel's visualization off, so its blocks draw through vanilla renderers (GameTests compare the two). */
 	@JvmField
@@ -129,12 +140,13 @@ object VertexLens {
 		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
 		// A spinning hole: this frame's Kerr path table, which the shaders invert.
 		var kerr = false
-		if (nearest != null && abs(nearest.spin) >= MIN_KERR_SPIN) {
+		if (nearest != null && abs(nearest.spin) >= MIN_KERR_SPIN && !kerrOff) {
 			val holeGame = Vector3f((nearest.x - camera.x).toFloat(), (nearest.y - camera.y).toFloat(), (nearest.z - camera.z).toFloat())
 			val viewToGame = org.joml.Matrix3f().rotation(Quaternionf(minecraft.gameRenderer.mainCamera.rotation()))
 			val window = minecraft.window
 			kerr = KerrPaths.draw(
-				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(), viewToGame,
+				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(),
+				pathRadius(nearest, holeGame.length().toDouble()).toFloat(), viewToGame,
 				KERR_MARGIN / projection.m00(), KERR_MARGIN / projection.m11(),
 				maxOf(16, (window.width * KERR_MARGIN / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * KERR_MARGIN / KERR_TABLE_DIVISOR).toInt()),
 			)
@@ -170,7 +182,7 @@ object VertexLens {
 			} else {
 				data.put(0f).put(0f).put(0f).put(0f)
 			}
-			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(if (kerr) 1f else 0f).put(if (kerrDebug) 1f else 0f)
+			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(if (kerr) 1f else 0f).put(kerrDebug.toFloat())
 			projection.get(data.position(), data)
 			data.position(data.position() + 16)
 			if (hole != null && kerr) {
@@ -190,7 +202,8 @@ object VertexLens {
 				val a = hole.spin * rs / 2
 				val w = dx * dx + dy * dy + dz * dz - a * a
 				val camR = kotlin.math.sqrt(0.5 * w + kotlin.math.sqrt(0.25 * w * w + a * a * dy * dy))
-				data.put(minOf(camR, KERR_START * rs).toFloat()).put((KERR_START * rs).toFloat()).put(0f).put(0f)
+				val reach = pathRadius(hole, kotlin.math.sqrt(dx * dx + dy * dy + dz * dz))
+				data.put(minOf(camR, reach).toFloat()).put(reach.toFloat()).put(0f).put(0f)
 			} else {
 				repeat(24) { data.put(0f) }
 			}
