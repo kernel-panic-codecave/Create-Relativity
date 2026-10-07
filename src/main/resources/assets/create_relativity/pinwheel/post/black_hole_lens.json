@@ -27,7 +27,7 @@
       "width": "q.screen_width / 2",
       "height": "q.screen_height / 2",
       "format": "RGBA32F",
-      "depth": false
+      "depth": true
     },
     "sky_probe": {
       "width": "256",
@@ -88,8 +88,9 @@
       "out": "scene_table"
     },
     {
-      "type": "veil:blit",
-      "shader": "create_relativity:scene_refine",
+      "type": "create_relativity:sparse_march",
+      "mark": "create_relativity:scene_refine",
+      "march": "create_relativity:scene_refine_march",
       "in": "minecraft:main",
       "out": "scene_refine"
     },

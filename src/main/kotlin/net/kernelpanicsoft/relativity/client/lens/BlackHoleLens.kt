@@ -35,7 +35,7 @@ object BlackHoleLens {
 	val PIPELINE = CreateRelativity.id("black_hole_lens")
 	val LOOKUP_TEXTURE = CreateRelativity.id("lens_lookup")
 	private val SHADER = CreateRelativity.id("black_hole_lens")
-	private val TABLE_SHADERS = listOf(CreateRelativity.id("kerr_table"), CreateRelativity.id("scene_table"), CreateRelativity.id("scene_refine"))
+	private val TABLE_SHADERS = listOf(CreateRelativity.id("kerr_table"), CreateRelativity.id("scene_table"), CreateRelativity.id("scene_refine"), CreateRelativity.id("scene_refine_march"))
 
 	/** Must match LUT_SIZE in black_hole_lens.fsh. */
 	private const val LUT_WIDTH = 512
@@ -282,6 +282,7 @@ object BlackHoleLens {
 				shader.setTexture("VoxelLight$suffix", GL12.GL_TEXTURE_3D, grid.light)
 				shader.setTexture("VoxelTint$suffix", GL12.GL_TEXTURE_3D, grid.tint)
 				shader.setTexture("VoxelBricks$suffix", GL12.GL_TEXTURE_3D, grid.bricks)
+				shader.setTexture("VoxelSmallBricks$suffix", GL12.GL_TEXTURE_3D, grid.smallBricks)
 			}
 			shader.setTexture("VoxelQuads", org.lwjgl.opengl.GL31.GL_TEXTURE_BUFFER, LensVoxels.quadTexture)
 			for (slot in 0 until LensVoxels.TEXTURE_SLOTS) {

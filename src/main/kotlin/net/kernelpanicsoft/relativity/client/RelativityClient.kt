@@ -15,6 +15,7 @@ import net.neoforged.neoforge.common.NeoForge
 object RelativityClient {
 	fun init() {
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, SpacetimeDebugRenderer::render)
+		net.kernelpanicsoft.relativity.client.lens.RelativityPostStages.init()
 		BlackHoleLens.init()
 		net.kernelpanicsoft.relativity.client.lens.VertexLens.init()
 		NeoForge.EVENT_BUS.addListener(RenderLivingEvent.Pre::class.java, NoodleRenderer::onRenderLiving)

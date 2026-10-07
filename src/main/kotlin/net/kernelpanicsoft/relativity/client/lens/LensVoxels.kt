@@ -44,6 +44,8 @@ object LensVoxels {
 	/** Cells per side of a brick, the walk's empty-space skip ([Grid.bricks]); [SIZE] / [BRICK] per side. */
 	const val BRICK = 8
 	const val BRICKS = SIZE / BRICK
+	const val SMALL_BRICK = 2
+	const val SMALL_BRICKS = SIZE / SMALL_BRICK
 	const val TEXTURE_SLOTS = 8
 	const val QUAD_TEXELS = 6
 	private const val BUDGET_MILLIS = 3.0
@@ -68,8 +70,13 @@ object LensVoxels {
 		/** Per brick of [BRICK]³ cells, 1 if any holds quads (GL_TEXTURE_3D, R8UI, [BRICKS]³): the walk skips empty ones. */
 		var bricks = 0
 			internal set
+
+		/** The same per [SMALL_BRICK]³ cells ([SMALL_BRICKS]³), inside bricks that aren't empty. */
+		var smallBricks = 0
+			internal set
 		internal val occupied = java.util.BitSet(SIZE * SIZE * SIZE)
 		internal val brickCounts = IntArray(BRICKS * BRICKS * BRICKS)
+		internal val smallBrickCounts = IntArray(SMALL_BRICKS * SMALL_BRICKS * SMALL_BRICKS)
 		internal var bricksDirty = true
 
 		/** Records whether cell (x, y, z) holds quads, keeping its brick's count. */
@@ -77,7 +84,9 @@ object LensVoxels {
 			val index = (z * SIZE + y) * SIZE + x
 			if (occupied[index] == filled) return
 			occupied[index] = filled
-			brickCounts[((z / BRICK) * BRICKS + y / BRICK) * BRICKS + x / BRICK] += if (filled) 1 else -1
+			val change = if (filled) 1 else -1
+			brickCounts[((z / BRICK) * BRICKS + y / BRICK) * BRICKS + x / BRICK] += change
+			smallBrickCounts[((z / SMALL_BRICK) * SMALL_BRICKS + y / SMALL_BRICK) * SMALL_BRICKS + x / SMALL_BRICK] += change
 			bricksDirty = true
 		}
 
@@ -212,6 +221,7 @@ object LensVoxels {
 		grid.dirty.clear()
 		grid.occupied.clear()
 		grid.brickCounts.fill(0)
+		grid.smallBrickCounts.fill(0)
 		grid.bricksDirty = true
 	}
 
@@ -390,17 +400,19 @@ object LensVoxels {
 	private fun uploadBricks(grid: Grid) {
 		if (!grid.bricksDirty) return
 		grid.bricksDirty = false
-		val data = MemoryUtil.memAlloc(BRICKS * BRICKS * BRICKS)
-		try {
-			for (i in grid.brickCounts.indices) data.put(i, if (grid.brickCounts[i] > 0) 1 else 0)
-			GL11.glBindTexture(GL12.GL_TEXTURE_3D, grid.bricks)
-			unpackDefaults()
-			GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1)
-			GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, 0, BRICKS, BRICKS, BRICKS, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, data)
-			GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4)
-			GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
-		} finally {
-			MemoryUtil.memFree(data)
+		for ((texture, counts, size) in listOf(Triple(grid.bricks, grid.brickCounts, BRICKS), Triple(grid.smallBricks, grid.smallBrickCounts, SMALL_BRICKS))) {
+			val data = MemoryUtil.memAlloc(size * size * size)
+			try {
+				for (i in counts.indices) data.put(i, if (counts[i] > 0) 1 else 0)
+				GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture)
+				unpackDefaults()
+				GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1)
+				GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, 0, size, size, size, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, data)
+				GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4)
+				GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
+			} finally {
+				MemoryUtil.memFree(data)
+			}
 		}
 	}
 
@@ -485,6 +497,7 @@ object LensVoxels {
 			grid.light = texture3d(GL30.GL_RG8, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, GL11.GL_LINEAR)
 			grid.tint = texture3d(GL30.GL_RG32UI, GL30.GL_RG_INTEGER, GL11.GL_UNSIGNED_INT)
 			grid.bricks = texture3d(GL30.GL_R8UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, size = BRICKS)
+			grid.smallBricks = texture3d(GL30.GL_R8UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, size = SMALL_BRICKS)
 		}
 		quadBuffer = GL15.glGenBuffers()
 		GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, quadBuffer)

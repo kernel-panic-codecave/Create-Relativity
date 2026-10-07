@@ -352,6 +352,10 @@ class LensClientGameTest {
 			waitTicks(40)
 			settle()
 			val kerrShot = takeScreenshot("kerr_vertex")
+			runOnClient { BlackHoleLens.profileFlags = 1024 }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_coarse") // the half-resolution table never marching (timing / quality)
+			runOnClient { BlackHoleLens.profileFlags = 0 }
 			// Against the CPU trace of the same view (fog-free range only: past it colours fade into the fog).
 			run {
 				val columns = 160

@@ -23,8 +23,10 @@ uniform usampler3D VoxelTint;  // LensVoxels' tint grid: block (r) and fluid (g)
 uniform sampler3D VoxelLight;   // LensVoxels' light grid: sky (r) and block (g) light per fine cell, 0-15 as 0-1
 uniform vec3 VoxelOrigin;       // the grid's minimum corner, relative to the camera
 uniform usampler3D VoxelBricks; // LensVoxels' brick occupancy: per VOXEL_BRICK^3 cells, 1 if any holds quads
+uniform usampler3D VoxelSmallBricks; // the same per VOXEL_SMALL_BRICK^3 cells
 uniform usampler3D VoxelsBehind;    // the same grids past the hole, away from the camera (LensVoxels.behind)
 uniform usampler3D VoxelBricksBehind;
+uniform usampler3D VoxelSmallBricksBehind;
 uniform usampler3D VoxelTintBehind;
 uniform sampler3D VoxelLightBehind;
 uniform vec3 VoxelOriginBehind;
@@ -162,6 +164,7 @@ const int SCENE_VOXEL_BEHIND = 12; // 12..17: the same, in the grid past the hol
 const int VOXEL_SIZE = 128;   // LensVoxels.SIZE
 const int VOXEL_STEPS = 48;   // most cells walked per path step (an empty brick skipped counts as one)
 const int VOXEL_BRICK = 8;    // LensVoxels.BRICK
+const int VOXEL_SMALL_BRICK = 2; // LensVoxels.SMALL_BRICK
 const int QUAD_TEXELS = 6;    // LensVoxels.QUAD_TEXELS
 const int MAX_CELL_QUADS = 64;
 
@@ -343,7 +346,8 @@ int faceOf(vec3 n) {
 
 // The first shown quad of one grid's cells (minimum corner origin) that segment a -> a + d meets: t along it (0 .. 1)
 // and its face normal (toward the ray).
-bool gridHit(usampler3D cells, usampler3D bricks, vec3 origin, vec3 a, vec3 d, out float tHit, out vec3 normal) {
+bool gridHit(usampler3D cells, usampler3D bricks, usampler3D smallBricks, vec3 origin, vec3 a, vec3 d, out float tHit,
+        out vec3 normal) {
     Walk w;
     float exit;
     vec3 g0 = a - origin;
@@ -351,10 +355,13 @@ bool gridHit(usampler3D cells, usampler3D bricks, vec3 origin, vec3 a, vec3 d, o
     vec3 inv = vec3(w.stepDir) * w.delta;
     float nudge = 1e-4 / max(length(d), 1e-6); // a ten-thousandth of a block, in t
     for (int n = 0; n < VOXEL_STEPS; n += 1) {
-        // An empty brick: on to where the segment leaves it.
-        if (texelFetch(bricks, w.cell / VOXEL_BRICK, 0).r == 0u) {
-            vec3 low = vec3(w.cell / VOXEL_BRICK * VOXEL_BRICK);
-            vec3 far = mix(low, low + float(VOXEL_BRICK), step(0.0, vec3(w.stepDir)));
+        // An empty brick (large, else small): on to where the segment leaves it.
+        int skip = 0;
+        if (texelFetch(bricks, w.cell / VOXEL_BRICK, 0).r == 0u) skip = VOXEL_BRICK;
+        else if (texelFetch(smallBricks, w.cell / VOXEL_SMALL_BRICK, 0).r == 0u) skip = VOXEL_SMALL_BRICK;
+        if (skip > 0) {
+            vec3 low = vec3(w.cell / skip * skip);
+            vec3 far = mix(low, low + float(skip), step(0.0, vec3(w.stepDir)));
             vec3 tFar = (far - g0) * inv;
             float leave = min(min(tFar.x, tFar.y), tFar.z);
             if (leave >= exit) break;
@@ -383,7 +390,7 @@ bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
     vec3 nMain;
     float tBehind;
     vec3 nBehind;
-    bool main = gridHit(Voxels, VoxelBricks, VoxelOrigin, a, d, tMain, nMain);
+    bool main = gridHit(Voxels, VoxelBricks, VoxelSmallBricks, VoxelOrigin, a, d, tMain, nMain);
     // The grids overlap (and hold the same blocks there): the one past the hole is walked only for a segment leaving
     // the main one's box, and only up to the main one's hit.
     vec3 ra = a - VoxelOrigin;
@@ -392,7 +399,7 @@ bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
     bool behind = false;
     if (VoxelBehindReady == 1 && !insideMain) {
         float reach = main ? tMain : 1.0;
-        behind = gridHit(VoxelsBehind, VoxelBricksBehind, VoxelOriginBehind, a, d * reach, tBehind, nBehind);
+        behind = gridHit(VoxelsBehind, VoxelBricksBehind, VoxelSmallBricksBehind, VoxelOriginBehind, a, d * reach, tBehind, nBehind);
         tBehind *= reach;
     }
     if (!main && !behind) return false;
