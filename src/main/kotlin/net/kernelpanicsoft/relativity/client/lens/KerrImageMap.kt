@@ -75,12 +75,18 @@ object KerrImageMap {
 		previousValid = false
 	}
 
+	/** Layers drawn since the path table last [changed][draw]: once all are, the map stands until it changes again. */
+	private var drawnSinceChange = 0
+
 	/**
 	 * Draws this frame's map for the hole the vertex lens's block describes (VertexLens uploads it first, with the
-	 * Kerr path table drawn), the block and its samplers bound. False if it can't.
+	 * Kerr path table drawn), the block and its samplers bound, if the table [changed] (the camera moved relative to the
+	 * hole) or the map isn't whole yet. It doesn't depend on where the camera looks. False if it can't.
 	 */
-	fun draw(): Boolean {
+	fun draw(changed: Boolean): Boolean {
 		if (failed || !ensureProgram()) return false
+		if (changed || !previousValid) drawnSinceChange = 0
+		if (drawnSinceChange >= DEPTH) return true
 		ensureTexture()
 		if (framebuffer == 0) framebuffer = GL30.glGenFramebuffers()
 		val target = 1 - current
@@ -128,6 +134,7 @@ object KerrImageMap {
 				GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
 			}
 			nextLayer = (nextLayer + redraw) % DEPTH
+			drawnSinceChange += redraw
 			GL11.glBindTexture(GL12.GL_TEXTURE_3D, previousBound)
 			GlStateManager._activeTexture(GL13.GL_TEXTURE1)
 			GL11.glBindTexture(GL12.GL_TEXTURE_3D, previousBound1)

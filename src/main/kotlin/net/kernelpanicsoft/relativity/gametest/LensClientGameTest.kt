@@ -457,19 +457,6 @@ class LensClientGameTest {
 				found.sortedByDescending { it.first }.take(5).map { it.second }
 			}
 			assertTrue(stretched.isEmpty()) { "Stretched floor quads: $stretched" }
-			// The GPU's path table and its parameters, for KerrVertexLensTest to check against its CPU mirror.
-			runOnClient {
-				val data = net.kernelpanicsoft.relativity.client.lens.KerrPaths.readBack()
-				val out = java.io.DataOutputStream(java.io.BufferedOutputStream(Files.newOutputStream(Path.of("kerr_paths_dump.bin"))))
-				out.use {
-					it.writeInt(net.kernelpanicsoft.relativity.client.lens.KerrPaths.width)
-					it.writeInt(net.kernelpanicsoft.relativity.client.lens.KerrPaths.height)
-					for (v in net.kernelpanicsoft.relativity.client.lens.KerrPaths.lastDraw) it.writeFloat(v)
-					val m = net.kernelpanicsoft.relativity.client.lens.KerrPaths.lastViewToGame
-					for (c in 0..2) for (r in 0..2) it.writeFloat(m.get(c, r))
-					for (v in data) it.writeFloat(v)
-				}
-			}
 			runOnClient { VertexLens.kerrDebug = 4 }
 			waitTicks(10)
 			takeScreenshot("kerr_vertex_nogrid_fallback")
@@ -594,6 +581,20 @@ class LensClientGameTest {
 				waitTicks(30)
 				return (0 until 3).map { waitTicks(20); computeOnClient { it.fps }.toDouble() }.average()
 			}
+			// The same while the camera moves (a few centimetres a tick, back and forth), so what depends on where it
+			// is relative to the hole is redrawn.
+			fun ClientGameTestContext.fpsMoving(): Double {
+				val start = computeOnClient { it.player!!.position() }
+				val samples = ArrayList<Double>()
+				for (tick in 0 until 90) {
+					val offset = 0.05 * (tick % 20 - 10)
+					runOnClient { it.player!!.setPos(start.x, start.y + offset, start.z) }
+					waitTick()
+					if (tick >= 30 && tick % 20 == 0) samples += computeOnClient { it.fps }.toDouble()
+				}
+				runOnClient { it.player!!.setPos(start.x, start.y, start.z) }
+				return samples.average()
+			}
 			command("relativity bh clear")
 			command("tp @a -14.5 -54 0.5 -90 5")
 			settle()
@@ -623,13 +624,8 @@ class LensClientGameTest {
 				// The parts: the post pass cut to a copy; then the vertex lens's Kerr solve off, then the Kerr path pass too.
 				runOnClient { BlackHoleLens.timeGpu = true }
 				val fpsLens = fps()
-				var kerrMs = computeOnClient { "Kerr paths %.1f ms, image map %.1f ms".format(VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis) }
-				for (mode in 1..2) {
-					runOnClient { KerrImageMap.debugMode = mode }
-					waitTicks(40)
-					kerrMs += computeOnClient { "; map mode %d %.1f ms".format(mode, VertexLens.mapTimer.millis) }
-				}
-				runOnClient { KerrImageMap.debugMode = 0 }
+				val fpsLensMoving = fpsMoving()
+				val kerrMs = computeOnClient { "last drawn: Kerr paths %.1f ms, image map %.1f ms".format(VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis) }
 				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val fpsVertex = fps()
 				runOnClient { VertexLens.kerrSolveOff = true }
@@ -637,7 +633,7 @@ class LensClientGameTest {
 				runOnClient { VertexLens.kerrSolveOff = false; VertexLens.kerrOff = true }
 				val fpsSchwarzschild = fps()
 				runOnClient { VertexLens.kerrOff = false; BlackHoleLens.rawFrame = false; BlackHoleLens.skipTables = false }
-				lines += "%s: %.0f fps with the lens; post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f (%s)".format(name, fpsLens, fpsVertex, fpsPaths, fpsSchwarzschild, kerrMs)
+				lines += "%s: %.0f fps with the lens (moving %.0f); post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f (%s)".format(name, fpsLens, fpsLensMoving, fpsVertex, fpsPaths, fpsSchwarzschild, kerrMs)
 				val fixed = time { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val tables = time { BlackHoleLens.rawFrame = true }
 				val lens = time {}

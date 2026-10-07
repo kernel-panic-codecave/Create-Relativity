@@ -9,7 +9,7 @@
 //     w: 1 hides vertices the Kerr table didn't place (debug)
 // [2..5] the level's projection this frame, by column
 // [6] spinning hole (Kerr; [1].z = 1): xyz centre relative to the camera in game axes, w spin a / M
-// [7] the Kerr path table (KerrPaths): tan of its half extents in view x and y, its size in texels
+// [7] the Kerr path table (KerrPaths): zw its size in texels (azimuth, angle from the hole; see relativityTableDir)
 // [8..10] view to game axes (a rotation), by column
 // [11] x: Boyer-Lindquist r where the table's paths start coming in (the camera, or their sphere); y: where they end
 //      going out (their sphere, past everything drawn); z, w: the Kerr image map's inner and outer radius (blocks)
@@ -39,6 +39,64 @@ bool relativityLevelProjection(mat4 proj) {
 }
 
 // ---- Spinning holes: the image found on the Kerr path table (kerr_paths.fsh) by Newton's method ----
+
+// ---- The Kerr path table's directions ----
+// The table covers every direction from the camera, independent of where it looks: texel column x (x + 0.5 at
+// centres, wrapping round) is the azimuth 2 pi x / W round the camera-to-hole line, from game up's side; row y is the
+// angle from that line, alpha(y / H), with RELATIVITY_TABLE_KNEE of the rows within the knee angle (four shadow
+// radii: where images change fastest) and the rest spread out to pi.
+const float RELATIVITY_TABLE_KNEE = 0.6;
+
+float relativityKneeAngle(vec3 hole, float rs) {
+    return min(4.0 * asin(min(2.6 * rs / max(length(hole), 1e-3), 1.0)), 0.6 * 3.14159265);
+}
+
+float relativityAlpha(float u, float knee) {
+    if (u <= RELATIVITY_TABLE_KNEE) return u / RELATIVITY_TABLE_KNEE * knee;
+    return knee + (u - RELATIVITY_TABLE_KNEE) / (1.0 - RELATIVITY_TABLE_KNEE) * (3.14159265 - knee);
+}
+
+// d alpha / d u.
+float relativityAlphaRate(float u, float knee) {
+    return u <= RELATIVITY_TABLE_KNEE ? knee / RELATIVITY_TABLE_KNEE : (3.14159265 - knee) / (1.0 - RELATIVITY_TABLE_KNEE);
+}
+
+float relativityAlphaU(float alpha, float knee) {
+    if (alpha <= knee) return alpha / knee * RELATIVITY_TABLE_KNEE;
+    return RELATIVITY_TABLE_KNEE + (alpha - knee) / (3.14159265 - knee) * (1.0 - RELATIVITY_TABLE_KNEE);
+}
+
+// The table's frame for a hole at hole (camera-relative, game axes): the line to the hole, and the azimuth's zero
+// (game up, made square to it) and quarter turn.
+void relativityTableFrame(vec3 hole, out vec3 axis, out vec3 zero, out vec3 quarter) {
+    axis = normalize(hole);
+    vec3 up = abs(axis.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    zero = normalize(up - dot(up, axis) * axis);
+    quarter = cross(axis, zero);
+}
+
+// The direction (game axes) at table position at (texels) of a table size texels, for a hole at hole with radius rs.
+vec3 relativityTableDir(vec2 at, vec2 size, vec3 hole, float rs) {
+    vec3 axis;
+    vec3 zero;
+    vec3 quarter;
+    relativityTableFrame(hole, axis, zero, quarter);
+    float azimuth = at.x / size.x * 6.28318530718;
+    float alpha = relativityAlpha(clamp(at.y / size.y, 0.0, 1.0), relativityKneeAngle(hole, rs));
+    return cos(alpha) * axis + sin(alpha) * (cos(azimuth) * zero + sin(azimuth) * quarter);
+}
+
+// The table position (texels; x in [0, W)) of direction dir (game axes).
+vec2 relativityTableAt(vec3 dir, vec2 size, vec3 hole, float rs) {
+    vec3 axis;
+    vec3 zero;
+    vec3 quarter;
+    relativityTableFrame(hole, axis, zero, quarter);
+    float alpha = acos(clamp(dot(dir, axis), -1.0, 1.0));
+    float azimuth = atan(dot(dir, quarter), dot(dir, zero));
+    if (azimuth < 0.0) azimuth += 6.28318530718;
+    return vec2(azimuth / 6.28318530718 * size.x, relativityAlphaU(alpha, relativityKneeAngle(hole, rs)) * size.y);
+}
 
 vec2 relativityLastSolve = vec2(-1.0); // debug (KerrSolveCheck): the last found solve's start (0..2) and path position v
 int relativityLastFound = 2; // debug (KerrSolveCheck): the last Kerr solve's outcome (2: none ran)
@@ -78,10 +136,7 @@ vec3 relativityPathAt(ivec2 t, float v, out bool ok) {
 // the hole in its ray's plane (n's taken on the turn nearest the path's), the offset out of the plane, the radius / rP.
 vec3 relativityPathMiss(ivec2 t, vec3 n, float rP, float v, out bool ok) {
     vec3 path = relativityPathAt(t, v, ok);
-    vec2 tanXY = RelativityLensData[7].xy;
-    vec2 size = RelativityLensData[7].zw;
-    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
-    vec3 dir = normalize(viewToGame * vec3(((vec2(t) + 0.5) / size * 2.0 - 1.0) * tanXY, -1.0));
+    vec3 dir = relativityTableDir(vec2(t) + 0.5, RelativityLensData[7].zw, RelativityLensData[6].xyz, RelativityLensData[0].w);
     vec3 e1 = normalize(-RelativityLensData[6].xyz);
     vec3 normal = cross(e1, dir);
     if (dot(normal, normal) < 1e-12) {
@@ -95,22 +150,24 @@ vec3 relativityPathMiss(ivec2 t, vec3 n, float rP, float v, out bool ok) {
     return vec3(path.x - angle, path.y - dot(n, normal), (path.z - rP) / rP);
 }
 
-// The miss at x = (table position in texels, path position v), bilinear between texels.
+// The miss at x = (table position in texels, path position v), bilinear between texels (wrapping round in azimuth).
 vec3 relativityPathImage(vec3 x, vec3 n, float rP, out bool ok) {
-    vec2 size = RelativityLensData[7].zw;
+    ivec2 size = ivec2(RelativityLensData[7].zw);
     vec2 pos = x.xy - 0.5;
     ivec2 b = ivec2(floor(pos));
     vec2 f = pos - vec2(b);
-    ok = all(greaterThanEqual(b, ivec2(0))) && all(lessThan(b + 1, ivec2(size)));
+    ok = b.y >= 0 && b.y + 1 < size.y;
     if (!ok) return vec3(0.0);
+    int x0 = ((b.x % size.x) + size.x) % size.x;
+    int x1 = (x0 + 1) % size.x;
     bool o0;
     bool o1;
     bool o2;
     bool o3;
-    vec3 a = relativityPathMiss(b, n, rP, x.z, o0);
-    vec3 c = relativityPathMiss(b + ivec2(1, 0), n, rP, x.z, o1);
-    vec3 d = relativityPathMiss(b + ivec2(0, 1), n, rP, x.z, o2);
-    vec3 e = relativityPathMiss(b + ivec2(1, 1), n, rP, x.z, o3);
+    vec3 a = relativityPathMiss(ivec2(x0, b.y), n, rP, x.z, o0);
+    vec3 c = relativityPathMiss(ivec2(x1, b.y), n, rP, x.z, o1);
+    vec3 d = relativityPathMiss(ivec2(x0, b.y + 1), n, rP, x.z, o2);
+    vec3 e = relativityPathMiss(ivec2(x1, b.y + 1), n, rP, x.z, o3);
     ok = o0 && o1 && o2 && o3;
     return mix(mix(a, c, f.x), mix(d, e, f.x), f.y);
 }
@@ -168,15 +225,19 @@ bool relativityKerrSolve(inout vec3 x, vec3 n, float rP, out mat3 jacobian, out 
 // d): the point's area per texel squared unlensed over lensed. The solve's Jacobian, with the path position held to
 // the radius (the third residual), maps texels to directions round the hole; near a fold (where two images of the
 // ground meet and merge) it goes singular and the magnification blows up. 0 where it can't be measured.
-float relativityKerrMagnificationOf(mat3 jacobian, float rP, float d) {
+float relativityKerrMagnificationOf(mat3 jacobian, vec2 at, float rP, float d) {
     // At the path's closest approach (v near 0) the radius barely moves with v, so it can't fix v: no measure (0).
     if (abs(jacobian[2].z) < 1e-4) return 0.0;
     // Column c, row r: d miss_r / d x_c. Eliminate x.z through the radius row.
     vec2 cx = jacobian[0].xy - jacobian[2].xy * (jacobian[0].z / jacobian[2].z);
     vec2 cy = jacobian[1].xy - jacobian[2].xy * (jacobian[1].z / jacobian[2].z);
     float lensed = abs(cx.x * cy.y - cx.y * cy.x) * rP * rP;
-    float texel = 2.0 * RelativityLensData[7].x / RelativityLensData[7].z * d;
-    return texel * texel / max(lensed, 1e-30);
+    // The texel's solid angle: its angle step times its azimuth step (both in radians).
+    vec2 size = RelativityLensData[7].zw;
+    float knee = relativityKneeAngle(RelativityLensData[6].xyz, RelativityLensData[0].w);
+    float u = clamp(at.y / size.y, 0.0, 1.0);
+    float area = relativityAlphaRate(u, knee) / size.y * sin(relativityAlpha(u, knee)) * 6.28318530718 / size.x;
+    return area * d * d / max(lensed, 1e-30);
 }
 
 float relativityKerrMagnification(vec3 x, vec3 n, float rP, float d) {
@@ -191,7 +252,7 @@ float relativityKerrMagnification(vec3 x, vec3 n, float rP, float d) {
         jacobian[c] = (relativityPathImage(shifted, n, rP, okShift) - miss) / steps[c];
         if (!okShift) return 0.0;
     }
-    return relativityKerrMagnificationOf(jacobian, rP, d);
+    return relativityKerrMagnificationOf(jacobian, x.xy, rP, d);
 }
 
 // Where along texel t's path radius rP would be, coming in (v < 0) or going out: a starting point for the solve.
@@ -215,7 +276,6 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
 int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out float solvedV) {
     seen = guess;
     solvedV = 99.0;
-    if (guess.z > -1e-3) return 0;
     mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
     vec3 hole = RelativityLensData[6].xyz;
     float a = RelativityLensData[6].w * 0.5 * RelativityLensData[0].w;
@@ -224,11 +284,12 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
     float w = dot(local, local) - a * a;
     float rP = sqrt(max(0.5 * w + sqrt(0.25 * w * w + a * a * local.z * local.z), 1e-12));
     vec3 n = normalize(d);
-    vec2 tanXY = RelativityLensData[7].xy;
     vec2 size = RelativityLensData[7].zw;
-    vec2 start = ((guess.xy / -guess.z) / tanXY * 0.5 + 0.5) * size;
-    bool nearEdge = any(lessThan(start, vec2(32.0))) || any(greaterThan(start, size - 32.0));
-    if (any(lessThan(start, vec2(1.0))) || any(greaterThan(start, size - 1.0))) return 0;
+    float rs = RelativityLensData[0].w;
+    vec2 start = relativityTableAt(viewToGame * guess, size, hole, rs);
+    // Straight away from the hole (the table's far edge), there's hardly any bending: the guess stands.
+    if (start.y > size.y - 2.0) return 0;
+    start.y = max(start.y, 1.0);
     ivec2 at = ivec2(start);
     // Coming in first (the image whose light reaches p first along its path), then going out, then from the closest
     // approach.
@@ -237,18 +298,17 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
     if (abs(warmV) <= 7.0) tries[0] = warmV;
     tries[1] = relativityPathPosition(at, rP, true);
     tries[2] = 0.0;
-    // The image on the same side of the hole (on screen) as the guess: the primary, not the one across the ring.
-    vec3 holeView = transpose(viewToGame) * hole;
-    vec2 holeAt = ((holeView.xy / -min(holeView.z, -1e-3)) / tanXY * 0.5 + 0.5) * size;
+    // The image on the same side of the hole as the guess (within a quarter turn round it): the primary, not the one
+    // across the ring.
     for (int k = 0; k < 3; k += 1) {
         vec3 x = vec3(start, tries[k]);
         mat3 jacobian;
         bool measured;
-        if (relativityKerrSolve(x, n, rP, jacobian, measured) && dot(start - holeAt, x.xy - holeAt) >= 0.0) {
-            seen = normalize(vec3((x.xy / size * 2.0 - 1.0) * tanXY, -1.0));
+        if (relativityKerrSolve(x, n, rP, jacobian, measured) && cos((x.x - start.x) / size.x * 6.28318530718) >= 0.0) {
+            seen = transpose(viewToGame) * relativityTableDir(x.xy, size, hole, rs);
             solvedV = x.z;
             // (The last step's Jacobian is close enough to measure it with; a guess already at the answer has none.)
-            float magnification = measured ? relativityKerrMagnificationOf(jacobian, rP, length(p)) : relativityKerrMagnification(x, n, rP, length(p));
+            float magnification = measured ? relativityKerrMagnificationOf(jacobian, x.xy, rP, length(p)) : relativityKerrMagnification(x, n, rP, length(p));
             relativityLastSolve = vec2(float(k), magnification);
             // At a fold the solve lands between the two merging images, and a triangle reaching such a vertex is
             // stretched across both: hidden, and the strip left to the post pass (as Schwarzschild's near-axis cut).
@@ -258,7 +318,7 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
             return 1;
         }
     }
-    return nearEdge ? 0 : -1;
+    return -1;
 }
 
 // The Schwarzschild image of view-space point p: 1 with seen its view direction; 2 where there's nothing to bend

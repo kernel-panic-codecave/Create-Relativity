@@ -51,14 +51,6 @@ object VertexLens {
 	/** The Kerr image map's sampler (KerrImageMap), on the unit below the path table's. */
 	private const val KERR_MAP_SAMPLER = "RelativityKerrMap"
 
-	/** The Kerr path table: a texel per this many screen pixels, over the view widened by [kerrMargin]. */
-	private const val KERR_TABLE_DIVISOR = 6
-	private const val KERR_MARGIN_DEFAULT = 2.0f
-
-	/** [KERR_MARGIN_DEFAULT]; only GameTests change it (timing). */
-	@JvmField
-	var kerrMargin = KERR_MARGIN_DEFAULT
-
 	/** kerr.glsl's KERR_START: the least the table's paths reach from the hole (r_s). */
 	private const val KERR_START = 80.0
 
@@ -165,14 +157,10 @@ object VertexLens {
 		var kerr = false
 		if (nearest != null && abs(nearest.spin) >= MIN_KERR_SPIN && !kerrOff) {
 			val holeGame = Vector3f((nearest.x - camera.x).toFloat(), (nearest.y - camera.y).toFloat(), (nearest.z - camera.z).toFloat())
-			val viewToGame = org.joml.Matrix3f().rotation(Quaternionf(minecraft.gameRenderer.mainCamera.rotation()))
-			val window = minecraft.window
 			if (BlackHoleLens.timeGpu) pathsTimer.begin()
 			kerr = KerrPaths.draw(
 				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(),
-				pathRadius(nearest, holeGame.length().toDouble()).toFloat(), viewToGame,
-				kerrMargin / projection.m00(), kerrMargin / projection.m11(),
-				maxOf(16, (window.width * kerrMargin / KERR_TABLE_DIVISOR).toInt()), maxOf(16, (window.height * kerrMargin / KERR_TABLE_DIVISOR).toInt()),
+				pathRadius(nearest, holeGame.length().toDouble()).toFloat(),
 			)
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
@@ -191,7 +179,7 @@ object VertexLens {
 			mapHole = nearest?.id
 			if (kerr && !kerrSolveOff) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
-				KerrImageMap.draw()
+				KerrImageMap.draw(KerrPaths.changed)
 				if (BlackHoleLens.timeGpu) mapTimer.end()
 			}
 		}
@@ -229,8 +217,7 @@ object VertexLens {
 				val dy = hole.y - camY
 				val dz = hole.z - camZ
 				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put(hole.spin.toFloat())
-				data.put(kerrMargin / projection.m00()).put(kerrMargin / projection.m11())
-					.put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+				data.put(0f).put(0f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
 					val c = viewToGame.getColumn(column, Vector3f())

@@ -1,4 +1,5 @@
-// Kerr light paths for the vertex lens (KerrPaths.kt; read by vertex_lens_core.glsl): for each table texel, a view ray
+// Kerr light paths for the vertex lens (KerrPaths.kt; read by vertex_lens_core.glsl, which is prepended with kerr.glsl):
+// for each table texel (a direction from the camera, relativityTableDir: every direction, wherever the camera looks), a ray
 // through the spinning hole, followed back in time (kerr.glsl, prepended), recorded as where it is seen from the hole
 // at fixed points along it. A path is parameterised by sigma = +-sqrt(r - r_min) (Boyer-Lindquist r, its closest
 // approach r_min; minus coming in, plus going out), smooth through the closest approach, sampled at
@@ -12,8 +13,7 @@
 uniform vec3 HoleGame;    // camera-relative, game axes
 uniform float HoleRs;
 uniform float HoleSpin;
-uniform mat3 ViewToGame;
-uniform vec2 TableTan;    // tan of the table's half extents in view x and y
+uniform vec2 TableSize;   // texels: azimuth, angle from the hole
 uniform float PathRadius; // where paths start (if the camera's outside it) and end: past everything drawn
 
 in vec2 texCoord;
@@ -75,7 +75,7 @@ void main() {
     Path4 = vec4(0.0); Path5 = vec4(0.0); Path6 = vec4(0.0); Path7 = vec4(0.0);
     float rs = HoleRs;
     if (rs <= 0.0 || abs(HoleSpin) < MIN_KERR_SPIN) return;
-    vec3 dir = normalize(ViewToGame * vec3((texCoord * 2.0 - 1.0) * TableTan, -1.0));
+    vec3 dir = relativityTableDir(gl_FragCoord.xy, TableSize, HoleGame, rs);
     pathE1 = normalize(-HoleGame);
     pathNormal = cross(pathE1, dir);
     if (dot(pathNormal, pathNormal) < 1e-12) return; // straight at the hole: falls in
