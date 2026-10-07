@@ -43,6 +43,8 @@ object KerrPaths {
 	fun draw(holeGame: Vector3f, rs: Float, spin: Float, pathRadius: Float, viewToGame: Matrix3f, tanX: Float, tanY: Float, width: Int, height: Int): Boolean {
 		if (failed || !ensureProgram()) return false
 		ensureTarget(width, height)
+		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, spin, pathRadius, tanX, tanY)
+		lastViewToGame = Matrix3f(viewToGame)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
 		val previousVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)
@@ -81,6 +83,21 @@ object KerrPaths {
 		if (scissor) GlStateManager._enableScissorTest()
 		return true
 	}
+
+	/** The table's texels (layer-major, then rows, RGBA), read back from the GPU (debug; GameTests). */
+	fun readBack(): FloatArray {
+		val data = FloatArray(width * height * LAYERS * 4)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, texture)
+		GL11.glGetTexImage(GL30.GL_TEXTURE_2D_ARRAY, 0, GL11.GL_RGBA, GL11.GL_FLOAT, data)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0)
+		return data
+	}
+
+	/** The parameters of the last [draw] (debug; GameTests): hole (game, camera-relative), r_s, spin, path radius, tan x, tan y. */
+	var lastDraw = FloatArray(0)
+		private set
+	var lastViewToGame = Matrix3f()
+		private set
 
 	/** Makes sure the table texture exists (empty until drawn), for samplers that must always have one. */
 	fun ensureTexture() {

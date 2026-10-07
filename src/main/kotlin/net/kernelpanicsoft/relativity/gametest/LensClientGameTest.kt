@@ -368,6 +368,34 @@ class LensClientGameTest {
 			waitTicks(10)
 			takeScreenshot("kerr_vertex_schwarzschild")
 			runOnClient { VertexLens.kerrOff = false }
+			// The vertex lens alone (no grid trace for the sky), spinning and not: holes it leaves show as sky.
+			runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_nogrid")
+			// The GPU's path table and its parameters, for KerrVertexLensTest to check against its CPU mirror.
+			runOnClient {
+				val data = net.kernelpanicsoft.relativity.client.lens.KerrPaths.readBack()
+				val out = java.io.DataOutputStream(java.io.BufferedOutputStream(Files.newOutputStream(Path.of("kerr_paths_dump.bin"))))
+				out.use {
+					it.writeInt(net.kernelpanicsoft.relativity.client.lens.KerrPaths.width)
+					it.writeInt(net.kernelpanicsoft.relativity.client.lens.KerrPaths.height)
+					for (v in net.kernelpanicsoft.relativity.client.lens.KerrPaths.lastDraw) it.writeFloat(v)
+					val m = net.kernelpanicsoft.relativity.client.lens.KerrPaths.lastViewToGame
+					for (c in 0..2) for (r in 0..2) it.writeFloat(m.get(c, r))
+					for (v in data) it.writeFloat(v)
+				}
+			}
+			runOnClient { VertexLens.kerrDebug = 4 }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_nogrid_fallback")
+			runOnClient { VertexLens.kerrDebug = 0 }
+			runOnClient { VertexLens.kerrOff = true }
+			waitTicks(10)
+			takeScreenshot("kerr_vertex_nogrid_schwarzschild")
+			runOnClient {
+				VertexLens.kerrOff = false
+				BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
+			}
 			// From farther off, where the edge of the path table's reach (and the switch to the Schwarzschild image)
 			// falls on screen.
 			command("tp @a -60.5 -50 0.5 -90 5")
