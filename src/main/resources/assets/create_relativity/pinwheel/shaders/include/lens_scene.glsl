@@ -16,7 +16,12 @@ uniform usampler3D Voxels;      // LensVoxels' fine grid: per one-block cell, it
 uniform samplerBuffer VoxelQuads; // its quads, 6 texels each (LensVoxels.writeQuad), relative to their cell
 uniform usampler3D VoxelTint;  // LensVoxels' tint grid: block (r) and fluid (g) tint per fine cell, RGB bits
 uniform sampler3D VoxelLight;   // LensVoxels' light grid: sky (r) and block (g) light per fine cell, 0-15 as 0-1
-uniform vec3 VoxelOrigin;       // the fine grid's minimum corner, relative to the camera
+uniform vec3 VoxelOrigin;       // the grid's minimum corner, relative to the camera
+uniform usampler3D VoxelsBehind;    // the same grids past the hole, away from the camera (LensVoxels.behind)
+uniform usampler3D VoxelTintBehind;
+uniform sampler3D VoxelLightBehind;
+uniform vec3 VoxelOriginBehind;
+uniform int VoxelBehindReady;       // 1 once filled where it is
 uniform sampler2D VoxelTex0;    // the textures quads sample (LensVoxels.textureSlots)
 uniform sampler2D VoxelTex1;
 uniform sampler2D VoxelTex2;
@@ -128,6 +133,7 @@ const int SCENE_UNBENT = 1;  // the bend can't show: the original pixel
 const int SCENE_ESCAPED = 4;
 const int SCENE_FELL_IN = 5;
 const int SCENE_VOXEL = 6;   // 6..11: a quad of the grid, facing along a face (2 axis, + 1 for +axis)
+const int SCENE_VOXEL_BEHIND = 12; // 12..17: the same, in the grid past the hole
 
 // ---- Geometry round the hole (LensVoxels) ----
 const int VOXEL_SIZE = 128;   // LensVoxels.SIZE
@@ -311,30 +317,43 @@ int faceOf(vec3 n) {
     return face;
 }
 
-// What segment a -> b (camera-relative) first meets of the geometry round the hole (the grid's quads): where (at), and
-// the outcome (SCENE_VOXEL plus the face).
-bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
-    vec3 d = b - a;
+// The first shown quad of one grid's cells (minimum corner origin) that segment a -> a + d meets: t along it (0 .. 1)
+// and its face normal (toward the ray).
+bool gridHit(usampler3D cells, vec3 origin, vec3 a, vec3 d, out float tHit, out vec3 normal) {
     Walk w;
     float exit;
-    if (walkStart(a - VoxelOrigin, d, VOXEL_SIZE, w, exit)) {
-        for (int n = 0; n < VOXEL_STEPS; n += 1) {
-            uint run = texelFetch(Voxels, w.cell, 0).r;
-            float cellExit = min(walkExit(w), exit);
-            if (run != 0u) {
-                vec3 o = a - VoxelOrigin - vec3(w.cell);
-                float t;
-                vec3 normal;
-                if (cellHit(run, o, d, w.t - 1e-5, cellExit + 1e-5, t, normal)) {
-                    at = a + d * t;
-                    outcome = SCENE_VOXEL + faceOf(normal);
-                    return true;
-                }
-            }
-            if (cellExit >= exit || !walkStep(w, VOXEL_SIZE)) break;
+    if (!walkStart(a - origin, d, VOXEL_SIZE, w, exit)) return false;
+    for (int n = 0; n < VOXEL_STEPS; n += 1) {
+        uint run = texelFetch(cells, w.cell, 0).r;
+        float cellExit = min(walkExit(w), exit);
+        if (run != 0u) {
+            vec3 o = a - origin - vec3(w.cell);
+            if (cellHit(run, o, d, w.t - 1e-5, cellExit + 1e-5, tHit, normal)) return true;
         }
+        if (cellExit >= exit || !walkStep(w, VOXEL_SIZE)) break;
     }
     return false;
+}
+
+// What segment a -> b (camera-relative) first meets of the geometry round the hole (the grids' quads, round it and
+// past it): where (at), and the outcome (SCENE_VOXEL, or SCENE_VOXEL_BEHIND, plus the face).
+bool geometryHit(vec3 a, vec3 b, out vec3 at, out int outcome) {
+    vec3 d = b - a;
+    float tMain;
+    vec3 nMain;
+    float tBehind;
+    vec3 nBehind;
+    bool main = gridHit(Voxels, VoxelOrigin, a, d, tMain, nMain);
+    bool behind = VoxelBehindReady == 1 && gridHit(VoxelsBehind, VoxelOriginBehind, a, d, tBehind, nBehind);
+    if (!main && !behind) return false;
+    if (main && (!behind || tMain <= tBehind)) {
+        at = a + d * tMain;
+        outcome = SCENE_VOXEL + faceOf(nMain);
+    } else {
+        at = a + d * tBehind;
+        outcome = SCENE_VOXEL_BEHIND + faceOf(nBehind);
+    }
+    return true;
 }
 
 // Where the bent path of view ray dir (camera-relative) ends up.

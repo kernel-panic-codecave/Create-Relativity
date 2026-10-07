@@ -723,7 +723,7 @@ class LensClientGameTest {
 	/** Waits (up to 30 s) until every chunk section in view is drawn and the lens's grids are in, then a second more. */
 	private fun ClientGameTestContext.settle() {
 		for (i in 0 until 600) {
-			if (computeOnClient { it.levelRenderer.hasRenderedAllSections() && LensVoxels.ready }) break
+			if (computeOnClient { it.levelRenderer.hasRenderedAllSections() && LensVoxels.ready && LensVoxels.behind.ready }) break
 			waitTick()
 		}
 		waitTicks(20)

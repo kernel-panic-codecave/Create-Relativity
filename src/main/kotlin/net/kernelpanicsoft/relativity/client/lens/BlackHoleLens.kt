@@ -268,14 +268,16 @@ object BlackHoleLens {
 		lens?.let {
 			VertexLens.linkProgram(it.program)
 			KerrPaths.ensureTexture()
-			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: LensVoxels.light)
+			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: LensVoxels.main.light)
 			it.setTexture("RelativityKerrPaths", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
 		}
 		val atlas = minecraft.textureManager.getTexture(net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS).id
 		for (shader in listOfNotNull(lens) + tables) {
-			shader.setTexture("Voxels", GL12.GL_TEXTURE_3D, LensVoxels.grid)
-			shader.setTexture("VoxelLight", GL12.GL_TEXTURE_3D, LensVoxels.light)
-			shader.setTexture("VoxelTint", GL12.GL_TEXTURE_3D, LensVoxels.tint)
+			for ((suffix, grid) in listOf("" to LensVoxels.main, "Behind" to LensVoxels.behind)) {
+				shader.setTexture("Voxels$suffix", GL12.GL_TEXTURE_3D, grid.cells)
+				shader.setTexture("VoxelLight$suffix", GL12.GL_TEXTURE_3D, grid.light)
+				shader.setTexture("VoxelTint$suffix", GL12.GL_TEXTURE_3D, grid.tint)
+			}
 			shader.setTexture("VoxelQuads", org.lwjgl.opengl.GL31.GL_TEXTURE_BUFFER, LensVoxels.quadTexture)
 			for (slot in 0 until LensVoxels.TEXTURE_SLOTS) {
 				shader.setTexture("VoxelTex$slot", GL11.GL_TEXTURE_2D, LensVoxels.textureSlots[slot].takeIf { it != 0 } ?: atlas)
@@ -285,13 +287,14 @@ object BlackHoleLens {
 		lens?.setTexture("Lightmap", GL11.GL_TEXTURE_2D, minecraft.textureManager.getTexture(lightmap).id)
 		var source = if (RelativityConfig.Client.Render.traceBlocks) unseen else Unseen.NONE
 		if (source == Unseen.VOXELS) {
-			LensVoxels.update(level, holes.firstOrNull(), minecraft.timer.getGameTimeDeltaPartialTick(false))
-			val origin = LensVoxels.origin
-			if (origin != null) {
-				uniform("VoxelOrigin") {
+			LensVoxels.update(level, holes.firstOrNull(), camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
+			for ((suffix, grid) in listOf("" to LensVoxels.main, "Behind" to LensVoxels.behind)) {
+				val origin = grid.origin ?: continue
+				uniform("VoxelOrigin$suffix") {
 					setVector((origin.x - camera.x).toFloat(), (origin.y - camera.y).toFloat(), (origin.z - camera.z).toFloat())
 				}
 			}
+			uniform("VoxelBehindReady") { setInt(if (LensVoxels.behind.ready) 1 else 0) }
 			if (!LensVoxels.ready) source = Unseen.NONE
 		}
 		uniform("UnseenSource") { setInt(source.ordinal) }

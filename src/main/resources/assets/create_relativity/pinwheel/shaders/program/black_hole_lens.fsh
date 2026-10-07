@@ -293,11 +293,11 @@ vec3 lightmapColor(float sky, float block) {
     return texture(Lightmap, clamp(vec2(block, sky) / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0))).rgb;
 }
 
-// Light at camera-relative point p, from the light grid (linear, so smooth across cells); full sky outside it.
-vec3 lightAt(vec3 p) {
-    vec3 g = (p - VoxelOrigin) / float(VOXEL_SIZE);
+// Light at camera-relative point p, from a light grid (from origin; linear, so smooth across cells); full sky outside it.
+vec3 lightAt(vec3 p, sampler3D light, vec3 origin) {
+    vec3 g = (p - origin) / float(VOXEL_SIZE);
     if (any(lessThan(g, vec3(0.0))) || any(greaterThan(g, vec3(1.0)))) return lightmapColor(15.0, 0.0);
-    vec2 levels = texture(VoxelLight, g).rg * 15.0;
+    vec2 levels = texture(light, g).rg * 15.0;
     return lightmapColor(levels.r, levels.g);
 }
 
@@ -308,22 +308,22 @@ float mipFor(float d) {
 
 // The colour of the quad at `at` (camera-relative), hit facing along `face`: the quad that contains the point in its
 // cell (or the cell across the face; of quads drawn over one another, the later), its pixel there, shaded by its
-// normal (by winding: its front) and lit by the light in front of it.
-vec3 geometryColor(vec3 at, int face) {
+// normal (by winding: its front) and lit by the light in front of it. From one grid's cells, tints and light (origin).
+vec3 geometryColor(vec3 at, int face, usampler3D cells, usampler3D tintGrid, sampler3D light, vec3 origin) {
     int axis = face / 2;
     vec3 n = vec3(0.0);
     n[axis] = -1.0;
     if (face - 2 * axis == 1) n[axis] = 1.0;
     float lod = mipFor(length(at));
     for (int side = 0; side < 2; side += 1) {
-        vec3 g = at - VoxelOrigin - n * (0.002 - 0.004 * float(side));
+        vec3 g = at - origin - n * (0.002 - 0.004 * float(side));
         ivec3 cell = ivec3(floor(g));
         if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(VOXEL_SIZE)))) continue;
-        uint run = texelFetch(Voxels, cell, 0).r;
-        uvec2 tints = texelFetch(VoxelTint, cell, 0).rg;
+        uint run = texelFetch(cells, cell, 0).r;
+        uvec2 tints = texelFetch(tintGrid, cell, 0).rg;
         int start = int(run >> 8u);
         int count = min(int(run & 255u), MAX_CELL_QUADS);
-        vec3 p = at - VoxelOrigin - vec3(cell);
+        vec3 p = at - origin - vec3(cell);
         bool found = false;
         vec3 shown = vec3(0.0);
         for (int i = 0; i < count; i += 1) {
@@ -360,13 +360,13 @@ vec3 geometryColor(vec3 at, int face) {
                 if (bary.x < -0.01 || bary.y < -0.01 || bary.x + bary.y > 1.01) continue;
                 vec3 color;
                 if (!quadPixel(q, k == 1, clamp(bary, 0.0, 1.0), lod, tints, color)) continue;
-                shown = color * faceShade(normal) * lightAt(at + normal * 0.5);
+                shown = color * faceShade(normal) * lightAt(at + normal * 0.5, light, origin);
                 found = true;
                 // Under water (the cell in front holds a tinted fluid): its surface blended over, as the game draws it.
-                vec3 front = at - VoxelOrigin + normal * 0.5;
+                vec3 front = at - origin + normal * 0.5;
                 ivec3 frontCell = ivec3(floor(front));
                 if (all(greaterThanEqual(frontCell, ivec3(0))) && all(lessThan(frontCell, ivec3(VOXEL_SIZE)))) {
-                    uint fluid = texelFetch(VoxelTint, frontCell, 0).g;
+                    uint fluid = texelFetch(tintGrid, frontCell, 0).g;
                     // (The surface is lit as open water: full sky light.)
                     if (fluid != 0xFFFFFFFFu) shown = mix(shown, WaterSurface.rgb * unpackTint(fluid) * lightmapColor(15.0, 0.0), WaterSurface.a);
                 }
@@ -429,8 +429,6 @@ bool drawnAt(vec3 p, out vec3 color) {
     return true;
 }
 
-const float GRID_FADE = 12.0; // blocks before the grid's edge over which traced geometry fades into the sky
-
 bool fromDrawing = false; // debug (LensMode 1): the colour came from the world's drawing (drawnAt)
 
 // The colour a bent path ends on.
@@ -441,11 +439,10 @@ vec3 sceneColor(SceneHit hit, vec4 original) {
             fromDrawing = true;
             return drawn; // shaded (and fogged, tonemapped) as the world itself
         }
-        vec3 traced = linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL), hit.value);
-        // Toward the grid's edge (past it, paths meet nothing: sky), into the sky beyond, rather than a sharp cut.
-        vec3 g = hit.value - VoxelOrigin;
-        float inside = min(min(min(g.x, g.y), g.z), min(min(float(VOXEL_SIZE) - g.x, float(VOXEL_SIZE) - g.y), float(VOXEL_SIZE) - g.z));
-        return mix(skyAt(normalize(hit.value - Holes[0].xyz)), traced, smoothstep(0.0, GRID_FADE, inside));
+        if (hit.outcome >= SCENE_VOXEL_BEHIND) {
+            return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL_BEHIND, VoxelsBehind, VoxelTintBehind, VoxelLightBehind, VoxelOriginBehind), hit.value);
+        }
+        return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL, Voxels, VoxelTint, VoxelLight, VoxelOrigin), hit.value);
     }
     if (hit.outcome == SCENE_FELL_IN) return vec3(0.0);
     if (hit.outcome == SCENE_ESCAPED) return skyAt(hit.value);
