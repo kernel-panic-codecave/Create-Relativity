@@ -17,6 +17,8 @@ void main() {
     if (!skyNear(texCoord, 3.0)) return;
     SceneHit hit;
     SceneHit nearest;
-    if (!sceneTableAt(SceneTable, texCoord, hit, nearest)) hit = marchScene(viewRay(texCoord), 1e30);
+    if (!sceneTableAt(SceneTable, texCoord, hit, nearest)) {
+        hit = (ProfileFlags & 1024) != 0 ? nearest : marchScene(viewRay(texCoord), 1e30); // (timing: 1024 never marches)
+    }
     Table = vec4(hit.value, float(hit.outcome));
 }

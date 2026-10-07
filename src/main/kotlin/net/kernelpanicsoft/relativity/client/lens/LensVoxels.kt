@@ -40,6 +40,10 @@ import kotlin.math.floor
  */
 object LensVoxels {
 	const val SIZE = 128
+
+	/** Cells per side of a brick, the walk's empty-space skip ([Grid.bricks]); [SIZE] / [BRICK] per side. */
+	const val BRICK = 8
+	const val BRICKS = SIZE / BRICK
 	const val TEXTURE_SLOTS = 8
 	const val QUAD_TEXELS = 6
 	private const val BUDGET_MILLIS = 3.0
@@ -60,6 +64,22 @@ object LensVoxels {
 			internal set
 		var tint = 0
 			internal set
+
+		/** Per brick of [BRICK]³ cells, 1 if any holds quads (GL_TEXTURE_3D, R8UI, [BRICKS]³): the walk skips empty ones. */
+		var bricks = 0
+			internal set
+		internal val occupied = java.util.BitSet(SIZE * SIZE * SIZE)
+		internal val brickCounts = IntArray(BRICKS * BRICKS * BRICKS)
+		internal var bricksDirty = true
+
+		/** Records whether cell (x, y, z) holds quads, keeping its brick's count. */
+		internal fun mark(x: Int, y: Int, z: Int, filled: Boolean) {
+			val index = (z * SIZE + y) * SIZE + x
+			if (occupied[index] == filled) return
+			occupied[index] = filled
+			brickCounts[((z / BRICK) * BRICKS + y / BRICK) * BRICKS + x / BRICK] += if (filled) 1 else -1
+			bricksDirty = true
+		}
 
 		/** The minimum corner (world block position), or null with no hole. */
 		var origin: BlockPos? = null
@@ -172,6 +192,7 @@ object LensVoxels {
 			}
 			repeat(minOf(ENTITIES_PER_FRAME, entities.size)) { recordNextEntity(level, partialTick) }
 			uploadQuads()
+			for (grid in listOf(main, behind)) uploadBricks(grid)
 		} finally {
 			updateMillis = (System.nanoTime() - started) / 1e6
 		}
@@ -189,6 +210,9 @@ object LensVoxels {
 		grid.origin = corner
 		grid.filled = 0
 		grid.dirty.clear()
+		grid.occupied.clear()
+		grid.brickCounts.fill(0)
+		grid.bricksDirty = true
 	}
 
 	/** Reads [grid]'s slice [z]: each cell's run (a block entity's slab where it draws), from the chunk sections. */
@@ -217,6 +241,7 @@ object LensVoxels {
 			val y = BlockPos.getY(key) - corner.y
 			if (BlockPos.getZ(key) == worldZ && x in 0 until SIZE && y in 0 until SIZE) gridSlice.put(y * SIZE + x, slabRun(slab))
 		}
+		for (i in 0 until SIZE * SIZE) grid.mark(i % SIZE, i / SIZE, z, gridSlice.get(i) != 0)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, grid.cells)
 		unpackDefaults()
 		GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, z, SIZE, SIZE, 1, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, gridSlice)
@@ -361,7 +386,26 @@ object LensVoxels {
 		}
 	}
 
+	/** Uploads [grid]'s brick occupancy if it changed. */
+	private fun uploadBricks(grid: Grid) {
+		if (!grid.bricksDirty) return
+		grid.bricksDirty = false
+		val data = MemoryUtil.memAlloc(BRICKS * BRICKS * BRICKS)
+		try {
+			for (i in grid.brickCounts.indices) data.put(i, if (grid.brickCounts[i] > 0) 1 else 0)
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, grid.bricks)
+			unpackDefaults()
+			GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1)
+			GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, 0, BRICKS, BRICKS, BRICKS, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, data)
+			GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4)
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
+		} finally {
+			MemoryUtil.memFree(data)
+		}
+	}
+
 	private fun setCell(x: Int, y: Int, z: Int, run: Int) {
+		main.mark(x, y, z, run != 0)
 		val one = MemoryUtil.memAllocInt(1)
 		try {
 			one.put(0, run)
@@ -440,6 +484,7 @@ object LensVoxels {
 			grid.cells = texture3d(GL30.GL_R32UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT)
 			grid.light = texture3d(GL30.GL_RG8, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, GL11.GL_LINEAR)
 			grid.tint = texture3d(GL30.GL_RG32UI, GL30.GL_RG_INTEGER, GL11.GL_UNSIGNED_INT)
+			grid.bricks = texture3d(GL30.GL_R8UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, size = BRICKS)
 		}
 		quadBuffer = GL15.glGenBuffers()
 		GL15.glBindBuffer(GL31.GL_TEXTURE_BUFFER, quadBuffer)
@@ -451,10 +496,10 @@ object LensVoxels {
 		GL11.glBindTexture(GL31.GL_TEXTURE_BUFFER, 0)
 	}
 
-	private fun texture3d(internalFormat: Int, format: Int, type: Int, filter: Int = GL11.GL_NEAREST): Int {
+	private fun texture3d(internalFormat: Int, format: Int, type: Int, filter: Int = GL11.GL_NEAREST, size: Int = SIZE): Int {
 		val id = GL11.glGenTextures()
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, id)
-		GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, internalFormat, SIZE, SIZE, SIZE, 0, format, type, null as java.nio.ByteBuffer?)
+		GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, internalFormat, size, size, size, 0, format, type, null as java.nio.ByteBuffer?)
 		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, filter)
 		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, filter)
 		GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE)

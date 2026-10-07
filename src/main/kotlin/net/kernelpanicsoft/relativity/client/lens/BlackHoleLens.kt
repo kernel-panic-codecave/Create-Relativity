@@ -281,6 +281,7 @@ object BlackHoleLens {
 				shader.setTexture("Voxels$suffix", GL12.GL_TEXTURE_3D, grid.cells)
 				shader.setTexture("VoxelLight$suffix", GL12.GL_TEXTURE_3D, grid.light)
 				shader.setTexture("VoxelTint$suffix", GL12.GL_TEXTURE_3D, grid.tint)
+				shader.setTexture("VoxelBricks$suffix", GL12.GL_TEXTURE_3D, grid.bricks)
 			}
 			shader.setTexture("VoxelQuads", org.lwjgl.opengl.GL31.GL_TEXTURE_BUFFER, LensVoxels.quadTexture)
 			for (slot in 0 until LensVoxels.TEXTURE_SLOTS) {
