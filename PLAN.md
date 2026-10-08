@@ -304,6 +304,10 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
   rotated by the mouth orientation transform. Sable sub-levels go through as a whole (needs a Sable teleport API, see
   risks). Tidal forces at the throat stay below human tolerance if b0 is big enough. If the throat is too small, you get
   spaghettified going through.
+- **Trains through wormholes**: Create already runs trains through Nether portals (portal tracks, with an API for other
+  portal types). A wormhole mouth registers as one, so track laid into one mouth continues out of the other, across
+  dimensions too; the train graph gets an edge through the throat. Riders see through the throat with the lens (§9.4),
+  and the train feels the throat's tides and the mass passing through counts against stability.
 - **Stability**: the mouths use up exotic matter per tick, and more per unit mass passing through. If the supply runs
   out, the throat pinches shut (the Ellis → Schwarzschild collapse is scripted: anything inside ends up in a small BH. Fun.)
 - **Time machine (stretch)**: move one mouth at relativistic speed and bring it back. Its proper time lags, so the mouths
