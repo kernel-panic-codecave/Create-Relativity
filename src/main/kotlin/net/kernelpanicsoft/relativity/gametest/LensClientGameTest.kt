@@ -322,133 +322,6 @@ class LensClientGameTest {
 	}
 
 	/**
-	 * The two lens modes, vertex (the world drawn bent, the post pass filling what it can't place) and screen-space (the
-	 * world drawn straight, every bent pixel traced), should give the same picture. For a few views round holes with and
-	 * without spin, both are shot and compared pixel by pixel: the share of pixels that differ visibly is logged, and
-	 * a picture of where (white).
-	 */
-	@ClientGameTest
-	fun ClientGameTestContext.lensModesMatch() {
-		if (!ClientTestInput.selected("lensModesMatch")) return
-		runOnClient { minecraft ->
-			minecraft.options.renderDistance().set(8)
-			minecraft.options.hideGui = true
-			SpacetimeDebugRenderer.hidden = true
-			minecraft.options.bobView().set(false)
-		}
-		withTestWorld {
-			waitTicks(60)
-			for (command in listOf(
-				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
-				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
-				"gamerule relativityBlackHoleGrowth false",
-			)) command(command)
-			server.runOnServer { minecraft ->
-				val level = minecraft.overworld()
-				for (x in -80..48) for (z in -48..48) {
-					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
-					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
-				}
-				for ((x, z) in listOf(6 to 0, 12 to 6, 12 to -6, -6 to 8, -6 to -8)) for (y in -60..-56) level.setBlock(BlockPos(x, y, z), Blocks.RED_CONCRETE.defaultBlockState(), 2)
-			}
-			command("tick freeze")
-			val lines = ArrayList<String>()
-			for ((name, hole, at) in listOf(
-				Triple("small", "0.5 -54 0.5 2 0", "-14.5 -54 0.5 -90 10"),
-				Triple("small_spin", "0.5 -54 0.5 2 0.9", "-14.5 -54 0.5 -90 10"),
-				Triple("small_above", "0.5 -54 0.5 2 0.9", "-10.5 -44 0.5 -90 40"),
-				Triple("large_spin", "0.5 -54 0.5 6 0.9", "-20.5 -54 0.5 -90 5"),
-			)) {
-				command("relativity bh clear")
-				command("relativity bh create $hole")
-				command("tp @a $at")
-				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
-				waitTicks(40)
-				settle()
-				runOnClient { VertexLens.enabled = false }
-				waitTicks(30)
-				val screen = takeScreenshot("modes_${name}_screen")
-				runOnClient { VertexLens.enabled = true }
-				waitTicks(30)
-				settle()
-				val vertex = takeScreenshot("modes_${name}_vertex")
-				// The pillars' corners (x, z: -6, 8 and -6, -8; y -60 .. -55): the image map's code and alpha against a
-				// direct solve (debug).
-				if (name == "small_spin") {
-					val probe = computeOnClient { minecraft ->
-						val camera = minecraft.gameRenderer.mainCamera
-						val view = org.joml.Quaternionf(camera.rotation()).conjugate()
-						val corners = ArrayList<Triple<Int, Int, Int>>()
-						for ((px, pz) in listOf(-6 to 8, -6 to -8)) for (dx in 0..1) for (dz in 0..1) for (y in -60..-55) corners += Triple(px + dx, y, pz + dz)
-						val points = corners.map { (x, y, z) ->
-							val v = view.transform(org.joml.Vector3f((x - camera.position.x).toFloat(), (y - camera.position.y).toFloat(), (z - camera.position.z).toFloat()))
-							floatArrayOf(v.x, v.y, v.z)
-						}
-						val mapped = KerrSolveCheck.run(points, VertexLens.lastProjection)
-						val alpha = KerrSolveCheck.run(points, VertexLens.lastProjection, mapAlpha = true)
-						val solved = KerrSolveCheck.run(points, VertexLens.lastProjection, direct = true)
-						corners.indices.filter { alpha[it][0] < 0.999f || solved[it][0].toInt() != 1 }.joinToString("\n") { i ->
-							"${corners[i]}: map ${mapped[i][0].toInt()} alpha %.2f (nearest %.2f) direct %d magnification %.1f".format(alpha[i][0], alpha[i][1], solved[i][0].toInt(), solved[i][3])
-						}
-					}
-					CreateRelativity.LOGGER.info("Pillar corners the map doesn't place:\n{}", probe)
-				}
-				runOnClient { VertexLens.enabled = false }
-				val (strict, loose) = imageDifference(screen, vertex, Path.of("screenshots", "modes_${name}_diff.png"))
-				lines += "%s: %.2f%% of pixels differ, %.2f%% beyond 2 px".format(name, strict * 100, loose * 100)
-			}
-			CreateRelativity.LOGGER.info("Lens modes, vertex vs screen-space:\n{}", lines.joinToString("\n"))
-		}
-	}
-
-	/**
-	 * Share of pixels whose colours differ visibly (any channel by over 24 of 255) between two shots of the same size, and
-	 * the share that differ from every pixel within [slack] of them in the other shot too (edges a pixel or two apart
-	 * don't count); a picture of where (white: both; grey: the strict test only) goes to [out].
-	 */
-	private fun imageDifference(a: Path, b: Path, out: Path, slack: Int = 2): Pair<Double, Double> =
-		Files.newInputStream(a).use { NativeImage.read(it) }.use { first ->
-			Files.newInputStream(b).use { NativeImage.read(it) }.use { second ->
-				NativeImage(first.width, first.height, false).use { diff ->
-					fun far(p: Int, q: Int): Boolean {
-						for (shift in intArrayOf(0, 8, 16)) if (kotlin.math.abs(((p shr shift) and 0xFF) - ((q shr shift) and 0xFF)) > 24) return true
-						return false
-					}
-					// No pixel of [image] within slack of (x, y) matches colour p.
-					fun unmatched(p: Int, image: NativeImage, x: Int, y: Int): Boolean {
-						for (dy in -slack..slack) for (dx in -slack..slack) {
-							val u = x + dx
-							val v = y + dy
-							if (u < 0 || v < 0 || u >= image.width || v >= image.height) continue
-							if (!far(p, image.getPixelRGBA(u, v))) return false
-						}
-						return true
-					}
-					var strict = 0L
-					var loose = 0L
-					for (y in 0 until first.height) for (x in 0 until first.width) {
-						val p = first.getPixelRGBA(x, y)
-						val q = second.getPixelRGBA(x, y)
-						var color = (0xFF shl 24) or ((p and 0xFEFEFE) shr 2)
-						if (far(p, q)) {
-							strict += 1
-							color = 0xFF808080.toInt()
-							if (unmatched(p, second, x, y) || unmatched(q, first, x, y)) {
-								loose += 1
-								color = -1
-							}
-						}
-						diff.setPixelRGBA(x, y, color)
-					}
-					Files.createDirectories(out.parent)
-					diff.writeToFile(out)
-					val all = (first.width.toLong() * first.height).toDouble()
-					strict / all to loose / all
-				}
-			}
-		}
-
-	/**
 	 * Close to a large spinning hole (r_s 6, spin 0.9, the camera 3.5 r_s out on a plain floor): the vertex lens alone
 	 * (the post pass cut to a copy) and the whole lens, and a map of which floor corners the Kerr image map places,
 	 * hides, or leaves to the Schwarzschild image.
@@ -456,7 +329,6 @@ class LensClientGameTest {
 	@ClientGameTest
 	fun ClientGameTestContext.kerrClose() {
 		if (!ClientTestInput.selected("kerrClose")) return
-		runOnClient { VertexLens.enabled = true } // what this test looks at
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(12)
 			minecraft.options.hideGui = true
@@ -623,7 +495,6 @@ class LensClientGameTest {
 	@ClientGameTest
 	fun ClientGameTestContext.kerrVertex() {
 		if (!ClientTestInput.selected("kerrVertex")) return
-		runOnClient { VertexLens.enabled = true } // what this test looks at
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(6)
 			minecraft.options.hideGui = true
@@ -1169,7 +1040,6 @@ class LensClientGameTest {
 				VertexLens.kerrSolveOff = false
 				VertexLens.kerrDebug = 0
 				KerrImageMap.debugMode = 0
-				VertexLens.enabled = false
 			}
 			world.close()
 			runOnClient { ClientTestInput.unlock(it) }

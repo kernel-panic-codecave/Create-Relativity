@@ -112,16 +112,8 @@ object VertexLens {
 	@Volatile
 	var flywheelOff = false
 
-	/**
-	 * Whether the world is drawn through the vertex lens. Off: it's drawn straight, and the post pass (BlackHoleLens)
-	 * traces every pixel whose light bends visibly. Kept switchable while the two are compared.
-	 */
-	@JvmField
-	@Volatile
-	var enabled = false
-
 	private val wanted: Boolean
-		get() = RelativityConfig.Client.Render.lensing && enabled
+		get() = RelativityConfig.Client.Render.lensing
 
 	private fun onRenderStage(event: RenderLevelStageEvent) {
 		when (event.stage) {

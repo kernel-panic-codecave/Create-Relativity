@@ -122,7 +122,16 @@ SR kinematics:
   computed off-thread and rebuilt only when sources change (they move or grow). Observer-independent, so it caches
   well. The GPU then follows light through the field instead of closed-form Schwarzschild/Kerr, so several holes, moving
   holes, gravity generators (§10) and other sources share one code path for lensing, physics and the debug view. The
-  per-observer parts (path tables, image map, §9.2) stay as they are.
+  per-observer parts (path tables, image map, §9.2) stay as they are, but one general tracer and image map replace the
+  Schwarzschild-table / Kerr-map split (and the seams and fallbacks between them).
+  - **The full metric, not a potential**: lapse, shift and spatial metric per cell (3+1). A warp drive (§8a) is mostly
+    shift (space flowing past), which a scalar potential can't hold.
+  - **No assumption that gravity attracts**: negative energy density (wormholes, warp bubbles) defocuses light, so images
+    can shrink or vanish instead of multiplying. "Settled", "falls in", and the shadow, ring and fold handling are
+    detected along each path, never assumed.
+  - **Topology**: a path through a wormhole throat continues at the other mouth, possibly in another dimension; the
+    tracer hands position and direction across, and the post pass sees the far side through that mouth's capture (§9.4).
+    The vertex lens can't place what's seen through a throat, so that's the post pass's.
 
 ### Spacetime debug view (F3)
 - A new F3 toggle, next to F3+G's chunk borders: a **3D grid warped by spacetime** round every source (frame dragging
