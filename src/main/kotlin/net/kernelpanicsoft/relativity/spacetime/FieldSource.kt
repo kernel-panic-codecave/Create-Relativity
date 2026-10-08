@@ -20,6 +20,16 @@ sealed interface FieldSource {
 	fun strengthAt(position: Vector3dc): Double
 
 	/**
+	 * Sampled on the chunk-section grid ([FieldGrid]) within this many blocks of [gridCentre], 0 if never (it stays
+	 * analytic everywhere: moving sources, whose grid would go stale each tick). Past the reach it's analytic too.
+	 */
+	val gridReach: Double get() = 0.0
+	val gridCentre: Vector3dc get() = org.joml.Vector3d()
+
+	/** The lattice spacing (blocks) a section whose nearest point is [distance] from [gridCentre] needs: finer near it. */
+	fun gridSpacing(distance: Double): Double = 1.0
+
+	/**
 	 * A weak-field mass of [mass] (geometric, blocks: `M = G m / c²`) at [center], either sign: negative pushes matter and
 	 * light away. [softening] keeps it finite inside the body (blocks).
 	 */
@@ -34,6 +44,11 @@ sealed interface FieldSource {
 			val r2 = center.distanceSquared(position) + softening * softening
 			return kotlin.math.abs(mass) / r2
 		}
+
+		// Sampled out to where the potential's curvature is gentle; a quarter of the core's width apart near it.
+		override val gridReach: Double get() = maxOf(8.0 * softening, 16.0)
+		override val gridCentre: Vector3dc get() = center
+		override fun gridSpacing(distance: Double): Double = if (distance < 3.0 * softening) minOf(1.0, softening / 4.0) else 1.0
 	}
 
 	/**

@@ -126,7 +126,15 @@ object SpacetimeField {
 			GameFrame.toPhysics(rel, p)
 			out.holes += hole to KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass)
 		}
+		// The section's lattice for the gridded sources it holds (FieldGrid), once built; the rest analytic.
+		val section = FieldGrid.sectionAt(level, others, position)
+		if (section != null) {
+			val shift = DoubleArray(3)
+			GameFrame.toPhysics(Vector3d(position).sub(section.origin), shift)
+			out.others += FieldGrid.Shifted(section.field, shift[0], shift[1], shift[2])
+		}
 		for (source in others) {
+			if (section != null && source in section.sources) continue
 			if (c * c * source.strengthAt(position) < minPull || source.strengthAt(position) == 0.0) continue
 			out.others += source.toPhysics(position)
 		}

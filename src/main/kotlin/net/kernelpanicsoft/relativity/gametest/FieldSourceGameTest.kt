@@ -63,4 +63,37 @@ class FieldSourceGameTest {
 	fun GameTestHelper.negativeMassRepels() = fallNear(mass = -0.01, distance = 4.0, ticks = 6) { d, _ ->
 		assertTrue(d != null && d > 4.1) { "Debris let go 4 blocks from a negative mass ended $d blocks away; expected pushed out" }
 	}
+
+	/** Once the sections round a mass are sampled ([net.kernelpanicsoft.relativity.spacetime.FieldGrid]), free fall through them matches the exact field. */
+	@GameTest(template = MEDIUM, batch = "relativity_mass_grid", timeoutTicks = 200)
+	fun GameTestHelper.sampledFieldMatchesTheMass() {
+		val level = level as ServerLevel
+		val center = absoluteVec(Vec3(10.5, 4.5, 10.5))
+		val mass = FieldSource.Mass(Vector3d(center.x, center.y, center.z), 0.05, softening = 1.5)
+		val provider = FieldSource.Provider { asked -> if (asked === level) listOf(mass) else emptyList() }
+		SpacetimeField.addProvider(provider)
+		val probes = listOf(Vector3d(center.x + 3.3, center.y + 0.7, center.z - 1.2), Vector3d(center.x - 5.1, center.y - 2.2, center.z + 4.6))
+		val c = net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension())
+		probes.forEach { SpacetimeField.acceleration(level, it, Vector3d(), Vector3d()) } // starts the builds
+		onEachTick {
+			if (net.kernelpanicsoft.relativity.spacetime.FieldGrid.builtSections(level) < 8) return@onEachTick
+			try {
+				for (probe in probes) {
+					val sampled = SpacetimeField.acceleration(level, probe, Vector3d(), Vector3d())
+					val p = DoubleArray(3)
+					net.kernelpanicsoft.relativity.spacetime.GameFrame.toPhysics(Vector3d(mass.center).sub(probe), p)
+					val exact = DoubleArray(3)
+					net.kernelpanicsoft.relativity.physics.geodesic.CoordinateAcceleration(
+						net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime(listOf(net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass(p[0], p[1], p[2], mass.mass, mass.softening))),
+					).compute(DoubleArray(4), DoubleArray(3), exact)
+					val expected = net.kernelpanicsoft.relativity.spacetime.GameFrame.toGame(exact, 0, Vector3d()).mul(c * c)
+					val error = Vector3d(sampled).sub(expected).length() / expected.length()
+					assertTrue(error < 0.02) { "Free fall at $probe through the sampled field is off by ${"%.1f".format(error * 100)}% (sampled $sampled, exact $expected)" }
+				}
+			} finally {
+				SpacetimeField.removeProvider(provider)
+			}
+			succeed()
+		}
+	}
 }

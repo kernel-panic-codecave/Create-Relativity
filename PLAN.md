@@ -131,9 +131,13 @@ SR kinematics:
     sign in the weak field, `WarpBubble` = Alcubierre, moving). Light follows the Hamiltonian `½ g^{μν} p_μ p_ν`
     (`HamiltonianRay`), which needs nothing but `g^{μν}` and its gradient, the same form the GPU will use;
     `ComposedSpacetime` inverts numerically for clocks and timelike geodesics. Near one source the sum is that source
-    exactly; between several it's superposition (exact in the weak field). Next: the game's `SpacetimeField` on it (one
-    composed spacetime for motion and clocks instead of per-hole sums), then the sampled grid (smooth sources baked per
-    chunk off-thread; holes stay analytic, since no grid resolves a horizon), then the GPU tracer on the same terms.
+    exactly; between several it's superposition (exact in the weak field). Done: the game's `SpacetimeField` on it (one
+    composed spacetime for motion and clocks); the post pass and the vertex lens's tables through every source.
+  - **The per-section grid (`FieldGrid`, physics-core `SampledField`)**: sources that declare a reach are sampled per
+    chunk section (`g^{μν}` and gradients, cubic Hermite along each axis between nodes, spacing finer near a source's
+    core), built off-thread and rebuilt when they change; analytic until built and past their reach. Holes and moving
+    sources (bubbles) stay analytic. Next: the GPU samples the same sections (a 3D texture atlas round the camera), and
+    the gravity generator becomes the first source that only exists as a grid (its field from its blocks).
   - **No assumption that gravity attracts**: negative energy density (wormholes, warp bubbles) defocuses light, so images
     can shrink or vanish instead of multiplying. "Settled", "falls in", and the shadow, ring and fold handling are
     detected along each path, never assumed.
