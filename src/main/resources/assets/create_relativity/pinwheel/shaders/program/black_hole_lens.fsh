@@ -378,7 +378,9 @@ bool fromDrawing = false; // debug (LensMode 1): the colour came from the world'
 
 // The colour a bent path ends on.
 vec3 sceneColor(SceneHit hit, vec4 original) {
-    if (hit.outcome == SCENE_FRAME) return texture(DiffuseSampler0, hit.value.xy).rgb; // as the world itself drew it
+    // As the world itself drew it, where the lens shifts this pixel to (sampled at full resolution: the frame's edges
+    // stay sharp however coarse the table).
+    if (hit.outcome == SCENE_FRAME) return texture(DiffuseSampler0, clamp(texCoord + hit.value.xy, vec2(0.0), vec2(1.0))).rgb;
     if (hit.outcome >= SCENE_VOXEL) {
         vec3 drawn;
         if (drawnAt(hit.value, drawn)) {

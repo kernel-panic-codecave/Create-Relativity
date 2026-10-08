@@ -158,7 +158,8 @@ void weakPath(vec3 dir, float t, out vec3 x, out vec3 v) {
 
 // Outcomes of a view ray's bent path (SceneHit).
 const int SCENE_UNBENT = 1;  // the bend can't show: the original pixel
-const int SCENE_FRAME = 2;  // the frame's own surface along the path's last straight stretch: value.xy its uv
+const int SCENE_FRAME = 2;  // the frame's own surface along the path's last straight stretch: value.xy how far its uv
+                            // is from the pixel's own (the lens's shift of the frame, smooth across the frame's edges)
 const int SCENE_ESCAPED = 4;
 const int SCENE_FELL_IN = 5;
 const int SCENE_VOXEL = 6;   // 6..11: a quad of the grid, facing along a face (2 axis, + 1 for +axis)
@@ -498,6 +499,7 @@ bool sceneTableAt(sampler2D table, vec2 uv, out SceneHit hit, out SceneHit neare
     vec2 frameSize = vec2(textureSize(DiffuseDepthSampler, 0));
     vec3 scale = vec3(1.0);
     if (outcome >= SCENE_VOXEL) scale = vec3(1.0 / max(length(a.xyz), 1e-3)); // positions, as angles from the camera
+    if (outcome == SCENE_FRAME) scale = vec3(2.0 / VeilCamera.ProjMat[1][1]); // uv shifts, as angles
     vec3 v[16];
     bool same[16];
     for (int j = 0; j < 4; j += 1) {
@@ -531,6 +533,12 @@ bool sceneUnbent(vec3 dir, float sceneDist) {
 }
 
 int marchSteps = 0; // debug (LensMode 2)
+
+// The frame uv of view direction dir (camera-relative world axes).
+vec2 pixelUv(vec3 dir) {
+    vec4 clip = VeilCamera.ProjMat * vec4((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz, 1.0);
+    return clip.xy / clip.w * 0.5 + 0.5;
+}
 
 // The frame's drawn distance at uv (the sky: 1e30), as the depth buffer has it.
 float frameDistance(vec2 uv) {
@@ -591,7 +599,12 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
     for (int i = 0; i < HoleCount; i += 1) {
         if (length(Holes[i].xyz) <= Holes[i].w) return sceneHit(SCENE_FELL_IN, vec3(0.0)); // inside a horizon
     }
-    if (sceneUnbent(dir, sceneDist)) return sceneHit(SCENE_UNBENT, vec3(0.0));
+    // Drawn straight, an unbent path is the frame's own pixel: a shift of nothing, which interpolates smoothly with its
+    // bent neighbours' (as "unbent" wouldn't).
+    if (sceneUnbent(dir, sceneDist)) {
+        if (VertexLensOn == 0) return sceneHit(SCENE_FRAME, vec3(0.0));
+        return sceneHit(SCENE_UNBENT, vec3(0.0));
+    }
 
     // Up to where the path has drifted a tenth of a pixel from the straight view ray (found by bisection; there's no
     // surface before it, as the straight ray's own hit is farther), the first-order path is exact enough to start from.
@@ -647,7 +660,7 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
             // Past the holes' reach the path is straight: the frame's own surfaces along it, if it meets one on screen.
             if (VertexLensOn == 0) {
                 vec2 uv;
-                if (frameHit(x, v, uv)) return sceneHit(SCENE_FRAME, vec3(uv, 0.0));
+                if (frameHit(x, v, uv)) return sceneHit(SCENE_FRAME, vec3(uv - pixelUv(dir), 0.0));
             }
             xNext = x + v * ds;
             vNext = v;

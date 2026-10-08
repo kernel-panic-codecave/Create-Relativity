@@ -322,6 +322,88 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * The two lens modes, vertex (the world drawn bent, the post pass filling what it can't place) and screen-space (the
+	 * world drawn straight, every bent pixel traced), should give the same picture. For a few views round holes with and
+	 * without spin, both are shot and compared pixel by pixel: the share of pixels that differ visibly is logged, and
+	 * a picture of where (white).
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.lensModesMatch() {
+		if (!ClientTestInput.selected("lensModesMatch")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(8)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -80..48) for (z in -48..48) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+				for ((x, z) in listOf(6 to 0, 12 to 6, 12 to -6, -6 to 8, -6 to -8)) for (y in -60..-56) level.setBlock(BlockPos(x, y, z), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+			}
+			command("tick freeze")
+			val lines = ArrayList<String>()
+			for ((name, hole, at) in listOf(
+				Triple("small", "0.5 -54 0.5 2 0", "-14.5 -54 0.5 -90 10"),
+				Triple("small_spin", "0.5 -54 0.5 2 0.9", "-14.5 -54 0.5 -90 10"),
+				Triple("small_above", "0.5 -54 0.5 2 0.9", "-10.5 -44 0.5 -90 40"),
+				Triple("large_spin", "0.5 -54 0.5 6 0.9", "-20.5 -54 0.5 -90 5"),
+			)) {
+				command("relativity bh clear")
+				command("relativity bh create $hole")
+				command("tp @a $at")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				waitTicks(40)
+				settle()
+				runOnClient { VertexLens.enabled = false }
+				waitTicks(30)
+				val screen = takeScreenshot("modes_${name}_screen")
+				runOnClient { VertexLens.enabled = true }
+				waitTicks(30)
+				settle()
+				val vertex = takeScreenshot("modes_${name}_vertex")
+				runOnClient { VertexLens.enabled = false }
+				lines += "%s: %.2f%% of pixels differ".format(name, imageDifference(screen, vertex, Path.of("screenshots", "modes_${name}_diff.png")) * 100)
+			}
+			CreateRelativity.LOGGER.info("Lens modes, vertex vs screen-space:\n{}", lines.joinToString("\n"))
+		}
+	}
+
+	/**
+	 * Share of pixels whose colours differ visibly (any channel by over 24 of 255) between two shots of the same size; a
+	 * picture of where (white) goes to [out].
+	 */
+	private fun imageDifference(a: Path, b: Path, out: Path): Double =
+		Files.newInputStream(a).use { NativeImage.read(it) }.use { first ->
+			Files.newInputStream(b).use { NativeImage.read(it) }.use { second ->
+				NativeImage(first.width, first.height, false).use { diff ->
+					var differ = 0L
+					for (y in 0 until first.height) for (x in 0 until first.width) {
+						val p = first.getPixelRGBA(x, y)
+						val q = second.getPixelRGBA(x, y)
+						var far = false
+						for (shift in intArrayOf(0, 8, 16)) if (kotlin.math.abs(((p shr shift) and 0xFF) - ((q shr shift) and 0xFF)) > 24) far = true
+						if (far) differ += 1
+						diff.setPixelRGBA(x, y, if (far) -1 else (0xFF shl 24) or ((p and 0xFEFEFE) shr 2))
+					}
+					Files.createDirectories(out.parent)
+					diff.writeToFile(out)
+					differ.toDouble() / (first.width.toLong() * first.height)
+				}
+			}
+		}
+
+	/**
 	 * Close to a large spinning hole (r_s 6, spin 0.9, the camera 3.5 r_s out on a plain floor): the vertex lens alone
 	 * (the post pass cut to a copy) and the whole lens, and a map of which floor corners the Kerr image map places,
 	 * hides, or leaves to the Schwarzschild image.
