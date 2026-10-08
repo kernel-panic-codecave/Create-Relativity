@@ -126,6 +126,14 @@ SR kinematics:
   Schwarzschild-table / Kerr-map split (and the seams and fallbacks between them).
   - **The full metric, not a potential**: lapse, shift and spatial metric per cell (3+1). A warp drive (§8a) is mostly
     shift (space flowing past), which a scalar potential can't hold.
+  - **As built (physics-core `spacetime/field`)**: sources add into the *inverse* metric, `g^{μν} = η^{μν} + Σ δg^{μν}`,
+    each with exact derivatives (`MetricSource`: `KerrSource` = Kerr exactly in Kerr–Schild form, `PointMass` of either
+    sign in the weak field, `WarpBubble` = Alcubierre, moving). Light follows the Hamiltonian `½ g^{μν} p_μ p_ν`
+    (`HamiltonianRay`), which needs nothing but `g^{μν}` and its gradient, the same form the GPU will use;
+    `ComposedSpacetime` inverts numerically for clocks and timelike geodesics. Near one source the sum is that source
+    exactly; between several it's superposition (exact in the weak field). Next: the game's `SpacetimeField` on it (one
+    composed spacetime for motion and clocks instead of per-hole sums), then the sampled grid (smooth sources baked per
+    chunk off-thread; holes stay analytic, since no grid resolves a horizon), then the GPU tracer on the same terms.
   - **No assumption that gravity attracts**: negative energy density (wormholes, warp bubbles) defocuses light, so images
     can shrink or vanish instead of multiplying. "Settled", "falls in", and the shadow, ring and fold handling are
     detected along each path, never assumed.
