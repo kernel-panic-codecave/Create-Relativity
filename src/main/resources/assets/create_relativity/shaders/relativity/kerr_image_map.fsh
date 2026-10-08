@@ -10,6 +10,7 @@ uniform sampler3D PreviousPath; // last frame's path positions (red: where along
 uniform int PreviousValid;     // 1 if PreviousMap holds a map for this hole
 uniform int Layer;             // the radius layer drawn
 uniform int DebugMode;         // timing (GameTests): 1 stops after the Schwarzschild image, 2 skips the cold search
+uniform int RetryAll;          // 1 once the path table has settled: every earlier failure searches again
 uniform int Frame;             // counts frames: texels hidden last frame search again only every 8th, staggered
 
 layout(location = 0) out vec4 Result;
@@ -54,7 +55,7 @@ void main() {
     float lastV = PreviousValid == 1 ? texelFetch(PreviousPath, ivec3(texel, Layer), 0).r : 99.0;
     // A search that came to nothing last frame (the costliest kind) isn't repeated but every 8th frame: hidden stays
     // hidden, a fallback stays on the Schwarzschild image.
-    bool again = ((texel.x + 3 * texel.y + 5 * Layer + Frame) & 7) == 0;
+    bool again = RetryAll == 1 || ((texel.x + 3 * texel.y + 5 * Layer + Frame) & 7) == 0;
     if (lastV < -98.0 && !again) {
         Result = vec4(0.0);
         PathPosition = -99.0;
@@ -70,6 +71,12 @@ void main() {
         found = relativityKerrImage(p, transpose(viewToGame) * normalize(straight + previous.rgb), lastV, kerr, v);
     }
     if (found != 1 && image == 1 && DebugMode != 2) found = relativityKerrImage(p, seen, 99.0, kerr, v);
+    // A search that fails on the camera's side of the hole (where the bending is moderate and the spin's share of it
+    // small) keeps the Schwarzschild image rather than hiding the point: there, a failure is the table's, not a fold's
+    // or the Einstein ring's.
+    vec3 h = RelativityLensData[0].xyz;
+    // (Not one hidden at a fold: there the Schwarzschild image is the wrong one, and the post pass draws the strip.)
+    if (found < 0 && image == 1 && dot(p - h, -h) > 0.0 && relativityLastSolve.x < 4.5) found = 0;
     if (RelativityLensData[1].w > 3.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image
     if (RelativityLensData[1].w > 0.5 && RelativityLensData[1].w < 1.5 && found == 0) found = -1; // debug 1: only placed
     if (found == 1) {

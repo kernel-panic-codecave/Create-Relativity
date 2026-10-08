@@ -321,6 +321,102 @@ class LensClientGameTest {
 		}
 	}
 
+	/**
+	 * Close to a large spinning hole (r_s 6, spin 0.9, the camera 3.5 r_s out on a plain floor): the vertex lens alone
+	 * (the post pass cut to a copy) and the whole lens, and a map of which floor corners the Kerr image map places,
+	 * hides, or leaves to the Schwarzschild image.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.kerrClose() {
+		if (!ClientTestInput.selected("kerrClose")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(12)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			command("relativity bh create 0.5 -54 0.5 6 0.9")
+			command("tick freeze")
+			command("tp @a -20.5 -54 0.5 -90 5")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			takeScreenshot("kerr_close")
+			runOnClient { BlackHoleLens.rawFrame = true }
+			waitTicks(10)
+			takeScreenshot("kerr_close_vertex")
+			runOnClient { BlackHoleLens.rawFrame = false }
+			// Floor corners (top at y -60) round the camera: o placed, ? hidden, s Schwarzschild, . nothing to bend.
+			val map = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+				val rows = (30 downTo -30 step 2).toList()
+				val columns = (-40..40 step 2).toList()
+				val points = ArrayList<FloatArray>()
+				for (gz in rows) for (gx in columns) {
+					val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+					points += floatArrayOf(v.x, v.y, v.z)
+				}
+				val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection) }
+				"x -40..40 across, z 30 (top) .. -30; camera at x -20.5, hole at x 0.5\n" + rows.indices.joinToString("\n") { r ->
+					columns.indices.joinToString("") { c ->
+						val res = results[r * columns.size + c]
+						if (res[3] > 99f && res[0].toInt() == 1) "x" // placed, but behind the camera or past the far plane
+						else when (res[0].toInt()) { 1 -> "o"; 0 -> "s"; -1 -> "?"; 2 -> "."; else -> " " }
+					}
+				}
+			}
+			CreateRelativity.LOGGER.info("Kerr close, floor corners:\n{}", map)
+			// The same corners solved directly: o found, s off the table, ? failed, F at a fold, A near the axis,
+			// . unbent, - no Schwarzschild image.
+			val direct = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+				val rows = (30 downTo -30 step 2).toList()
+				val columns = (-40..40 step 2).toList()
+				val points = ArrayList<FloatArray>()
+				for (gz in rows) for (gx in columns) {
+					val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+					points += floatArrayOf(v.x, v.y, v.z)
+				}
+				val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection, direct = true) }
+				rows.indices.joinToString("\n") { r ->
+					columns.indices.joinToString("") { c ->
+						when (results[r * columns.size + c][0].toInt()) { 1 -> "o"; 0 -> "s"; -1 -> "?"; 5 -> "F"; 6 -> "A"; 2 -> "."; -2 -> "-"; else -> " " }
+					}
+				}
+			}
+			CreateRelativity.LOGGER.info("Kerr close, floor corners solved directly:\n{}", direct)
+			// The image map's alpha there: o 1, + partly (a hidden texel round it), 0 none (filtered/nearest).
+			val alpha = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+				val rows = (30 downTo -30 step 2).toList()
+				val columns = (-40..40 step 2).toList()
+				val points = ArrayList<FloatArray>()
+				for (gz in rows) for (gx in columns) {
+					val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+					points += floatArrayOf(v.x, v.y, v.z)
+				}
+				val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection, mapAlpha = true) }
+				rows.indices.joinToString("\n") { r ->
+					columns.indices.joinToString("") { c ->
+						val res = results[r * columns.size + c]
+						if (res[0] >= 0.999f) "o" else if (res[1] < 0.5f) "0" else "+"
+					}
+				}
+			}
+			CreateRelativity.LOGGER.info("Kerr close, image map alpha at the floor corners:\n{}", alpha)
+		}
+	}
+
 	/** Debug look at the Kerr vertex lens: where the path table places vertices, and where it falls back. */
 	@ClientGameTest
 	fun ClientGameTestContext.kerrVertex() {

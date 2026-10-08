@@ -19,7 +19,7 @@ object KerrSolveCheck {
 	private var program = 0
 
 	/** Per point: the solve's outcome (1 found, 0 Schwarzschild, -1 hidden, 2 none), bent NDC x, y, and 1 if hidden. */
-	fun run(points: List<FloatArray>, projection: Matrix4f): List<FloatArray> {
+	fun run(points: List<FloatArray>, projection: Matrix4f, direct: Boolean = false, mapAlpha: Boolean = false): List<FloatArray> {
 		if (program == 0) program = link() ?: return emptyList()
 		VertexLens.linkProgram(program)
 		val width = points.size
@@ -54,6 +54,7 @@ object KerrSolveCheck {
 			val matrix = stack.mallocFloat(16)
 			projection.get(matrix)
 			GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(program, "Projection"), false, matrix)
+			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (mapAlpha) 2 else if (direct) 1 else 0)
 			GL30.glBindVertexArray(vao)
 			GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
 			val out = stack.mallocFloat(width * 4)

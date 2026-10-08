@@ -126,6 +126,8 @@ object KerrImageMap {
 			GL20.glDrawBuffers(buffers)
 			GL20.glUniform1i(uniform("PreviousValid"), if (previousValid) 1 else 0)
 			GL20.glUniform1i(uniform("Frame"), frame++)
+			// Searches that failed against a table still catching up are tried again against the settled one.
+			GL20.glUniform1i(uniform("RetryAll"), if (changed && !whole) 0 else 1)
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
 			GL30.glBindVertexArray(vao)
 			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones.
