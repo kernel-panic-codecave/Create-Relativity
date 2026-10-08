@@ -30,7 +30,8 @@
     "client.flywheel.ProgramLinkerMixin",
     "client.LightTextureAccessor",
     "client.MouseHandlerMixin",
-    "client.ShaderInstanceMixin"
+    "client.ShaderInstanceMixin",
+    "client.SectionCompilerMixin"
   ],
   "injectors": {
     "defaultRequire": 1

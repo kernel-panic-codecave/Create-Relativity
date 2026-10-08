@@ -144,6 +144,7 @@ object BlackHoleLens {
 	}
 
 	private fun onClientTick() {
+		QuadSubdivision.tick()
 		val minecraft = Minecraft.getInstance()
 		if (!textureReady) {
 			val data = table?.getNow(null) ?: return
