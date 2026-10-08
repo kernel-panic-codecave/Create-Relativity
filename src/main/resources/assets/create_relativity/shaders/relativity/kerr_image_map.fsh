@@ -71,13 +71,7 @@ void main() {
         found = relativityKerrImage(p, transpose(viewToGame) * normalize(straight + previous.rgb), lastV, kerr, v);
     }
     if (found != 1 && image == 1 && DebugMode != 2) found = relativityKerrImage(p, seen, 99.0, kerr, v);
-    // A search that fails on the camera's side of the hole (where the bending is moderate and the spin's share of it
-    // small) keeps the Schwarzschild image rather than hiding the point: there, a failure is the table's, not a fold's
-    // or the Einstein ring's.
-    vec3 h = RelativityLensData[0].xyz;
-    // (Not one hidden at a fold: there the Schwarzschild image is the wrong one, and the post pass draws the strip.)
-    if (found < 0 && image == 1 && dot(p - h, -h) > 0.0 && relativityLastSolve.x < 4.5) found = 0;
-    if (RelativityLensData[1].w > 3.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image
+    if (RelativityLensData[1].w > 3.5 && RelativityLensData[1].w < 4.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image
     if (RelativityLensData[1].w > 0.5 && RelativityLensData[1].w < 1.5 && found == 0) found = -1; // debug 1: only placed
     if (found == 1) {
         Result = vec4(viewToGame * kerr - straight, 1.0);

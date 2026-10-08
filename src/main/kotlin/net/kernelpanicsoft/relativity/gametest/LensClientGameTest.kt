@@ -372,33 +372,78 @@ class LensClientGameTest {
 				waitTicks(30)
 				settle()
 				val vertex = takeScreenshot("modes_${name}_vertex")
+				// The pillars' corners (x, z: -6, 8 and -6, -8; y -60 .. -55): the image map's code and alpha against a
+				// direct solve (debug).
+				if (name == "small_spin") {
+					val probe = computeOnClient { minecraft ->
+						val camera = minecraft.gameRenderer.mainCamera
+						val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+						val corners = ArrayList<Triple<Int, Int, Int>>()
+						for ((px, pz) in listOf(-6 to 8, -6 to -8)) for (dx in 0..1) for (dz in 0..1) for (y in -60..-55) corners += Triple(px + dx, y, pz + dz)
+						val points = corners.map { (x, y, z) ->
+							val v = view.transform(org.joml.Vector3f((x - camera.position.x).toFloat(), (y - camera.position.y).toFloat(), (z - camera.position.z).toFloat()))
+							floatArrayOf(v.x, v.y, v.z)
+						}
+						val mapped = KerrSolveCheck.run(points, VertexLens.lastProjection)
+						val alpha = KerrSolveCheck.run(points, VertexLens.lastProjection, mapAlpha = true)
+						val solved = KerrSolveCheck.run(points, VertexLens.lastProjection, direct = true)
+						corners.indices.filter { alpha[it][0] < 0.999f || solved[it][0].toInt() != 1 }.joinToString("\n") { i ->
+							"${corners[i]}: map ${mapped[i][0].toInt()} alpha %.2f (nearest %.2f) direct %d magnification %.1f".format(alpha[i][0], alpha[i][1], solved[i][0].toInt(), solved[i][3])
+						}
+					}
+					CreateRelativity.LOGGER.info("Pillar corners the map doesn't place:\n{}", probe)
+				}
 				runOnClient { VertexLens.enabled = false }
-				lines += "%s: %.2f%% of pixels differ".format(name, imageDifference(screen, vertex, Path.of("screenshots", "modes_${name}_diff.png")) * 100)
+				val (strict, loose) = imageDifference(screen, vertex, Path.of("screenshots", "modes_${name}_diff.png"))
+				lines += "%s: %.2f%% of pixels differ, %.2f%% beyond 2 px".format(name, strict * 100, loose * 100)
 			}
 			CreateRelativity.LOGGER.info("Lens modes, vertex vs screen-space:\n{}", lines.joinToString("\n"))
 		}
 	}
 
 	/**
-	 * Share of pixels whose colours differ visibly (any channel by over 24 of 255) between two shots of the same size; a
-	 * picture of where (white) goes to [out].
+	 * Share of pixels whose colours differ visibly (any channel by over 24 of 255) between two shots of the same size, and
+	 * the share that differ from every pixel within [slack] of them in the other shot too (edges a pixel or two apart
+	 * don't count); a picture of where (white: both; grey: the strict test only) goes to [out].
 	 */
-	private fun imageDifference(a: Path, b: Path, out: Path): Double =
+	private fun imageDifference(a: Path, b: Path, out: Path, slack: Int = 2): Pair<Double, Double> =
 		Files.newInputStream(a).use { NativeImage.read(it) }.use { first ->
 			Files.newInputStream(b).use { NativeImage.read(it) }.use { second ->
 				NativeImage(first.width, first.height, false).use { diff ->
-					var differ = 0L
+					fun far(p: Int, q: Int): Boolean {
+						for (shift in intArrayOf(0, 8, 16)) if (kotlin.math.abs(((p shr shift) and 0xFF) - ((q shr shift) and 0xFF)) > 24) return true
+						return false
+					}
+					// No pixel of [image] within slack of (x, y) matches colour p.
+					fun unmatched(p: Int, image: NativeImage, x: Int, y: Int): Boolean {
+						for (dy in -slack..slack) for (dx in -slack..slack) {
+							val u = x + dx
+							val v = y + dy
+							if (u < 0 || v < 0 || u >= image.width || v >= image.height) continue
+							if (!far(p, image.getPixelRGBA(u, v))) return false
+						}
+						return true
+					}
+					var strict = 0L
+					var loose = 0L
 					for (y in 0 until first.height) for (x in 0 until first.width) {
 						val p = first.getPixelRGBA(x, y)
 						val q = second.getPixelRGBA(x, y)
-						var far = false
-						for (shift in intArrayOf(0, 8, 16)) if (kotlin.math.abs(((p shr shift) and 0xFF) - ((q shr shift) and 0xFF)) > 24) far = true
-						if (far) differ += 1
-						diff.setPixelRGBA(x, y, if (far) -1 else (0xFF shl 24) or ((p and 0xFEFEFE) shr 2))
+						var color = (0xFF shl 24) or ((p and 0xFEFEFE) shr 2)
+						if (far(p, q)) {
+							strict += 1
+							color = 0xFF808080.toInt()
+							if (unmatched(p, second, x, y) || unmatched(q, first, x, y)) {
+								loose += 1
+								color = -1
+							}
+						}
+						diff.setPixelRGBA(x, y, color)
 					}
 					Files.createDirectories(out.parent)
 					diff.writeToFile(out)
-					differ.toDouble() / (first.width.toLong() * first.height)
+					val all = (first.width.toLong() * first.height).toDouble()
+					strict / all to loose / all
 				}
 			}
 		}
@@ -411,6 +456,7 @@ class LensClientGameTest {
 	@ClientGameTest
 	fun ClientGameTestContext.kerrClose() {
 		if (!ClientTestInput.selected("kerrClose")) return
+		runOnClient { VertexLens.enabled = true } // what this test looks at
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(12)
 			minecraft.options.hideGui = true
@@ -460,6 +506,47 @@ class LensClientGameTest {
 				}
 			}
 			CreateRelativity.LOGGER.info("Kerr close, floor corners:\n{}", map)
+			// Every image map texel without an image (debug 5: no camera-side fallback), by where its point is.
+			runOnClient { VertexLens.kerrDebug = 5; KerrImageMap.invalidate() }
+			waitTicks(20)
+			val failures = computeOnClient { minecraft ->
+				val data = KerrImageMap.readBack()
+				val hole = SpacetimeField.blackHoles(minecraft.level!!).single()
+				val camera = minecraft.gameRenderer.mainCamera.position
+				val rs = hole.schwarzschildRadius
+				val a = hole.spin * rs / 2
+				val horizon = rs / 2 + kotlin.math.sqrt(maxOf(rs * rs / 4 - a * a, 0.0))
+				val rIn = 1.05 * horizon
+				val rOut = maxOf(80 * rs, camera.distanceTo(hole.center) + 1.5 * minecraft.gameRenderer.renderDistance)
+				val counts = java.util.TreeMap<String, Int>()
+				var total = 0
+				for (k in 0 until KerrImageMap.DEPTH) for (j in 0 until KerrImageMap.HEIGHT) for (i in 0 until KerrImageMap.WIDTH) {
+					val index = ((k * KerrImageMap.HEIGHT + j) * KerrImageMap.WIDTH + i) * 4
+					if (data[index + 3] > 0.5f) continue
+					val azimuth = ((i + 0.5) / KerrImageMap.WIDTH - 0.5) * 2 * Math.PI
+					val cosine = j.toDouble() / (KerrImageMap.HEIGHT - 1) * 2 - 1
+					val sine = kotlin.math.sqrt(maxOf(1 - cosine * cosine, 0.0))
+					val radius = rIn * Math.pow(rOut / rIn, k.toDouble() / (KerrImageMap.DEPTH - 1))
+					val point = hole.center.add(radius * sine * kotlin.math.cos(azimuth), radius * cosine, radius * sine * kotlin.math.sin(azimuth))
+					val toCamera = camera.subtract(hole.center).normalize()
+					val along = point.subtract(hole.center).dot(toCamera)
+					val off = point.subtract(hole.center).subtract(toCamera.scale(along)).length()
+					if (along <= 0) continue // the far side: the ring and behind the hole, failures expected
+					val r = radius / rs
+					val band = when { r < 1.5 -> "r < 1.5 rs"; r < 3 -> "r 1.5-3 rs"; r < 6 -> "r 3-6 rs"; r < 20 -> "r 6-20 rs"; else -> "r > 20 rs" }
+					val camDist = point.distanceTo(camera)
+					val inView = run {
+						val dir = point.subtract(camera).normalize()
+						if (dir.dot(net.minecraft.world.phys.Vec3.directionFromRotation(minecraft.gameRenderer.mainCamera.xRot, minecraft.gameRenderer.mainCamera.yRot)) > 0.5) "ahead" else "aside/behind"
+					}
+					val height = if (cosine > 0.3) "above" else if (cosine < -0.3) "below" else "level"
+					counts.merge("camera side, $band, $inView, $height", 1, Int::plus)
+					total += 1
+				}
+				"$total of ${KerrImageMap.WIDTH * KerrImageMap.HEIGHT * KerrImageMap.DEPTH} texels without an image:\n" + counts.entries.joinToString("\n") { "  ${it.key}: ${it.value}" }
+			}
+			runOnClient { VertexLens.kerrDebug = 0; KerrImageMap.invalidate() }
+			CreateRelativity.LOGGER.info("Kerr close, image map failures: {}", failures)
 			// The same corners solved directly: o found, s off the table, ? failed, F at a fold, A near the axis,
 			// . unbent, - no Schwarzschild image.
 			val direct = computeOnClient { minecraft ->
@@ -536,6 +623,7 @@ class LensClientGameTest {
 	@ClientGameTest
 	fun ClientGameTestContext.kerrVertex() {
 		if (!ClientTestInput.selected("kerrVertex")) return
+		runOnClient { VertexLens.enabled = true } // what this test looks at
 		runOnClient { minecraft ->
 			minecraft.options.renderDistance().set(6)
 			minecraft.options.hideGui = true
@@ -1081,6 +1169,7 @@ class LensClientGameTest {
 				VertexLens.kerrSolveOff = false
 				VertexLens.kerrDebug = 0
 				KerrImageMap.debugMode = 0
+				VertexLens.enabled = false
 			}
 			world.close()
 			runOnClient { ClientTestInput.unlock(it) }

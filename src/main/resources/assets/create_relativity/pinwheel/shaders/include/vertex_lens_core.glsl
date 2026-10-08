@@ -158,7 +158,8 @@ vec3 relativityPathImage(vec3 x, vec3 n, float rP, out bool ok) {
     vec2 f = pos - vec2(b);
     ok = b.y >= 0 && b.y + 1 < size.y;
     if (!ok) return vec3(0.0);
-    int x0 = ((b.x % size.x) + size.x) % size.x;
+    // (Not %: with a negative operand GLSL leaves it undefined, and just past the seam b.x is -1.)
+    int x0 = b.x - size.x * int(floor(float(b.x) / float(size.x)));
     int x1 = (x0 + 1) % size.x;
     bool o0;
     bool o1;

@@ -80,6 +80,7 @@ object KerrImageMap {
 
 	/** Layers drawn since the path table last [changed][draw]: once all are, the map stands until it changes again. */
 	private var drawnSinceChange = 0
+	private var repairPending = false
 
 	/**
 	 * Draws this frame's map for the hole the vertex lens's block describes (VertexLens uploads it first, with the
@@ -88,8 +89,18 @@ object KerrImageMap {
 	 */
 	fun draw(changed: Boolean, whole: Boolean = false): Boolean {
 		if (failed || !ensureProgram()) return false
-		if (changed || !previousValid) drawnSinceChange = 0
-		if (drawnSinceChange >= DEPTH) return true
+		if (changed || !previousValid) {
+			drawnSinceChange = 0
+			repairPending = true
+		}
+		// Caught up: once more, every layer, with every earlier failure searched again from its neighbours' answers in
+		// the finished map; then the map stands.
+		var repair = false
+		if (drawnSinceChange >= DEPTH) {
+			if (!repairPending) return true
+			repairPending = false
+			repair = true
+		}
 		ensureTexture()
 		if (framebuffer == 0) framebuffer = GL30.glGenFramebuffers()
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
@@ -127,11 +138,11 @@ object KerrImageMap {
 			GL20.glUniform1i(uniform("PreviousValid"), if (previousValid) 1 else 0)
 			GL20.glUniform1i(uniform("Frame"), frame++)
 			// Searches that failed against a table still catching up are tried again against the settled one.
-			GL20.glUniform1i(uniform("RetryAll"), if (changed && !whole) 0 else 1)
+			GL20.glUniform1i(uniform("RetryAll"), if (changed && !whole && !repair) 0 else 1)
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
 			GL30.glBindVertexArray(vao)
 			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones.
-			val redraw = if (previousValid && !whole) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
+			val redraw = if (previousValid && !whole && !repair) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
 			for (layer in 0 until DEPTH) {
 				if (((layer - nextLayer) % DEPTH + DEPTH) % DEPTH >= redraw) continue
 				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[SCRATCH], 0, layer)
@@ -163,6 +174,15 @@ object KerrImageMap {
 		if (scissor) GlStateManager._enableScissorTest()
 		previousValid = true
 		return true
+	}
+
+	/** The live map's texels (x fastest, then y, then layer; RGBA), read back from the GPU (debug; GameTests). */
+	fun readBack(): FloatArray {
+		val data = FloatArray(WIDTH * HEIGHT * DEPTH * 4)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, textures[LIVE])
+		GL11.glGetTexImage(GL12.GL_TEXTURE_3D, 0, GL11.GL_RGBA, GL11.GL_FLOAT, data)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
+		return data
 	}
 
 	private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
