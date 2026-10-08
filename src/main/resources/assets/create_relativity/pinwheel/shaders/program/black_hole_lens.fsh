@@ -378,6 +378,7 @@ bool fromDrawing = false; // debug (LensMode 1): the colour came from the world'
 
 // The colour a bent path ends on.
 vec3 sceneColor(SceneHit hit, vec4 original) {
+    if (hit.outcome == SCENE_FRAME) return texture(DiffuseSampler0, hit.value.xy).rgb; // as the world itself drew it
     if (hit.outcome >= SCENE_VOXEL) {
         vec3 drawn;
         if (drawnAt(hit.value, drawn)) {
@@ -515,7 +516,7 @@ void main() {
     KerrRay first = kerrNearest(dir, texCoord);
     vec3 scene;
     SceneHit hit = sceneHit(0, vec3(0.0));
-    if (sceneDist < 1e29) {
+    if (sceneDist < 1e29 && VertexLensOn == 1) {
         // Geometry is already where its light appears; only the shadow can hide it (if it lies beyond the hole).
         scene = original.rgb;
         if (inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);

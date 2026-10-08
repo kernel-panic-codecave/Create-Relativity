@@ -17,6 +17,8 @@ uniform int ProfileFlags;     // profiling only (0 normally): 2 skips geometry, 
                               // re-march; 128 a plain sky; 256 no (Schwarzschild) disk; 512 marches where the half-res
                               // table's neighbours disagree; 1024 the half-res table never marches;
                               // 2048 / 4096 the lens pass leaves drawn / sky pixels as they are
+uniform int VertexLensOn;     // 1: the world was drawn through the vertex lens (only sky pixels are traced); 0: drawn
+                              // straight, and every pixel whose path bends visibly is traced
 uniform int UnseenSource; // what bent paths can meet: 0 nothing (the sky), 1 the geometry round the hole (LensVoxels)
 uniform usampler3D Voxels;      // LensVoxels' fine grid: per one-block cell, its quads as (start << 8) | count
 uniform samplerBuffer VoxelQuads; // its quads, 6 texels each (LensVoxels.writeQuad), relative to their cell
@@ -156,6 +158,7 @@ void weakPath(vec3 dir, float t, out vec3 x, out vec3 v) {
 
 // Outcomes of a view ray's bent path (SceneHit).
 const int SCENE_UNBENT = 1;  // the bend can't show: the original pixel
+const int SCENE_FRAME = 2;  // the frame's own surface along the path's last straight stretch: value.xy its uv
 const int SCENE_ESCAPED = 4;
 const int SCENE_FELL_IN = 5;
 const int SCENE_VOXEL = 6;   // 6..11: a quad of the grid, facing along a face (2 axis, + 1 for +axis)
@@ -529,6 +532,60 @@ bool sceneUnbent(vec3 dir, float sceneDist) {
 
 int marchSteps = 0; // debug (LensMode 2)
 
+// The frame's drawn distance at uv (the sky: 1e30), as the depth buffer has it.
+float frameDistance(vec2 uv) {
+    float depth = texture(DiffuseDepthSampler, uv).r;
+    if (depth >= SKY_DEPTH) return 1e30;
+    vec4 view = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+    return length(view.xyz / view.w);
+}
+
+const int FRAME_STEPS = 48;
+
+// Where the straight line x + t v (camera-relative, past the holes' reach) meets a surface the frame drew, found by
+// marching the depth buffer (the frame is drawn straight, so each pixel's depth is the nearest surface along its
+// straight view ray). A point of the line behind the drawn surface within a thickness counts as meeting it; farther
+// behind, the line passes behind it (something hidden from the camera), and the march goes on. False if the line
+// leaves the screen first.
+bool frameHit(vec3 x, vec3 v, out vec2 hitUv) {
+    hitUv = vec2(0.0);
+    float t = 0.0;
+    float dt = max(0.25, 0.02 * length(x));
+    for (int i = 0; i < FRAME_STEPS; i += 1) {
+        float tNext = t + dt;
+        vec3 p = x + v * tNext;
+        vec4 clip = VeilCamera.ProjMat * vec4((VeilCamera.ViewMat * vec4(p, 0.0)).xyz, 1.0);
+        if (clip.w > 0.0) {
+            vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+            if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
+            float distance = length(p);
+            float surface = frameDistance(uv);
+            if (distance > surface) {
+                if (distance - surface < max(0.5, 0.03 * distance) + dt) {
+                    // Bisect to the crossing.
+                    float lo = t;
+                    float hi = tNext;
+                    for (int k = 0; k < 6; k += 1) {
+                        float mid = 0.5 * (lo + hi);
+                        vec3 q = x + v * mid;
+                        vec4 c = VeilCamera.ProjMat * vec4((VeilCamera.ViewMat * vec4(q, 0.0)).xyz, 1.0);
+                        vec2 u = c.xy / c.w * 0.5 + 0.5;
+                        if (length(q) > frameDistance(u)) hi = mid; else lo = mid;
+                    }
+                    vec3 q = x + v * hi;
+                    vec4 c = VeilCamera.ProjMat * vec4((VeilCamera.ViewMat * vec4(q, 0.0)).xyz, 1.0);
+                    hitUv = clamp(c.xy / c.w * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+                    return true;
+                }
+            }
+        }
+        t = tNext;
+        dt *= 1.15;
+        if (t > sceneFar()) return false;
+    }
+    return false;
+}
+
 SceneHit marchScene(vec3 dir, float sceneDist) {
     marchSteps = 0;
     for (int i = 0; i < HoleCount; i += 1) {
@@ -587,6 +644,11 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
         vec3 xNext;
         vec3 vNext;
         if (settled) {
+            // Past the holes' reach the path is straight: the frame's own surfaces along it, if it meets one on screen.
+            if (VertexLensOn == 0) {
+                vec2 uv;
+                if (frameHit(x, v, uv)) return sceneHit(SCENE_FRAME, vec3(uv, 0.0));
+            }
             xNext = x + v * ds;
             vNext = v;
         } else if (kerr) {

@@ -257,6 +257,7 @@ object BlackHoleLens {
 		uniform("LensFogEnd") { setFloat(fogEnd) }
 		uniform("LensFogShape") { setInt(fogShape) }
 		uniform("ProfileFlags") { setInt(profileFlags) }
+		uniform("VertexLensOn") { setInt(if (VertexLens.enabled) 1 else 0) }
 		LensVoxels.waterSurface.let { w -> pipeline.getUniformSafe("WaterSurface").setVector(w[0], w[1], w[2], w[3]) }
 		uniform("RenderDistance") { setFloat(minecraft.gameRenderer.renderDistance) }
 		uniform("ViewChunks") { setInt(minecraft.options.effectiveRenderDistance) }

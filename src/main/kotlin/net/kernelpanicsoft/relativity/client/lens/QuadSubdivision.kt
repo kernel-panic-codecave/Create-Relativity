@@ -74,7 +74,7 @@ object QuadSubdivision {
 	fun tick() {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level
-		active = level != null && RelativityConfig.Client.Render.lensing
+		active = level != null && RelativityConfig.Client.Render.lensing && VertexLens.enabled
 		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius) }
 		if (!changed(now)) return
 		holes = now

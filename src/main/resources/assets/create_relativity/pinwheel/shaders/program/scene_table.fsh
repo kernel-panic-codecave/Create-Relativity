@@ -16,7 +16,10 @@ void main() {
     if (HoleCount == 0 || LensMode == 3 || LensMode == 5) return;
     // Only sky pixels use the table (where the world is drawn, the vertex lens already put it in place), but every
     // texel round them is marched, so a sky pixel beside drawn ground still has neighbours to interpolate between.
-    if (!skyNear(texCoord, 6.0)) return;
-    SceneHit hit = marchScene(viewRay(texCoord), 1e30);
+    if (VertexLensOn == 1 && !skyNear(texCoord, 6.0)) return;
+    // Through the vertex lens, only sky pixels are traced; drawn straight, each pixel's path up to what it shows.
+    float sceneDist = 1e30;
+    if (VertexLensOn == 0) sceneDist = sceneDistance(texCoord);
+    SceneHit hit = marchScene(viewRay(texCoord), sceneDist);
     Table = vec4(hit.value, float(hit.outcome));
 }
