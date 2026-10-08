@@ -87,7 +87,7 @@ object KerrImageMap {
 	 * Kerr path table drawn), the block and its samplers bound, if the table [changed] (the camera moved relative to the
 	 * hole) or the map isn't whole yet. It doesn't depend on where the camera looks. False if it can't.
 	 */
-	fun draw(changed: Boolean, whole: Boolean = false): Boolean {
+	fun draw(changed: Boolean, whole: Boolean = false, sources: Array<org.joml.Vector4f>? = null, sourceCount: Int = 0): Boolean {
 		if (failed || !ensureProgram()) return false
 		if (changed || !previousValid) {
 			drawnSinceChange = 0
@@ -140,10 +140,18 @@ object KerrImageMap {
 			// Searches that failed against a table still catching up are tried again against the settled one.
 			GL20.glUniform1i(uniform("RetryAll"), if (changed && !whole && !repair) 0 else 1)
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
+			GL20.glUniform1i(uniform("SourceCount"), if (sources == null) 0 else sourceCount)
+			if (sources != null) {
+				val packed = stack.mallocFloat(4 * sources.size)
+				for (v in sources) packed.put(v.x).put(v.y).put(v.z).put(v.w)
+				packed.flip()
+				GL20.glUniform4fv(uniform("Sources"), packed)
+			}
 			GL30.glBindVertexArray(vao)
-			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones.
+			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones. Outermost
+			// first: each layer starts its search from the one just outside it (kerr_image_map.fsh), already this frame's.
 			val redraw = if (previousValid && !whole && !repair) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
-			for (layer in 0 until DEPTH) {
+			for (layer in DEPTH - 1 downTo 0) {
 				if (((layer - nextLayer) % DEPTH + DEPTH) % DEPTH >= redraw) continue
 				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[SCRATCH], 0, layer)
 				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT1, paths[SCRATCH], 0, layer)
@@ -192,9 +200,10 @@ object KerrImageMap {
 		val resources = Minecraft.getInstance().resourceManager
 		fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
 			.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
+		val kerr = text("pinwheel/shaders/include/kerr.glsl") // the sources, for the first guess
 		val core = text("pinwheel/shaders/include/vertex_lens_core.glsl")
 		val body = text("shaders/relativity/kerr_image_map.fsh")
-		if (core == null || body == null) {
+		if (kerr == null || core == null || body == null) {
 			failed = true
 			return false
 		}
@@ -206,7 +215,7 @@ object KerrImageMap {
 			}
 		""".trimIndent()
 		val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$core\n$body") ?: return false.also { failed = true }
+		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$kerr\n$core\n$body") ?: return false.also { failed = true }
 		val id = GL20.glCreateProgram()
 		GL20.glAttachShader(id, vertex)
 		GL20.glAttachShader(id, fragment)

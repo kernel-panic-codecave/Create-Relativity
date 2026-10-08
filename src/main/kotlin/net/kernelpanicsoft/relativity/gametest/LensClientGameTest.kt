@@ -693,12 +693,14 @@ class LensClientGameTest {
 			SpacetimeDebugRenderer.hidden = true
 			minecraft.options.bobView().set(false)
 		}
+		val allOthers = listOf(
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-8.5, -52.0, -14.5), 0.5, softening = 1.5),
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-8.5, -52.0, 14.5), -0.5, softening = 1.5),
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble(org.joml.Vector3d(-22.5, -53.0, 6.5), org.joml.Vector3d(0.0, 0.0, 1.0), 0.6, 4.0),
+		)
+		var others: List<net.kernelpanicsoft.relativity.spacetime.FieldSource> = allOthers
 		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
-			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else listOf(
-				net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-8.5, -52.0, -14.5), 0.5, softening = 1.5),
-				net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-8.5, -52.0, 14.5), -0.5, softening = 1.5),
-				net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble(org.joml.Vector3d(-22.5, -53.0, 6.5), org.joml.Vector3d(0.0, 0.0, 1.0), 0.6, 4.0),
-			)
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else others
 		}
 		withTestWorld {
 			waitTicks(60)
@@ -736,11 +738,153 @@ class LensClientGameTest {
 				}
 				val wrong = LensReference.compare(reference, shot)
 				CreateRelativity.LOGGER.info("Mixed sources vs reference: {}% of pixels in the wrong class", "%.1f".format(wrong * 100))
+				// Floor corners (top at y -60): o placed, F hidden at a fold, ? hidden (no image found), s outside the map,
+				// . nothing to bend; x placed but off screen behind.
+				val floor = computeOnClient { minecraft ->
+					val camera = minecraft.gameRenderer.mainCamera
+					val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+					val rows = (40 downTo -40 step 2).toList()
+					val columns = (-40..48 step 2).toList()
+					val points = ArrayList<FloatArray>()
+					for (gz in rows) for (gx in columns) {
+						val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+						points += floatArrayOf(v.x, v.y, v.z)
+					}
+					val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection) }
+					"x -40..48 across, z 40 (top) .. -40; camera at x -44.5, holes at x 0.5 (z -4.5, 9.5)\n" + rows.indices.joinToString("\n") { r ->
+						columns.indices.joinToString("") { c ->
+							val res = results[r * columns.size + c]
+							val found = Math.floorMod(res[0].toInt(), 10).let { if (it > 2) it - 10 else it }
+							val fold = res[3] >= 1000f
+							when {
+								fold -> "F"
+								found == 1 && res[3] == 100f -> "x"
+								found == 1 -> "o"
+								found == -1 -> "?"
+								found == 0 -> "s"
+								else -> "."
+							}
+						}
+					}
+				}
+				CreateRelativity.LOGGER.info("Mixed sources, floor corners:\n{}", floor)
+				val statuses = computeOnClient { _ ->
+					val data = net.kernelpanicsoft.relativity.client.lens.KerrPaths.readBack()
+					val counts = IntArray(5)
+					// Layer 0 holds each texel's head: (r_min, status, ...).
+					for (i in 0 until net.kernelpanicsoft.relativity.client.lens.KerrPaths.width * net.kernelpanicsoft.relativity.client.lens.KerrPaths.height) counts[(data[i * 4 + 1] / 8192f).toInt().coerceIn(0, 4)] += 1
+					"unmarched ${counts[0]}, escaped ${counts[1]}, captured ${counts[2]}, out of steps ${counts[3]}"
+				}
+				CreateRelativity.LOGGER.info("Mixed sources, path table: {}", statuses)
+				// The same corners solved directly from the first guess: o found, s off the table, ? failed, F at a fold, A
+				// near the axis, . unbent, - no first guess.
+				val direct = computeOnClient { minecraft ->
+					val camera = minecraft.gameRenderer.mainCamera
+					val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+					val points = ArrayList<FloatArray>()
+					for (gz in 40 downTo -40 step 2) for (gx in -40..48 step 2) {
+						val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+						points += floatArrayOf(v.x, v.y, v.z)
+					}
+					val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection, direct = true) }
+					results.chunked(45).joinToString("\n") { row ->
+						row.joinToString("") { when (it[0].toInt()) { 1 -> "o"; 0 -> "s"; -1 -> "?"; 5 -> "F"; 6 -> "A"; 2 -> "."; -2 -> "-"; else -> " " } }
+					}
+				}
+				CreateRelativity.LOGGER.info("Mixed sources, floor corners solved directly:\n{}", direct)
 				runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE }
 				waitTicks(10)
 				val vertexOnly = takeScreenshot("mixed_sources_vertex_only")
 				CreateRelativity.LOGGER.info("Mixed sources, vertex lens alone vs reference: {}% of pixels in the wrong class", "%.1f".format(LensReference.compare(reference, vertexOnly) * 100))
 				runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS }
+				// Which sources break the floor behind the holes (x 4 .. 48): the share of its corners left unplaced.
+				fun unplacedBehind(): Double = computeOnClient { minecraft ->
+					val camera = minecraft.gameRenderer.mainCamera
+					val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+					val points = ArrayList<FloatArray>()
+					for (gz in 30 downTo -30 step 2) for (gx in 4..48 step 2) {
+						val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+						points += floatArrayOf(v.x, v.y, v.z)
+					}
+					val results = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection) }
+					results.count { Math.floorMod(it[0].toInt(), 10).let { f -> if (f > 2) f - 10 else f } == -1 }.toDouble() / results.size
+				}
+				val variants = listOf(
+					"spinning hole alone" to (false to emptyList()),
+					"both holes" to (true to emptyList()),
+					"spinning hole and masses" to (false to allOthers.take(2)),
+					"spinning hole and bubble" to (false to allOthers.drop(2)),
+					"everything" to (true to allOthers),
+				)
+				for ((label, variant) in variants) {
+					command("relativity bh clear")
+					command("relativity bh create 0.5 -54 -4.5 2 0.9")
+					if (variant.first) command("relativity bh create 0.5 -53 9.5 1.5 0")
+					others = variant.second
+					runOnClient { KerrImageMap.invalidate() }
+					waitTicks(30)
+					settle()
+					CreateRelativity.LOGGER.info("Mixed sources, {}: {}% of the floor behind the holes unplaced", label, "%.1f".format(unplacedBehind() * 100))
+					if (label == "spinning hole and masses" || label == "both holes") {
+						// Ground truth for a few floor points behind: the view direction whose light (traced on the CPU through
+						// every source) passes through each, from the straight line of sight; then the GPU's solve started
+						// right there (code: 1 found, -1 failed, 5 fold; and how far from the truth it lands).
+						val (eye, rotation) = computeOnClient { minecraft ->
+							val camera = minecraft.gameRenderer.mainCamera
+							camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+						}
+						val sources = computeOnClient { minecraft ->
+							val level = minecraft.level!!
+							val at = org.joml.Vector3d(eye.x, eye.y, eye.z)
+							SpacetimeField.blackHoles(level).map { hole ->
+								val p = DoubleArray(3)
+								net.kernelpanicsoft.relativity.spacetime.GameFrame.toPhysics(org.joml.Vector3d(hole.x, hole.y, hole.z).sub(at), p)
+								net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass) as net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
+							} + SpacetimeField.fieldSources(level).map { it.toPhysics(at) }
+						}
+						val targets = listOf(10, 20, 30).flatMap { x -> listOf(-10, 0, 10).map { z -> net.minecraft.world.phys.Vec3(x.toDouble(), -60.0, z.toDouble()) } }
+						val truths = targets.map { target -> LensReference.imageDirection(sources, eye, target) }
+						val views = targets.map { t -> rotation.transform(org.joml.Vector3f((t.x - eye.x).toFloat(), (t.y - eye.y).toFloat(), (t.z - eye.z).toFloat())).let { floatArrayOf(it.x, it.y, it.z) } }
+						val guesses = truths.map { d -> if (d == null) floatArrayOf(0f, 0f, -1f) else rotation.transform(org.joml.Vector3f(d.x.toFloat(), d.y.toFloat(), d.z.toFloat())).let { floatArrayOf(it.x, it.y, it.z) } }
+						val solved = computeOnClient { KerrSolveCheck.run(views, VertexLens.lastProjection, guesses = guesses) }
+						// The image map's thin-lens first guess (kerr_image_map.fsh's weakImage, on the CPU) and the solve from it.
+						val lenses = computeOnClient { minecraft ->
+							SpacetimeField.blackHoles(minecraft.level!!).map { doubleArrayOf(it.x - eye.x, it.y - eye.y, it.z - eye.z, it.schwarzschildRadius) } +
+								SpacetimeField.fieldSources(minecraft.level!!).filterIsInstance<net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass>()
+									.map { doubleArrayOf(it.center.x() - eye.x, it.center.y() - eye.y, it.center.z() - eye.z, 2.0 * it.mass) }
+						}
+						val weak = targets.map { t ->
+							val game = org.joml.Vector3d(t.x - eye.x, t.y - eye.y, t.z - eye.z)
+							val distance = game.length()
+							val straightDir = org.joml.Vector3d(game).normalize()
+							val dir = org.joml.Vector3d(straightDir)
+							repeat(8) {
+								val shifted = org.joml.Vector3d(straightDir)
+								for (l in lenses) {
+									val along = l[0] * dir.x + l[1] * dir.y + l[2] * dir.z
+									if (along <= 0 || along >= distance) continue
+									val toward = org.joml.Vector3d(l[0], l[1], l[2]).sub(org.joml.Vector3d(dir).mul(along))
+									val b = maxOf(toward.length(), 0.5 * kotlin.math.abs(l[3]) + 1e-3)
+									shifted.sub(toward.div(b).mul(2.0 * l[3] / b * (distance - along) / distance))
+								}
+								dir.lerp(shifted.normalize(), 0.5).normalize()
+							}
+							net.minecraft.world.phys.Vec3(dir.x, dir.y, dir.z)
+						}
+						val weakSolved = computeOnClient {
+							KerrSolveCheck.run(views, VertexLens.lastProjection, guesses = weak.map { d -> rotation.transform(org.joml.Vector3f(d.x.toFloat(), d.y.toFloat(), d.z.toFloat())).let { floatArrayOf(it.x, it.y, it.z) } })
+						}
+						val report = targets.indices.joinToString("\n") { i ->
+							val truth = truths[i]
+							val straight = targets[i].subtract(eye).normalize()
+							if (truth == null) "  ${targets[i]}: no image found on the CPU"
+							else "  ${targets[i]}: image %.3f rad from straight; GPU solve from it: %d, lands %.4f rad off, magnification %.1f; thin-lens guess %.3f rad off, solve from it %d".format(
+								kotlin.math.acos(truth.dot(straight).coerceIn(-1.0, 1.0)), solved[i][0].toInt(), solved[i][1], solved[i][3],
+								kotlin.math.acos(truth.dot(weak[i]).coerceIn(-1.0, 1.0)), weakSolved[i][0].toInt())
+						}
+						CreateRelativity.LOGGER.info("Mixed sources, {}, true images:\n{}", label, report)
+					}
+				}
 			} finally {
 				SpacetimeField.removeProvider(provider)
 			}

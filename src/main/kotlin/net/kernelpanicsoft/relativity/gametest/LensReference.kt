@@ -68,6 +68,66 @@ internal object LensReference {
 		}
 	}
 
+	/**
+	 * The view direction (game axes, unit) from [eye] whose light, traced back through [sources] (physics axes, relative
+	 * to [eye]), passes through [target]: Nelder-Mead on the miss from the straight line of sight; null if it can't get
+	 * within 0.05 blocks.
+	 */
+	fun imageDirection(sources: List<MetricSource>, eye: Vec3, target: Vec3): Vec3? {
+		val ray = HamiltonianRay(ComposedSpacetime(sources), rtol = 1e-9, atol = 1e-11)
+		val straight = target.subtract(eye).normalize()
+		val u = (if (kotlin.math.abs(straight.y) < 0.9) Vec3(0.0, 1.0, 0.0) else Vec3(1.0, 0.0, 0.0)).cross(straight).normalize()
+		val w = straight.cross(u)
+		val reach = target.distanceTo(eye) * 1.5 + 20.0
+		val goal = DoubleArray(3)
+		GameFrame.toPhysics(Vector3d(target.x - eye.x, target.y - eye.y, target.z - eye.z), goal)
+		fun dir(a: Double, b: Double) = straight.add(u.scale(a)).add(w.scale(b)).normalize()
+		fun miss(a: Double, b: Double): Double {
+			val d = dir(a, b)
+			val direction = DoubleArray(3)
+			GameFrame.toPhysics(Vector3d(d.x, d.y, d.z), direction)
+			val path = ray.trace(DoubleArray(3), direction, reach, maxSegment = 0.25, arriving = true)
+			var best = Double.MAX_VALUE
+			for (k in 1 until path.points.size) {
+				val p0 = path.points[k - 1]
+				val p1 = path.points[k]
+				val sx = p1[0] - p0[0]; val sy = p1[1] - p0[1]; val sz = p1[2] - p0[2]
+				val len2 = sx * sx + sy * sy + sz * sz
+				val t = if (len2 > 0) (((goal[0] - p0[0]) * sx + (goal[1] - p0[1]) * sy + (goal[2] - p0[2]) * sz) / len2).coerceIn(0.0, 1.0) else 0.0
+				val dx = p0[0] + t * sx - goal[0]; val dy = p0[1] + t * sy - goal[1]; val dz = p0[2] + t * sz - goal[2]
+				best = minOf(best, dx * dx + dy * dy + dz * dz)
+			}
+			return kotlin.math.sqrt(best)
+		}
+		// Nelder-Mead in (a, b).
+		val simplex = arrayOf(doubleArrayOf(0.0, 0.0), doubleArrayOf(0.03, 0.0), doubleArrayOf(0.0, 0.03))
+		val values = DoubleArray(3) { miss(simplex[it][0], simplex[it][1]) }
+		repeat(120) {
+			val order = (0..2).sortedBy { values[it] }
+			val best = order[0]; val mid = order[1]; val worst = order[2]
+			val cx = (simplex[best][0] + simplex[mid][0]) / 2; val cy = (simplex[best][1] + simplex[mid][1]) / 2
+			fun at(k: Double) = doubleArrayOf(cx + k * (simplex[worst][0] - cx), cy + k * (simplex[worst][1] - cy))
+			val r = at(-1.0); val fr = miss(r[0], r[1])
+			if (fr < values[best]) {
+				val e = at(-2.0); val fe = miss(e[0], e[1])
+				if (fe < fr) { simplex[worst] = e; values[worst] = fe } else { simplex[worst] = r; values[worst] = fr }
+			} else if (fr < values[mid]) {
+				simplex[worst] = r; values[worst] = fr
+			} else {
+				val c = at(0.5); val fc = miss(c[0], c[1])
+				if (fc < values[worst]) { simplex[worst] = c; values[worst] = fc } else {
+					for (k in listOf(mid, worst)) {
+						simplex[k] = doubleArrayOf((simplex[k][0] + simplex[best][0]) / 2, (simplex[k][1] + simplex[best][1]) / 2)
+						values[k] = miss(simplex[k][0], simplex[k][1])
+					}
+				}
+			}
+		}
+		val best = (0..2).minBy { values[it] }
+		if (values[best] > 0.05) return null
+		return dir(simplex[best][0], simplex[best][1])
+	}
+
 	/** Each grid pixel's path from [pathOf] (physics axes, relative to [center]), clipped against the level's blocks. */
 	private fun traceWith(
 		minecraft: Minecraft, center: Vec3, columns: Int, rows: Int, fogFree: Double, only: IntRange,

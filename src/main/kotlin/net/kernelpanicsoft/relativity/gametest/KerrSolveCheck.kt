@@ -19,11 +19,16 @@ object KerrSolveCheck {
 	private var program = 0
 
 	/** Per point: the solve's outcome (1 found, 0 Schwarzschild, -1 hidden, 2 none), bent NDC x, y, and 1 if hidden. */
-	fun run(points: List<FloatArray>, projection: Matrix4f, direct: Boolean = false, mapAlpha: Boolean = false): List<FloatArray> {
+	/**
+	 * With [guesses] (view-space directions, one per point): the solve run from each guess (code as [direct]; y the angle
+	 * from the guess to the image found, w the magnification).
+	 */
+	fun run(points: List<FloatArray>, projection: Matrix4f, direct: Boolean = false, mapAlpha: Boolean = false, guesses: List<FloatArray>? = null): List<FloatArray> {
 		if (program == 0) program = link() ?: return emptyList()
 		VertexLens.linkProgram(program)
 		val width = points.size
 		val input = GL11.glGenTextures()
+		val guessTexture = GL11.glGenTextures()
 		val output = GL11.glGenTextures()
 		val framebuffer = GL30.glGenFramebuffers()
 		val vao = GL30.glGenVertexArrays()
@@ -34,6 +39,16 @@ object KerrSolveCheck {
 			data.flip()
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, input)
 			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, width, 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, data)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
+			val guessData = stack.mallocFloat(width * 4)
+			for (i in 0 until width) {
+				val g = guesses?.get(i) ?: floatArrayOf(0f, 0f, -1f)
+				guessData.put(g[0]).put(g[1]).put(g[2]).put(0f)
+			}
+			guessData.flip()
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, guessTexture)
+			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, width, 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, guessData)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, output)
@@ -51,10 +66,14 @@ object KerrSolveCheck {
 			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE0)
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, input)
 			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Points"), 0)
+			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE1)
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, guessTexture)
+			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Guesses"), 1)
+			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE0)
 			val matrix = stack.mallocFloat(16)
 			projection.get(matrix)
 			GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(program, "Projection"), false, matrix)
-			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (mapAlpha) 2 else if (direct) 1 else 0)
+			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (guesses != null) 3 else if (mapAlpha) 2 else if (direct) 1 else 0)
 			GL30.glBindVertexArray(vao)
 			GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
 			val out = stack.mallocFloat(width * 4)
@@ -66,6 +85,7 @@ object KerrSolveCheck {
 			GlStateManager._viewport(viewport[0], viewport[1], viewport[2], viewport[3])
 		}
 		GL11.glDeleteTextures(input)
+		GL11.glDeleteTextures(guessTexture)
 		GL11.glDeleteTextures(output)
 		GL30.glDeleteFramebuffers(framebuffer)
 		GL30.glDeleteVertexArrays(vao)

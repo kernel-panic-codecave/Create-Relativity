@@ -2,13 +2,25 @@
 // one per output texel: the Kerr solve's outcome and the bent clip position.
 uniform sampler2D Points; // view-space positions
 uniform mat4 Projection;
-uniform int Direct; // 1: the Kerr solve itself (as the image map runs it, from the Schwarzschild image), not the map
+uniform int Direct; // 1: the Kerr solve itself (as the image map runs it, from the Schwarzschild image), not the map;
+                    // 3: the solve from the direction in Guesses
+uniform sampler2D Guesses; // view-space directions (Direct 3)
 
 
 out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 3) {
+        vec3 guess = normalize(texelFetch(Guesses, ivec2(gl_FragCoord.xy), 0).xyz);
+        vec3 kerr;
+        float v;
+        int found = relativityKerrImage(p, guess, 99.0, kerr, v);
+        float code = float(found);
+        if (found != 1 && relativityLastSolve.x > 4.5) code = 5.0;
+        Result = vec4(code, found == 1 ? acos(clamp(dot(kerr, guess), -1.0, 1.0)) : -1.0, v, relativityLastSolve.y);
+        return;
+    }
     if (Direct == 2) {
         // The image map at p: its filtered alpha (x) and the nearest texel's alpha (y)
         mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);

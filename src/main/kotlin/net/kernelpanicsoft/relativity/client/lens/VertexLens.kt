@@ -226,7 +226,7 @@ object VertexLens {
 			mapHole = centre?.key
 			if (kerr && !kerrSolveOff) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
-				KerrImageMap.draw(KerrPaths.changed, jump)
+				KerrImageMap.draw(KerrPaths.changed, jump, sources, count)
 				if (BlackHoleLens.timeGpu) mapTimer.end()
 			}
 		}

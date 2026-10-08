@@ -133,34 +133,44 @@ vec2 relativityUnpackPair(float pair) {
     return vec2(relativityUnhalf(u & 0xffffu), relativityUnhalf(u >> 16));
 }
 
-// Path sample j (-7 .. 7: coming in, the closest approach at 0, going out) of the table's texel t: the angle round the
+// Path sample j (-14 .. 14: coming in, the closest approach at 0, going out) of the table's texel t: the angle round the
 // centre in its ray's plane, the offset out of it, the distance from the centre (unpacked: kerr_paths.fsh).
 vec3 relativityPathSample(ivec2 t, int j) {
     vec2 raw;
     if (j == 0) {
         raw = texelFetch(RelativityKerrPaths, ivec3(t, 0), 0).zw;
     } else {
-        int f = j < 0 ? -j - 1 : j + 6;
-        vec4 v = texelFetch(RelativityKerrPaths, ivec3(t, 1 + f / 2), 0);
+        // (kerr_paths.fsh's layout: 1-7 out to |j| = 7 in layers 1-7, the rest in layers 8-14.)
+        int aj = abs(j);
+        int f;
+        int base;
+        if (aj <= 7) {
+            f = j < 0 ? aj - 1 : j + 6;
+            base = 1;
+        } else {
+            f = j < 0 ? aj - 8 : j - 1;
+            base = 8;
+        }
+        vec4 v = texelFetch(RelativityKerrPaths, ivec3(t, base + f / 2), 0);
         raw = (f - 2 * (f / 2)) == 0 ? v.xy : v.zw;
     }
     return vec3(raw.x, relativityUnpackPair(raw.y));
 }
 
-// Texel t's path (kerr_paths.fsh) at position v (-7 .. 7 along its samples: coming in, the closest approach at 0,
+// Texel t's path (kerr_paths.fsh) at position v (-14 .. 14 along its samples: coming in, the closest approach at 0,
 // going out): the angle round the centre in its ray's plane, the offset out of it and the distance from the centre
 // (Catmull-Rom). ok false where the texel has no usable path there.
 vec3 relativityPathAt(ivec2 t, float v, out bool ok) {
     vec4 head = texelFetch(RelativityKerrPaths, ivec3(t, 0), 0);
-    int status = int(head.y + 0.5);
+    int status = int(floor(head.y / 8192.0));
     ok = status == 1 || (status == 2 && v <= 0.0);
-    float base = clamp(floor(v), -7.0, 6.0);
+    float base = clamp(floor(v), -14.0, 13.0);
     float f = v - base;
     int j = int(base);
-    vec3 p0 = relativityPathSample(t, max(j - 1, -7));
+    vec3 p0 = relativityPathSample(t, max(j - 1, -14));
     vec3 p1 = relativityPathSample(t, j);
     vec3 p2 = relativityPathSample(t, j + 1);
-    vec3 p3 = relativityPathSample(t, min(j + 2, 7));
+    vec3 p3 = relativityPathSample(t, min(j + 2, 14));
     float f2 = f * f;
     float f3 = f2 * f;
     return 0.5 * (2.0 * p1 + (p2 - p0) * f + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f2 + (3.0 * p1 - p0 - 3.0 * p2 + p3) * f3);
@@ -243,7 +253,7 @@ bool relativityKerrSolve(inout vec3 x, vec3 n, float rP, out mat3 jacobian, out 
         float scale = 1.0;
         vec3 next = x;
         for (int k = 0; k < 5; k += 1) {
-            next = vec3(x.xy - step.xy * scale, clamp(x.z - step.z * scale, -7.0, 7.0));
+            next = vec3(x.xy - step.xy * scale, clamp(x.z - step.z * scale, -14.0, 14.0));
             bool okNext;
             vec3 m = relativityPathImage(next, n, rP, okNext);
             if (okNext && dot(m, m) < current) break;
@@ -294,11 +304,11 @@ float relativityKerrMagnification(vec3 x, vec3 n, float rP, float d) {
 // or going out (from the closest approach): a starting point for the solve. Between the samples that bracket it,
 // linearly; the closest approach (0) if none do, coming in; the end (7) going out.
 float relativityPathPosition(ivec2 t, float rP, bool outbound) {
-    int first = -7;
+    int first = -14;
     if (outbound) first = 0;
     float last = relativityPathSample(t, first).z;
-    for (int k = 1; k <= 7; k += 1) {
-        int j = outbound ? k : k - 7;
+    for (int k = 1; k <= 14; k += 1) {
+        int j = outbound ? k : k - 14;
         float r = relativityPathSample(t, j).z;
         if ((r - rP) * (last - rP) <= 0.0) {
             float f = (rP - last) / (abs(r - last) > 1e-9 ? r - last : 1e-9);
@@ -306,7 +316,7 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
         }
         last = r;
     }
-    return outbound ? 7.0 : 0.0;
+    return outbound ? 14.0 : 0.0;
 }
 
 // The view direction of p's image under a spinning hole ([6]), by Newton's method on the table and along its paths,
@@ -317,7 +327,7 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
 // Magnification past which a Kerr image counts as on a fold (healthy images beside one stay under about 40).
 #define RELATIVITY_FOLD_CUT 80.0
 
-// warmV: where along its path the guess's image was last time (|warmV| <= 7; larger for none), tried first.
+// warmV: where along its path the guess's image was last time (|warmV| <= 14; larger for none), tried first.
 // solvedV: where along its path the image found is.
 int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out float solvedV) {
     seen = guess;
@@ -337,8 +347,8 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
     // Coming in first (the image whose light reaches p first along its path), then going out, then from the closest
     // approach.
     float tries[3];
-    tries[0] = rP <= relativityPathSample(at, -7).z ? relativityPathPosition(at, rP, false) : relativityPathPosition(at, rP, true);
-    if (abs(warmV) <= 7.0) tries[0] = warmV;
+    tries[0] = rP <= relativityPathSample(at, -14).z ? relativityPathPosition(at, rP, false) : relativityPathPosition(at, rP, true);
+    if (abs(warmV) <= 14.0) tries[0] = warmV;
     tries[1] = relativityPathPosition(at, rP, true);
     tries[2] = 0.0;
     // The image on the same side of the hole as the guess (within a quarter turn round it): the primary, not the one

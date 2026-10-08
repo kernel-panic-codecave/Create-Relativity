@@ -20,7 +20,8 @@ import org.lwjgl.system.MemoryStack
  * as it found it.
  */
 object KerrPaths {
-	const val LAYERS = 8
+	/** Two groups of 8 (the most one draw writes), each drawn by its own pass (kerr_paths.fsh's Group). */
+	const val LAYERS = 16
 
 	/** The table's size: azimuth columns, angle rows. */
 	const val WIDTH = 384
@@ -47,7 +48,11 @@ object KerrPaths {
 
 	private var program = 0
 	private var framebuffer = 0
+	private var framebuffer2 = 0
 	private var vao = 0
+	private var headCopy = 0
+	private var headWidth = 0
+	private var headHeight = 0
 	private var failed = false
 	private val uniforms = HashMap<String, Int>()
 
@@ -105,17 +110,49 @@ object KerrPaths {
 			GL20.glUniform1f(uniform("PathRadius"), pathRadius)
 			GL20.glUniform2f(uniform("TableSize"), width.toFloat(), height.toFloat())
 			GL30.glBindVertexArray(vao)
-			// This frame's rows (wrapping round), through the scissor.
+			// This frame's rows (wrapping round), through the scissor; each group of layers in turn.
 			GL11.glEnable(GL11.GL_SCISSOR_TEST)
+			// (Unit 0's texture is put back after: GlStateManager caches it.)
+			val previousActive = GlStateManager._getActiveTexture()
+			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE0)
+			val previousTexture0 = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D)
 			var start = nextRow
-			var left = rows
-			while (left > 0) {
-				val count = minOf(left, height - start)
-				GL11.glScissor(0, start, width, count)
-				GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
-				left -= count
-				start = (start + count) % height
+			for (group in 0..1) {
+				GL20.glUniform1i(uniform("Group"), group)
+				// Group 1 reads group 0's head (layer 0), copied out of the table first (a texture isn't read while drawn into).
+				GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE0)
+				if (group == 1) {
+					if (headCopy == 0) headCopy = GL11.glGenTextures()
+					GL11.glBindTexture(GL11.GL_TEXTURE_2D, headCopy)
+					if (headWidth != width || headHeight != height) {
+						GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, width, height, 0, GL11.GL_RGBA, GL11.GL_FLOAT, null as java.nio.ByteBuffer?)
+						GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
+						GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
+						headWidth = width
+						headHeight = height
+					}
+					// (Attachment 0 still holds layer 0 from group 0.)
+					GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0)
+					GL11.glDisable(GL11.GL_SCISSOR_TEST)
+					GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, width, height)
+					GL11.glEnable(GL11.GL_SCISSOR_TEST)
+				} else {
+					GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0)
+				}
+				GL20.glUniform1i(uniform("Head"), 0)
+				GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, if (group == 0) framebuffer else framebuffer2)
+				start = nextRow
+				var left = rows
+				while (left > 0) {
+					val count = minOf(left, height - start)
+					GL11.glScissor(0, start, width, count)
+					GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
+					left -= count
+					start = (start + count) % height
+				}
 			}
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, previousTexture0)
+			GlStateManager._activeTexture(previousActive)
 			nextRow = start
 			drawnSinceChange += rows
 			GL11.glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3])
@@ -157,6 +194,7 @@ object KerrPaths {
 		if (texture == 0) {
 			texture = GL11.glGenTextures()
 			framebuffer = GL30.glGenFramebuffers()
+			framebuffer2 = GL30.glGenFramebuffers()
 		}
 		this.width = width
 		this.height = height
@@ -168,16 +206,21 @@ object KerrPaths {
 		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
 		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0)
 		val previous = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
-		GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer)
-		MemoryStack.stackPush().use { stack ->
-			val buffers = stack.mallocInt(LAYERS)
-			for (layer in 0 until LAYERS) {
-				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0 + layer, texture, 0, layer)
-				buffers.put(layer, GL30.GL_COLOR_ATTACHMENT0 + layer)
+		// One framebuffer per group of 8 layers, attached once (re-attaching a layered float texture each frame is slow).
+		var status = GL30.GL_FRAMEBUFFER_COMPLETE
+		for ((group, target) in listOf(framebuffer, framebuffer2).withIndex()) {
+			GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, target)
+			MemoryStack.stackPush().use { stack ->
+				val buffers = stack.mallocInt(8)
+				for (layer in 0 until 8) {
+					GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0 + layer, texture, 0, 8 * group + layer)
+					buffers.put(layer, GL30.GL_COLOR_ATTACHMENT0 + layer)
+				}
+				GL20.glDrawBuffers(buffers)
 			}
-			GL20.glDrawBuffers(buffers)
+			val groupStatus = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER)
+			if (groupStatus != GL30.GL_FRAMEBUFFER_COMPLETE) status = groupStatus
 		}
-		val status = GL30.glCheckFramebufferStatus(GL30.GL_FRAMEBUFFER)
 		GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, previous)
 		if (status != GL30.GL_FRAMEBUFFER_COMPLETE) {
 			CreateRelativity.LOGGER.error("Kerr path table framebuffer incomplete ({}); spinning holes bend as if they didn't spin", status)

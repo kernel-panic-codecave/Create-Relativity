@@ -18,6 +18,31 @@ layout(location = 1) out float PathPosition; // where along its path the image i
                                              // searched for, -99 a search found it hidden, 98 a search fell back to
                                              // the Schwarzschild image
 
+// A first guess at the view direction of the image of camera-relative point game (game axes), through every source in
+// front of it (kerr.glsl's Sources) as thin lenses: the lens equation theta = beta + sum alpha_i(theta) D_ls / D_s,
+// alpha_i = 2 r_s / b (r_s = 2 m: a negative mass pulls the image in), solved by damped fixed-point iteration from the
+// straight direction (which converges on the outer, primary image). Bubbles aren't lenses: left out.
+vec3 weakImage(vec3 game) {
+    float distance = length(game);
+    vec3 straightDir = game / distance;
+    vec3 dir = straightDir;
+    for (int iteration = 0; iteration < 8; iteration += 1) {
+        vec3 shifted = straightDir;
+        for (int i = 0; i < SourceCount; i += 1) {
+            vec4 s0 = Sources[3 * i];
+            if (s0.w != SOURCE_KERR && s0.w != SOURCE_MASS) continue;
+            float rs = 2.0 * Sources[3 * i + 1].x;
+            float along = dot(s0.xyz, dir);
+            if (along <= 0.0 || along >= distance) continue;
+            vec3 toward = s0.xyz - dir * along;
+            float b = max(length(toward), 0.5 * abs(rs) + 1e-3);
+            shifted -= toward / b * (2.0 * rs / b) * (distance - along) / distance;
+        }
+        dir = normalize(mix(dir, normalize(shifted), 0.5));
+    }
+    return dir;
+}
+
 void main() {
     vec3 size = RELATIVITY_MAP_SIZE;
     ivec2 texel = ivec2(gl_FragCoord.xy);
@@ -72,6 +97,21 @@ void main() {
     float v = 99.0;
     if (PreviousValid == 1 && previous.a > 0.5) {
         found = relativityKerrImage(p, transpose(viewToGame) * normalize(straight + previous.rgb), lastV, kerr, v);
+    }
+    // From the thin-lens guess through every source.
+    if (found != 1 && image == 1 && SourceCount > 0) {
+        found = relativityKerrImage(p, transpose(viewToGame) * weakImage(game), 99.0, kerr, v);
+    }
+    // From the image of the point just outside this one (the next layer out, drawn first): followed in from far away,
+    // where every point's image is its own direction, this is the primary image wherever it changes continuously,
+    // whatever bends the light.
+    if (found != 1 && image == 1 && Layer + 1 < int(size.z)) {
+        vec4 outer = texelFetch(PreviousMap, ivec3(texel, Layer + 1), 0);
+        if (outer.a > 0.5) {
+            float outerV = texelFetch(PreviousPath, ivec3(texel, Layer + 1), 0).r;
+            if (abs(outerV) > 14.0) outerV = 99.0;
+            found = relativityKerrImage(p, transpose(viewToGame) * normalize(straight + outer.rgb), outerV, kerr, v);
+        }
     }
     if (found != 1 && image == 1 && DebugMode != 2) found = relativityKerrImage(p, seen, 99.0, kerr, v);
     if (RelativityLensData[1].w > 3.5 && RelativityLensData[1].w < 4.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image

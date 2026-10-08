@@ -3,8 +3,8 @@
 // through every source together (kerr.glsl's Sources and spacetimeBackward), followed back in time, recorded as where it
 // is seen from the lens centre (the dominant source) at fixed points along it.
 //
-// A path is parameterised by distance along it, s, around its closest approach to the centre s*: samples at
-// s = s* -+ L (k / 7)^2 for k = 7 .. 1 (L: s* coming in, the rest of the path going out), dense where the path turns
+// A path is parameterised by distance along it, s, around its closest approach to the centre s*: 29 samples at
+// s = s* -+ L (k / 14)^2 for k = 14 .. 1 (L: s* coming in, the rest of the path going out), dense where the path turns
 // and smooth through it. Nothing assumes one turning point or attraction: a path may come close more than once (two
 // sources, a warp bubble) or be pushed away (negative energy); s* is just where it's closest. Two marches: the first
 // finds s*, the path's length and its fate, the second records the samples. Every texel's ray is traced, however far
@@ -20,16 +20,21 @@ uniform vec3 CentreGame;  // the lens centre, camera-relative, game axes
 uniform float CentreScale; // its size (r_s of a hole; 2|m| of a mass), for the table's knee
 uniform vec2 TableSize;   // texels: azimuth, angle from the centre
 uniform float PathRadius; // where paths start (if the camera's outside it) and end: past everything drawn
+uniform int Group;        // which 8 of the table's 16 layers this draw writes (the most one draw can)
+uniform sampler2D Head;   // group 1: group 0's head (the table's layer 0: what the first march found), copied out
 
 in vec2 texCoord;
-layout(location = 0) out vec4 Path0; // r_min, status (0 unmarched, 1 escapes, 2 captured, 3 incomplete), closest approach
-layout(location = 1) out vec4 Path1; // in 1, in 2
-layout(location = 2) out vec4 Path2; // in 3, in 4
-layout(location = 3) out vec4 Path3; // in 5, in 6
-layout(location = 4) out vec4 Path4; // in 7 (the start), out 1
-layout(location = 5) out vec4 Path5; // out 2, out 3
-layout(location = 6) out vec4 Path6; // out 4, out 5
-layout(location = 7) out vec4 Path7; // out 6, out 7 (the end sphere)
+// Group 0 (layers 0-7): r_min, status (0 unmarched, 1 escapes, 2 captured, 3 incomplete), the closest approach; then
+// in 1, 2 | in 3, 4 | in 5, 6 | in 7, out 1 | out 2, 3 | out 4, 5 | out 6, 7. Group 1 (layers 8-15): in 8, 9 | in 10, 11
+// | in 12, 13 | in 14 (the start), out 8 | out 9, 10 | out 11, 12 | out 13, 14 (the end sphere) | unused.
+layout(location = 0) out vec4 Path0;
+layout(location = 1) out vec4 Path1;
+layout(location = 2) out vec4 Path2;
+layout(location = 3) out vec4 Path3;
+layout(location = 4) out vec4 Path4;
+layout(location = 5) out vec4 Path5;
+layout(location = 6) out vec4 Path6;
+layout(location = 7) out vec4 Path7;
 
 const int PATH_STEPS = 420;
 
@@ -78,7 +83,7 @@ float pathStep(vec4 x4) {
         } else if (s0.w == SOURCE_BUBBLE) {
             float r = length(x4.xyz - (s0.xyz + s1.z * Sources[3 * i + 2].xyz * x4.w));
             float wall = 1.0 / max(s1.y, 1e-3);
-            step = min(step, max(0.05 * abs(r - s1.x), 0.25 * wall));
+            step = min(step, max(0.5 * abs(r - s1.x), 0.25 * wall));
         }
     }
     return min(step, 0.05 * PathRadius);
@@ -123,14 +128,23 @@ void main() {
     vec4 start = vec4(dir * t0, -t0);
     vec4 startP = spacetimeArriving(start, dir);
 
-    // First march: the path's length, its closest approach to the centre, and its fate.
+    // First march (group 0; group 1 reads what it found from the head): the path's length, its closest approach to
+    // the centre, and its fate.
     vec4 x4 = start;
     vec4 p4 = startP;
     float s = 0.0;
     float sClosest = 0.0;
     float rMin = length(start.xyz - CentreGame);
     float status = 3.0;
-    for (int n = 0; n < PATH_STEPS; n += 1) {
+    int firstSteps = PATH_STEPS;
+    if (Group == 1) {
+        vec4 head = texelFetch(Head, ivec2(gl_FragCoord.xy), 0);
+        sClosest = head.x;
+        status = floor(head.y / 8192.0);
+        s = head.y - 8192.0 * status;
+        firstSteps = 0;
+    }
+    for (int n = 0; n < firstSteps; n += 1) {
         float ds = pathStep(x4);
         pathAdvance(x4, p4, ds);
         s += ds;
@@ -158,37 +172,33 @@ void main() {
     }
     float sEnd = s;
 
-    // Second march: the samples, at s* -+ L (k / 7)^2.
-    vec2 qIn[8];
-    vec2 qOut[8];
+    // Second march: the samples, at s* -+ L (k / 14)^2.
+    vec2 qIn[15];
+    vec2 qOut[15];
     x4 = start;
     p4 = startP;
     s = 0.0;
     vec2 q = pathSample(x4.xyz);
-    for (int k = 0; k < 8; k += 1) {
+    for (int k = 0; k < 15; k += 1) {
         qIn[k] = q;
         qOut[k] = q;
     }
-    int nextIn = 6; // samples in 7 .. 1 on the way in, 7 the start; then the closest approach (0); then out 1 .. 7
+    int nextIn = 13; // samples in 14 .. 1 on the way in, 14 the start; then the closest approach (0); then out 1 .. 14
     int nextOut = 1;
-    vec4 previous = x4;
-    float sPrevious = 0.0;
-    for (int n = 0; n < PATH_STEPS + 16 && nextOut <= 7; n += 1) {
+    for (int n = 0; n < PATH_STEPS + 32 && nextOut <= 14; n += 1) {
         // The next sample's arc length.
         float target;
         if (nextIn >= 0) {
-            float w = float(nextIn) / 7.0;
+            float w = float(nextIn) / 14.0;
             target = sClosest - sClosest * w * w;
         } else {
-            float w = float(nextOut) / 7.0;
+            float w = float(nextOut) / 14.0;
             target = sClosest + (sEnd - sClosest) * w * w;
         }
         if (s >= sEnd && target > sEnd + 1e-3) break;
         float ds = min(pathStep(x4), max(target - s, 1e-4));
         if (target <= s + 1e-4) ds = 0.0;
         if (ds > 0.0) {
-            previous = x4;
-            sPrevious = s;
             pathAdvance(x4, p4, ds);
             s += ds;
         }
@@ -208,17 +218,30 @@ void main() {
             }
         }
     }
-    if (status == 1.0 && nextOut <= 7) status = 3.0;
+    if (status == 1.0 && nextOut <= 14) status = 3.0;
     if (status == 2.0) {
         // Falls in: only the way in exists; flat past its last sample, so interpolation near it stays on it.
-        for (int k = 0; k < 8; k += 1) qOut[k] = qIn[0];
+        for (int k = 0; k < 15; k += 1) qOut[k] = qIn[0];
     }
-    Path0 = vec4(rMin, status, qIn[0]);
-    Path1 = vec4(qIn[1], qIn[2]);
-    Path2 = vec4(qIn[3], qIn[4]);
-    Path3 = vec4(qIn[5], qIn[6]);
-    Path4 = vec4(qIn[7], qOut[1]);
-    Path5 = vec4(qOut[2], qOut[3]);
-    Path6 = vec4(qOut[4], qOut[5]);
-    Path7 = vec4(qOut[6], qOut[7]);
+    if (Group == 0) {
+        // The head: the closest approach's distance along the path, and status and length together (lengths stay under
+        // 8192 blocks), for group 1; then the closest approach's sample.
+        Path0 = vec4(sClosest, 8192.0 * status + min(sEnd, 8191.0), qIn[0]);
+        Path1 = vec4(qIn[1], qIn[2]);
+        Path2 = vec4(qIn[3], qIn[4]);
+        Path3 = vec4(qIn[5], qIn[6]);
+        Path4 = vec4(qIn[7], qOut[1]);
+        Path5 = vec4(qOut[2], qOut[3]);
+        Path6 = vec4(qOut[4], qOut[5]);
+        Path7 = vec4(qOut[6], qOut[7]);
+    } else {
+        Path0 = vec4(qIn[8], qIn[9]);
+        Path1 = vec4(qIn[10], qIn[11]);
+        Path2 = vec4(qIn[12], qIn[13]);
+        Path3 = vec4(qIn[14], qOut[8]);
+        Path4 = vec4(qOut[9], qOut[10]);
+        Path5 = vec4(qOut[11], qOut[12]);
+        Path6 = vec4(qOut[13], qOut[14]);
+        Path7 = vec4(0.0);
+    }
 }
