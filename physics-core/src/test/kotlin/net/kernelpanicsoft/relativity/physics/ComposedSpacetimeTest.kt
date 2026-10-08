@@ -9,6 +9,8 @@ import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
+import net.kernelpanicsoft.relativity.physics.spacetime.field.SampledField
+import net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
@@ -137,5 +139,50 @@ class ComposedSpacetimeTest {
 			val end = path.points.last()
 			for (i in 0..2) assertEquals(reference[i], end[i], 0.1, "arriving=$arriving axis $i")
 		}
+	}
+
+	@Test
+	fun `a sampled field matches its sources between the nodes`() {
+		// Worst relative error over many points 2 to 7 blocks from a softened mass (core 1.5 blocks), at a quarter of its
+		// width apart: the spacing the game picks for a source's own size.
+		val mass = PointMass(0.3, -0.2, 0.1, 0.5, softening = 1.5)
+		val grid = SampledField(-8.0, -8.0, -8.0, 0.375, 43, 43, 43, listOf(mass))
+		val exact = FieldSample()
+		val sampled = FieldSample()
+		val random = java.util.Random(7)
+		var worstValue = 0.0
+		var worstGradient = 0.0
+		repeat(400) {
+			val point = DoubleArray(3) { random.nextDouble() * 14.0 - 7.0 }
+			val r = sqrt(point.indices.sumOf { (point[it] - doubleArrayOf(0.3, -0.2, 0.1)[it]).let { d -> d * d } })
+			if (r < 2.0) return@repeat
+			exact.clear()
+			sampled.clear()
+			mass.contribute(0.0, point[0], point[1], point[2], exact)
+			grid.contribute(0.0, point[0], point[1], point[2], sampled)
+			val gExact = sqrt((1..3).sumOf { exact.d[it][0] * exact.d[it][0] })
+			worstValue = maxOf(worstValue, abs(sampled.value[0] - exact.value[0]) / abs(exact.value[0]))
+			worstGradient = maxOf(worstGradient, sqrt((1..3).sumOf { (sampled.d[it][0] - exact.d[it][0]).let { d -> d * d } }) / gExact)
+		}
+		println("sampled field: worst value error ${"%.4f".format(worstValue)}, worst gradient error ${"%.4f".format(worstGradient)}")
+		assertTrue(worstValue < 0.01, "value error $worstValue")
+		assertTrue(worstGradient < 0.02, "gradient error $worstGradient")
+	}
+
+	@Test
+	fun `light through a sampled field bends as through its sources`() {
+		// A mass whose near field is sampled on a grid round it, the far field analytic: the lattice region and the
+		// rest of space split (inside, the grid; outside, the mass).
+		val mass = PointMass(0.0, 0.0, 0.0, 1.0, softening = 4.0)
+		val grid = SampledField(-32.0, -32.0, -32.0, 1.0, 65, 65, 65, listOf(mass))
+		val outside = object : MetricSource {
+			override fun contribute(t: Double, x: Double, y: Double, z: Double, out: FieldSample) {
+				if (!grid.contains(x, y, z)) mass.contribute(t, x, y, z, out)
+			}
+		}
+		val b = 10.0
+		val analytic = deflection(listOf(mass), b, 1e5)
+		val sampled = deflection(listOf(grid, outside), b, 1e5)
+		assertClose(analytic, sampled, 0.01, "deflection through the sampled field")
 	}
 }

@@ -25,6 +25,12 @@ class FieldSample {
 	@JvmField val value = DoubleArray(16)
 	@JvmField val d = Array(4) { DoubleArray(16) }
 
+	/** Resets to nothing at all (for collecting sources' contributions alone). */
+	fun clear() {
+		value.fill(0.0)
+		for (k in 0..3) d[k].fill(0.0)
+	}
+
 	/** Resets to flat spacetime: η = diag(−1, 1, 1, 1), no derivatives. */
 	fun flat() {
 		value.fill(0.0)
