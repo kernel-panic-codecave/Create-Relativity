@@ -352,6 +352,10 @@ class LensClientGameTest {
 			runOnClient { BlackHoleLens.rawFrame = true }
 			waitTicks(10)
 			takeScreenshot("kerr_close_vertex")
+			runOnClient { VertexLens.kerrOff = true }
+			waitTicks(10)
+			takeScreenshot("kerr_close_vertex_schwarzschild")
+			runOnClient { VertexLens.kerrOff = false }
 			runOnClient { BlackHoleLens.rawFrame = false }
 			// Floor corners (top at y -60) round the camera: o placed, ? hidden, s Schwarzschild, . nothing to bend.
 			val map = computeOnClient { minecraft ->
@@ -414,6 +418,35 @@ class LensClientGameTest {
 				}
 			}
 			CreateRelativity.LOGGER.info("Kerr close, image map alpha at the floor corners:\n{}", alpha)
+			// Where the map puts each corner against where a direct solve does: . within 2 px, + within 20, X farther,
+			// blank where either has no image.
+			val gap = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				val view = org.joml.Quaternionf(camera.rotation()).conjugate()
+				val rows = (30 downTo -30 step 2).toList()
+				val columns = (-40..40 step 2).toList()
+				val points = ArrayList<FloatArray>()
+				for (gz in rows) for (gx in columns) {
+					val v = view.transform(org.joml.Vector3f((gx - camera.position.x).toFloat(), (-60 - camera.position.y).toFloat(), (gz - camera.position.z).toFloat()))
+					points += floatArrayOf(v.x, v.y, v.z)
+				}
+				val mapped = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection) }
+				val solved = points.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection, direct = true) }
+				val width = minecraft.window.width
+				val height = minecraft.window.height
+				rows.indices.joinToString("\n") { r ->
+					columns.indices.joinToString("") { c ->
+						val m = mapped[r * columns.size + c]
+						val d = solved[r * columns.size + c]
+						if (d[0].toInt() != 1 || m[3] > 99f || m[0].toInt() % 10 != 1 && m[0].toInt() != -9) " "
+						else {
+							val px = kotlin.math.hypot((m[1] - d[1]) * width / 2.0, (m[2] - d[2]) * height / 2.0)
+							if (px < 2.0) "." else if (px < 20.0) "+" else "X"
+						}
+					}
+				}
+			}
+			CreateRelativity.LOGGER.info("Kerr close, map vs direct solve on screen:\n{}", gap)
 		}
 	}
 

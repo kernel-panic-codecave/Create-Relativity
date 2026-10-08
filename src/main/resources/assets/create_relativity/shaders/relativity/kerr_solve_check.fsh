@@ -40,6 +40,11 @@ void main() {
             float v;
             int found = relativityKerrImage(p, seen, 99.0, kerr, v);
             code = float(found);
+            if (found == 1) {
+                vec4 clip = Projection * vec4(kerr * length(p), 1.0);
+                Result = vec4(code, clip.xy / clip.w, relativityLastSolve.y);
+                return;
+            }
             if (relativityLastSolve.x > 4.5) code = 5.0;
             magnification = relativityLastSolve.y;
         }
