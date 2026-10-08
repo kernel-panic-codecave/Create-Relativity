@@ -132,6 +132,11 @@ object VertexLens {
 	val pathsTimer = GpuTimer()
 	val mapTimer = GpuTimer()
 
+	/** Camera movement relative to the hole in one frame past which the Kerr tables are redrawn whole (blocks). */
+	private const val JUMP_BLOCKS = 0.5f
+	private val lastHoleGame = Vector3f(Float.MAX_VALUE)
+	private var jump = false
+
 	/** The hole the Kerr image map was last drawn for (a new one starts it over). */
 	private var mapHole: Any? = null
 
@@ -157,10 +162,13 @@ object VertexLens {
 		var kerr = false
 		if (nearest != null && abs(nearest.spin) >= MIN_KERR_SPIN && !kerrOff) {
 			val holeGame = Vector3f((nearest.x - camera.x).toFloat(), (nearest.y - camera.y).toFloat(), (nearest.z - camera.z).toFloat())
+			// A jump (a teleport, a fast flight) redraws the Kerr tables whole; walking catches them up a slice a frame.
+			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
+			lastHoleGame.set(holeGame)
 			if (BlackHoleLens.timeGpu) pathsTimer.begin()
 			kerr = KerrPaths.draw(
 				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(),
-				pathRadius(nearest, holeGame.length().toDouble()).toFloat(),
+				pathRadius(nearest, holeGame.length().toDouble()).toFloat(), jump,
 			)
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
@@ -179,7 +187,7 @@ object VertexLens {
 			mapHole = nearest?.id
 			if (kerr && !kerrSolveOff) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
-				KerrImageMap.draw(KerrPaths.changed)
+				KerrImageMap.draw(KerrPaths.changed, jump)
 				if (BlackHoleLens.timeGpu) mapTimer.end()
 			}
 		}

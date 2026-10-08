@@ -54,9 +54,9 @@ object KerrPaths {
 	/**
 	 * Draws the table for a hole at [holeGame] (camera-relative, game axes) with Schwarzschild radius [rs] and [spin],
 	 * paths followed out to [pathRadius] from it: while that changes (the camera moves), [rowsPerFrame] rows a frame in
-	 * turn, so the table lags the camera by a few frames; whole when new. False if it can't.
+	 * turn, so the table lags the camera by a few frames; whole when new or [whole] (a jump). False if it can't.
 	 */
-	fun draw(holeGame: Vector3f, rs: Float, spin: Float, pathRadius: Float): Boolean {
+	fun draw(holeGame: Vector3f, rs: Float, spin: Float, pathRadius: Float, whole: Boolean = false): Boolean {
 		if (failed || !ensureProgram()) return false
 		val width = WIDTH
 		val height = HEIGHT
@@ -67,7 +67,7 @@ object KerrPaths {
 		if (!changed) return true
 		lastKey = key
 		ensureTarget(width, height)
-		val rows = if (fresh) height else rowsPerFrame.coerceIn(1, height)
+		val rows = if (fresh || whole) height else rowsPerFrame.coerceIn(1, height)
 		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, spin, pathRadius)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)

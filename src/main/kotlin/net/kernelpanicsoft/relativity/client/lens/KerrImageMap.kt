@@ -86,7 +86,7 @@ object KerrImageMap {
 	 * Kerr path table drawn), the block and its samplers bound, if the table [changed] (the camera moved relative to the
 	 * hole) or the map isn't whole yet. It doesn't depend on where the camera looks. False if it can't.
 	 */
-	fun draw(changed: Boolean): Boolean {
+	fun draw(changed: Boolean, whole: Boolean = false): Boolean {
 		if (failed || !ensureProgram()) return false
 		if (changed || !previousValid) drawnSinceChange = 0
 		if (drawnSinceChange >= DEPTH) return true
@@ -129,7 +129,7 @@ object KerrImageMap {
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
 			GL30.glBindVertexArray(vao)
 			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones.
-			val redraw = if (previousValid) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
+			val redraw = if (previousValid && !whole) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
 			for (layer in 0 until DEPTH) {
 				if (((layer - nextLayer) % DEPTH + DEPTH) % DEPTH >= redraw) continue
 				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[SCRATCH], 0, layer)
