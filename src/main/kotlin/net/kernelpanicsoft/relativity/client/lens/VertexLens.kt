@@ -54,9 +54,40 @@ object VertexLens {
 	/** kerr.glsl's KERR_START: the least the table's paths reach from the hole (r_s). */
 	private const val KERR_START = 80.0
 
-	/** How far the Kerr path table's paths reach from [hole]: past everything drawn (the render distance round the camera). */
-	private fun pathRadius(hole: BlackHole, cameraDistance: Double): Double =
-		maxOf(KERR_START * hole.schwarzschildRadius, cameraDistance + 1.5 * Minecraft.getInstance().gameRenderer.renderDistance)
+	/** How far the path table's paths reach from a centre of [scale]: past everything drawn (the render distance round the camera). */
+	private fun pathRadius(scale: Double, cameraDistance: Double): Double =
+		maxOf(KERR_START * scale, cameraDistance + 1.5 * Minecraft.getInstance().gameRenderer.renderDistance)
+
+	/**
+	 * What the path table and image map are centred on: the nearest hole ([hole] set), or with none in view the
+	 * strongest other source. [scale] sets the table's knee (r_s of a hole), [inner] the image map's inner radius.
+	 */
+	private class Centre(val x: Double, val y: Double, val z: Double, val scale: Double, val inner: Double, val hole: BlackHole?, val key: Any)
+
+	private fun centreOf(hole: BlackHole?, others: List<net.kernelpanicsoft.relativity.spacetime.FieldSource>, camera: net.minecraft.world.phys.Vec3): Centre? {
+		if (hole != null) {
+			val a = hole.spin * hole.mass
+			val horizon = hole.mass + kotlin.math.sqrt(maxOf(hole.mass * hole.mass - a * a, 0.0))
+			return Centre(hole.x, hole.y, hole.z, hole.schwarzschildRadius, 1.05 * horizon, hole, hole.id)
+		}
+		val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
+		val strongest = others.maxByOrNull { source ->
+			when (source) {
+				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> 2.0 * abs(source.mass) / maxOf(source.center.distance(at), 1.0)
+				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble -> source.speed * source.radius / maxOf(source.center.distance(at), 1.0)
+			}
+		} ?: return null
+		return when (strongest) {
+			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> {
+				val c = strongest.center
+				Centre(c.x(), c.y(), c.z(), maxOf(2.0 * abs(strongest.mass), strongest.softening / 3.0), maxOf(0.25 * strongest.softening, 0.05), null, strongest)
+			}
+			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble -> {
+				val c = strongest.center
+				Centre(c.x(), c.y(), c.z(), strongest.radius / 10.0, 0.05, null, strongest.javaClass)
+			}
+		}
+	}
 
 	/** Spin from which the hole is treated as Kerr (kerr.glsl's MIN_KERR_SPIN): images found on [KerrPaths]' table. */
 	private const val MIN_KERR_SPIN = 0.05
@@ -75,6 +106,9 @@ object VertexLens {
 
 	/** The hole lensing this frame (world position), or null. */
 	@Volatile private var hole: BlackHole? = null
+
+	/** What the lens is centred on this frame, or null. */
+	@Volatile private var lensCentre: Centre? = null
 	private var savedSmartCull: Boolean? = null
 
 	/** True while vertex lensing is on for this frame's level render (the post pass then skips geometry). */
@@ -149,35 +183,35 @@ object VertexLens {
 		// Perspective renders (Veil level views, such as other mods' cameras) draw the level too, and stay unlensed.
 		val perspective = VeilLevelPerspectiveRenderer.isRenderingPerspective()
 		val camera = minecraft.gameRenderer.mainCamera.position
-		val nearest = if (wanted && level != null && !perspective) {
-			BlackHoleLens.visibleHoles(level).minByOrNull { it.center.distanceToSqr(camera) }
-		} else null
+		val holes = if (wanted && level != null && !perspective) BlackHoleLens.visibleHoles(level).sortedBy { it.center.distanceToSqr(camera) } else emptyList()
+		val others = if (wanted && level != null && !perspective) BlackHoleLens.visibleSources(level) else emptyList()
+		val nearest = holes.firstOrNull()
+		val centre = centreOf(nearest, others, camera)
 		if (!perspective) {
 			hole = nearest
-			activeThisFrame = nearest != null
-			relaxCaveCulling(nearest != null)
+			lensCentre = centre
+			activeThisFrame = centre != null
+			relaxCaveCulling(centre != null)
 		}
 		// The level's view rotation (as GameRenderer builds it): the shader works in view space.
 		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
-		// A spinning hole: this frame's Kerr path table, which the shaders invert.
+		// A spinning hole or anything but holes: this frame's path table through every source, which the image map
+		// inverts. (Non-spinning holes alone keep the Schwarzschild image table.)
+		val (count, general) = BlackHoleLens.packSources(holes, others, camera, sources)
 		var kerr = false
-		if (nearest != null && abs(nearest.spin) >= MIN_KERR_SPIN && !kerrOff) {
-			val holeGame = Vector3f((nearest.x - camera.x).toFloat(), (nearest.y - camera.y).toFloat(), (nearest.z - camera.z).toFloat())
-			// A jump (a teleport, a fast flight) redraws the Kerr tables whole; walking catches them up a slice a frame.
+		if (centre != null && general && !(kerrOff && others.isEmpty())) {
+			val holeGame = Vector3f((centre.x - camera.x).toFloat(), (centre.y - camera.y).toFloat(), (centre.z - camera.z).toFloat())
+			// A jump (a teleport, a fast flight) redraws the tables whole; walking catches them up a slice a frame.
 			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
 			lastHoleGame.set(holeGame)
 			if (BlackHoleLens.timeGpu) pathsTimer.begin()
-			val (count, _) = BlackHoleLens.packSources(
-				BlackHoleLens.visibleHoles(level!!).sortedBy { it.center.distanceToSqr(camera) },
-				BlackHoleLens.visibleSources(level), camera, sources,
-			)
 			kerr = KerrPaths.draw(
-				holeGame, nearest.schwarzschildRadius.toFloat(), pathRadius(nearest, holeGame.length().toDouble()).toFloat(),
+				holeGame, centre.scale.toFloat(), pathRadius(centre.scale, holeGame.length().toDouble()).toFloat(),
 				sources, count, jump,
 			)
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
-		upload(nearest, camera.x, camera.y, camera.z, view, projection, nearest != null, kerr && !kerrSolveOff)
+		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null, kerr && !kerrSolveOff)
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)
@@ -188,8 +222,8 @@ object VertexLens {
 		// The image map the vertices read, solved on the path table (the block and the table bound for it).
 		KerrImageMap.ensureTexture()
 		if (!perspective) {
-			if (!kerr || nearest?.id != mapHole) KerrImageMap.invalidate()
-			mapHole = nearest?.id
+			if (!kerr || centre?.key != mapHole) KerrImageMap.invalidate()
+			mapHole = centre?.key
 			if (kerr && !kerrSolveOff) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
 				KerrImageMap.draw(KerrPaths.changed, jump)
@@ -206,45 +240,41 @@ object VertexLens {
 		if (buffer == 0) return
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(1)
-			data.put(0, if (enabled && hole != null) 1f else 0f)
+			data.put(0, if (enabled && lensCentre != null) 1f else 0f)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
 			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 16L, data)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
 		}
 	}
 
-	private fun upload(hole: BlackHole?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, kerr: Boolean) {
+	private fun upload(centre: Centre?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, kerr: Boolean) {
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(BLOCK_BYTES / 4)
-			if (hole != null) {
-				val at = view.transform(Vector3f((hole.x - camX).toFloat(), (hole.y - camY).toFloat(), (hole.z - camZ).toFloat()))
-				data.put(at.x).put(at.y).put(at.z).put(hole.schwarzschildRadius.toFloat())
+			if (centre != null) {
+				val at = view.transform(Vector3f((centre.x - camX).toFloat(), (centre.y - camY).toFloat(), (centre.z - camZ).toFloat()))
+				data.put(at.x).put(at.y).put(at.z).put(centre.scale.toFloat())
 			} else {
 				data.put(0f).put(0f).put(0f).put(0f)
 			}
 			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(if (kerr) 1f else 0f).put(kerrDebug.toFloat())
 			projection.get(data.position(), data)
 			data.position(data.position() + 16)
-			if (hole != null && kerr) {
-				val dx = hole.x - camX
-				val dy = hole.y - camY
-				val dz = hole.z - camZ
-				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put(hole.spin.toFloat())
-				data.put(hole.schwarzschildRadius.toFloat()).put(0f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+			if (centre != null && kerr) {
+				val dx = centre.x - camX
+				val dy = centre.y - camY
+				val dz = centre.z - camZ
+				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put((centre.hole?.spin ?: 0.0).toFloat())
+				// [7].y: 1 if the centre is a hole (the Schwarzschild image is a fair first guess and cut there).
+				data.put(centre.scale.toFloat()).put(if (centre.hole != null) 1f else 0f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
 					val c = viewToGame.getColumn(column, Vector3f())
 					data.put(c.x).put(c.y).put(c.z).put(0f)
 				}
-				// Boyer-Lindquist r of the camera (local axes: game z, x, y; spin about game y), capped at the start sphere.
-				val rs = hole.schwarzschildRadius
-				val a = hole.spin * rs / 2
-				val w = dx * dx + dy * dy + dz * dz - a * a
-				val camR = kotlin.math.sqrt(0.5 * w + kotlin.math.sqrt(0.25 * w * w + a * a * dy * dy))
-				val reach = pathRadius(hole, kotlin.math.sqrt(dx * dx + dy * dy + dz * dz))
-				// The image map: from just outside the horizon out to the paths' end.
-				val horizon = rs / 2 + kotlin.math.sqrt(maxOf(rs * rs / 4 - a * a, 0.0))
-				data.put(minOf(camR, reach).toFloat()).put(reach.toFloat()).put((1.05 * horizon).toFloat()).put(reach.toFloat())
+				val camR = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
+				val reach = pathRadius(centre.scale, camR)
+				// The image map: from just outside the horizon (or the centre's own inner radius) out to the paths' end.
+				data.put(minOf(camR, reach).toFloat()).put(reach.toFloat()).put(centre.inner.toFloat()).put(reach.toFloat())
 			} else {
 				repeat(24) { data.put(0f) }
 			}
@@ -390,12 +420,12 @@ object VertexLens {
 		}
 	}
 
-	/** Frustum override: boxes near the lensing hole are always drawn. */
+	/** Frustum override: boxes near the lens centre (the lensing hole, or another source) are always drawn. */
 	@JvmStatic
 	fun alwaysVisible(box: AABB): Boolean {
 		if (!activeThisFrame) return false
-		val hole = hole ?: return false
-		val radius = minOf(RELAX_RADIUS * hole.schwarzschildRadius, 256.0)
+		val hole = lensCentre ?: return false
+		val radius = minOf(RELAX_RADIUS * hole.scale, 256.0)
 		val dx = maxOf(box.minX - hole.x, 0.0, hole.x - box.maxX)
 		val dy = maxOf(box.minY - hole.y, 0.0, hole.y - box.maxY)
 		val dz = maxOf(box.minZ - hole.z, 0.0, hole.z - box.maxZ)

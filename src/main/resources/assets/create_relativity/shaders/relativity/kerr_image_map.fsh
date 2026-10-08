@@ -34,9 +34,12 @@ void main() {
     vec3 p = transpose(viewToGame) * game;
     PathPosition = 99.0;
 
-    vec3 seen;
-    bool nearAxis;
-    int image = relativitySchwarzschildImage(p, seen, nearAxis);
+    vec3 seen = normalize(p);
+    bool nearAxis = false;
+    int image = 1;
+    // Round a hole, its Schwarzschild image is the first guess (and its axis cut); round another source, the point's
+    // own direction.
+    if (RelativityLensData[7].y > 0.5) image = relativitySchwarzschildImage(p, seen, nearAxis);
     if (image == 2) {
         Result = vec4(viewToGame * seen - straight, 1.0);
         return;

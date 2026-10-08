@@ -679,6 +679,74 @@ class LensClientGameTest {
 	 * its sky pixels' paths end, the CPU reference's picture); nothing asserted.
 	 */
 	@ClientGameTest
+	/**
+	 * Several sources together (M10): two holes (one spinning), a positive and a negative weak-field mass and a warp
+	 * bubble over a checker floor with red pillars, against the CPU trace through every source
+	 * ([LensReference.traceField]); then the vertex lens alone (the post pass's tracing off), where any hole it leaves
+	 * in the floor shows as sky.
+	 */
+	fun ClientGameTestContext.mixedSources() {
+		if (!ClientTestInput.selected("mixedSources")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else listOf(
+				net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-8.5, -52.0, -14.5), 0.5, softening = 1.5),
+				net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-8.5, -52.0, 14.5), -0.5, softening = 1.5),
+				net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble(org.joml.Vector3d(-22.5, -53.0, 6.5), org.joml.Vector3d(0.0, 0.0, 1.0), 0.6, 4.0),
+			)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -80..48) for (z in -48..48) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+				for ((px, pz) in listOf(-14 to -6, -14 to 6, 6 to -10, 6 to 10, -30 to -3, -30 to 3)) {
+					for (y in -60..-55) level.setBlock(BlockPos(px, y, pz), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+				}
+			}
+			command("relativity bh create 0.5 -54 -4.5 2 0.9")
+			command("relativity bh create 0.5 -53 9.5 1.5 0")
+			command("tick freeze")
+			SpacetimeField.addProvider(provider)
+			try {
+				command("tp @a -44.5 -54 0.5 -90 8")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				waitTicks(40)
+				settle()
+				val shot = takeScreenshot("mixed_sources")
+				val columns = 160
+				val rows = computeOnClient { columns * it.window.height / it.window.width }
+				val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+				for (first in 0 until rows step 8) {
+					val part = computeOnClient { minecraft -> LensReference.traceField(minecraft, columns, rows, 200.0, 85.0, first until minOf(first + 8, rows)) }
+					for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+				}
+				val wrong = LensReference.compare(reference, shot)
+				CreateRelativity.LOGGER.info("Mixed sources vs reference: {}% of pixels in the wrong class", "%.1f".format(wrong * 100))
+				runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE }
+				waitTicks(10)
+				val vertexOnly = takeScreenshot("mixed_sources_vertex_only")
+				CreateRelativity.LOGGER.info("Mixed sources, vertex lens alone vs reference: {}% of pixels in the wrong class", "%.1f".format(LensReference.compare(reference, vertexOnly) * 100))
+				runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS }
+			} finally {
+				SpacetimeField.removeProvider(provider)
+			}
+		}
+	}
+
 	fun ClientGameTestContext.oceanScene() {
 		if (!ClientTestInput.selected("oceanScene")) return
 		runOnClient { minecraft ->

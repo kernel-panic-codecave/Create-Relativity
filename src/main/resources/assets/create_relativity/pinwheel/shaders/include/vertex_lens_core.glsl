@@ -437,17 +437,24 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     vec4 view = inverse(proj) * clip;
     vec3 p = view.xyz / view.w;
     if (RelativityLensData[1].y > 0.5) return proj * vec4(p, 1.0);
-    vec3 seen;
-    bool nearAxis;
-    int image = relativitySchwarzschildImage(p, seen, nearAxis);
-    if (image == 2) return clip;
-    // A spinning hole: the Kerr image, from the map.
+    vec3 seen = normalize(p);
+    bool nearAxis = false;
+    int image = 1;
+    // The Schwarzschild image: alone for non-spinning holes; for anything else a hole's first guess and its axis cut.
+    // Round another source (a mass, a bubble) the map alone places points; outside it they stand where they are.
+    bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
+    if (holeCentre) {
+        image = relativitySchwarzschildImage(p, seen, nearAxis);
+        if (image == 2) return clip;
+    }
+    // Through every source: the image from the map.
     if (RelativityLensData[1].z > 0.5 && !nearAxis) {
         vec3 kerr;
         int found = relativityKerrMapImage(p, kerr);
         relativityLastFound = found;
         if (found == 1) return proj * vec4(kerr * length(p), 1.0);
         if (found < 0) image = -1;
+        if (found == 0 && !holeCentre) return clip;
     }
     // No primary image, or near the axis: such a vertex gets a depth far past the far plane (toward the hole on
     // screen), so a triangle reaching it passes the far plane within a hair of its other vertices: clipped there, or
