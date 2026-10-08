@@ -15,7 +15,7 @@ out vec4 Table; // value (SceneHit), outcome (0: not marched)
 void main() {
     Table = vec4(0.0);
     gl_FragDepth = 0.0;
-    if (HoleCount == 0 || LensMode == 3 || LensMode == 5) return;
+    if ((HoleCount == 0 && SourceCount == 0) || LensMode == 3 || LensMode == 5) return;
     if (!skyNear(texCoord, 3.0)) return;
     SceneHit hit;
     SceneHit nearest;

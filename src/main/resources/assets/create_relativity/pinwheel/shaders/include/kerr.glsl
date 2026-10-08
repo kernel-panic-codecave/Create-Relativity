@@ -87,6 +87,145 @@ float kerrNullMomentum(vec3 x, vec3 d, float m, float a, out vec3 p, out float p
     return h0;
 }
 
+// ---- General spacetime (M10): every source together --------------------------------------------------------------
+// Sources add into the inverse metric, g^uv = eta^uv + sum dg^uv (physics-core ComposedSpacetime, MetricSource), so
+// light's Hamiltonian H = g^uv p_u p_v / 2 is flat's plus one term per source. Coordinates are game axes relative to the
+// camera, time t in blocks (0 now); state x4 = (x, t), p4 = (p, p_t). Each source is three vec4s in Sources:
+//   [0] centre (camera-relative, at t = 0), type: 1 Kerr hole, 2 weak-field mass, 3 warp bubble
+//   [1] Kerr: (m, a); mass: (m signed, softening); bubble: (radius, sigma, speed)
+//   [2] bubble: direction of motion (unit, game axes)
+const int MAX_SOURCES = 8;
+uniform int SourceCount;
+uniform vec4 Sources[3 * MAX_SOURCES];
+
+const float SOURCE_KERR = 1.0;
+const float SOURCE_MASS = 2.0;
+const float SOURCE_BUBBLE = 3.0;
+
+// Alcubierre's shape function f(r) and its slope f'(r).
+float bubbleShape(float r, float radius, float sigma, out float slope) {
+    float norm = 1.0 / (2.0 * tanh(sigma * radius));
+    float u = sigma * (r + radius);
+    float w = sigma * (r - radius);
+    float cu = cosh(clamp(u, -40.0, 40.0));
+    float cw = cosh(clamp(w, -40.0, 40.0));
+    slope = sigma * (1.0 / (cu * cu) - 1.0 / (cw * cw)) * norm;
+    return (tanh(u) - tanh(w)) * norm;
+}
+
+// Hamilton's equations for light at (x4, p4) through every source: dx4 = dH/dp4, dp4 = -dH/dx4. Forward in time.
+void spacetimeDerivative(vec4 x4, vec4 p4, out vec4 dx4, out vec4 dp4) {
+    vec3 x = x4.xyz;
+    vec3 p = p4.xyz;
+    float pt = p4.w;
+    // Flat: H = (|p|^2 - p_t^2) / 2.
+    vec3 dx = p;
+    float dt = -pt;
+    vec3 dp = vec3(0.0);
+    float dpt = 0.0;
+    for (int i = 0; i < SourceCount; i += 1) {
+        vec4 s0 = Sources[3 * i];
+        vec4 s1 = Sources[3 * i + 1];
+        if (s0.w == SOURCE_KERR) {
+            // dH = -h (l.p - p_t)^2 / 2 (kerrDerivative, on the hole's local axes).
+            vec3 local = toLocal(x - s0.xyz);
+            vec3 kdx;
+            vec3 kdp;
+            kerrDerivative(local, toLocal(p), pt, s1.x, s1.y, kdx, kdp);
+            dx += toGame(kdx) - p; // kerrDerivative's dx includes flat's p
+            dp += toGame(kdp);
+            float h;
+            vec3 l;
+            kerrProfile(local, s1.x, s1.y, h, l);
+            dt += h * (dot(l, toLocal(p)) - pt);
+        } else if (s0.w == SOURCE_MASS) {
+            // dH = phi (p_t^2 + |p|^2), phi = -m / sqrt(r^2 + eps^2).
+            vec3 d = x - s0.xyz;
+            float s2 = dot(d, d) + s1.y * s1.y;
+            float sr = sqrt(s2);
+            float phi = -s1.x / sr;
+            vec3 gradPhi = s1.x * d / (s2 * sr);
+            float pp = pt * pt + dot(p, p);
+            dx += 2.0 * phi * p;
+            dt += 2.0 * phi * pt;
+            dp -= gradPhi * pp;
+        } else if (s0.w == SOURCE_BUBBLE) {
+            // dH = -v f (n.p) p_t - v^2 f^2 (n.p)^2 / 2, the bubble's centre moving at v n.
+            vec3 n = Sources[3 * i + 2].xyz;
+            float v = s1.z;
+            vec3 d = x - (s0.xyz + v * n * x4.w);
+            float r = length(d);
+            float slope;
+            float f = bubbleShape(r, s1.x, s1.y, slope);
+            vec3 gradF = r > 1e-6 ? slope * d / r : vec3(0.0);
+            float dtF = -v * dot(n, gradF);
+            float np = dot(n, p);
+            dx += (-v * f * pt - v * v * f * f * np) * n;
+            dt += -v * f * np;
+            float k = v * np * pt + v * v * f * np * np;
+            dp += k * gradF;
+            dpt += k * dtF;
+        }
+    }
+    dx4 = vec4(dx, dt);
+    dp4 = vec4(dp, dpt);
+}
+
+// The same, followed back in time (light traced from where it's seen).
+void spacetimeBackward(vec4 x4, vec4 p4, out vec4 dx4, out vec4 dp4) {
+    spacetimeDerivative(x4, p4, dx4, dp4);
+    dx4 = -dx4;
+    dp4 = -dp4;
+}
+
+// The inverse metric g^uv at x4 (indices: x, y, z, t), for setting up momenta.
+mat4 spacetimeInverseMetric(vec4 x4) {
+    mat4 g = mat4(1.0);
+    g[3][3] = -1.0;
+    for (int i = 0; i < SourceCount; i += 1) {
+        vec4 s0 = Sources[3 * i];
+        vec4 s1 = Sources[3 * i + 1];
+        if (s0.w == SOURCE_KERR) {
+            float h;
+            vec3 l;
+            kerrProfile(toLocal(x4.xyz - s0.xyz), s1.x, s1.y, h, l);
+            vec4 lUp = vec4(toGame(l), -1.0);
+            g -= h * outerProduct(lUp, lUp);
+        } else if (s0.w == SOURCE_MASS) {
+            vec3 d = x4.xyz - s0.xyz;
+            float phi = -s1.x / sqrt(dot(d, d) + s1.y * s1.y);
+            g += 2.0 * phi * mat4(1.0);
+        } else if (s0.w == SOURCE_BUBBLE) {
+            vec3 n = Sources[3 * i + 2].xyz;
+            float v = s1.z;
+            float slope;
+            float f = bubbleShape(length(x4.xyz - (s0.xyz + v * n * x4.w)), s1.x, s1.y, slope);
+            vec4 shift = vec4(-v * f * n, 0.0);
+            vec4 time = vec4(0.0, 0.0, 0.0, 1.0);
+            g += outerProduct(shift, time) + outerProduct(time, shift) - outerProduct(shift, shift);
+        }
+    }
+    return g;
+}
+
+// The momentum of light at x4 whose coordinate velocity is along d (u = (k d, 1) null, p = g u): solves
+// g_uv u^u u^v = 0 for the future root.
+vec4 spacetimeNullMomentum(vec4 x4, vec3 d) {
+    mat4 g = inverse(spacetimeInverseMetric(x4));
+    vec4 dd = vec4(d, 0.0);
+    vec4 tt = vec4(0.0, 0.0, 0.0, 1.0);
+    float qa = dot(dd, g * dd);
+    float qb = 2.0 * dot(dd, g * tt);
+    float qc = dot(tt, g * tt);
+    float k = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa);
+    return g * (k * dd + tt);
+}
+
+// The light seen at x4 looking along dir, set up to be followed back in time: the photon arriving along -dir.
+vec4 spacetimeArriving(vec4 x4, vec3 dir) {
+    return spacetimeNullMomentum(x4, -dir);
+}
+
 struct KerrRay {
     int status;      // 0 escaped (exitPos/exitDir set), 1 captured, 2 not marched
     vec3 exitPos;    // camera-relative

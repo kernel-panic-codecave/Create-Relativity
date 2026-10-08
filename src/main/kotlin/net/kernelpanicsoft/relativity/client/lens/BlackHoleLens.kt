@@ -13,6 +13,7 @@ import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.physics.lens.SchwarzschildLens
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
+import net.kernelpanicsoft.relativity.spacetime.FieldSource
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.client.Minecraft
 import net.minecraft.world.level.Level
@@ -54,6 +55,10 @@ object BlackHoleLens {
 	private var textureReady = false
 	private val holeUniforms = Array(MAX_HOLES) { Vector4f() }
 	private val spinUniforms = Array(MAX_HOLES) { Vector4f() }
+
+	/** Must match MAX_SOURCES in kerr.glsl. */
+	const val MAX_SOURCES = 8
+	private val sourceUniforms = Array(3 * MAX_SOURCES) { Vector4f() }
 
 	/** Paints each pixel by how its bent path ended, every pixel marched (black_hole_lens.fsh, LensMode 1); only GameTests change it. */
 	@JvmField
@@ -157,7 +162,7 @@ object BlackHoleLens {
 		}
 
 		val level = minecraft.level
-		val wanted = level != null && RelativityConfig.Client.Render.lensing && visibleHoles(level).isNotEmpty()
+		val wanted = level != null && RelativityConfig.Client.Render.lensing && (visibleHoles(level).isNotEmpty() || visibleSources(level).isNotEmpty())
 		val post = VeilRenderSystem.renderer().postProcessingManager
 		if (wanted && !post.isActive(PIPELINE)) post.add(PIPELINE)
 		else if (!wanted && post.isActive(PIPELINE)) post.remove(PIPELINE)
@@ -213,6 +218,50 @@ object BlackHoleLens {
 		return SpacetimeField.blackHoles(level).filter { it.schwarzschildRadius > MIN_BENDING * it.center.distanceTo(camera) }
 	}
 
+	/** Sources other than holes that bend light noticeably as seen from the camera (as holes: r_s 2|m| for a mass). */
+	fun visibleSources(level: Level): List<FieldSource> {
+		val camera = Minecraft.getInstance().gameRenderer.mainCamera.position
+		val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
+		return SpacetimeField.fieldSources(level).filter { source ->
+			when (source) {
+				is FieldSource.Mass -> 2.0 * kotlin.math.abs(source.mass) > MIN_BENDING * source.center.distance(at)
+				is FieldSource.Bubble -> source.center.distance(at) < 4.0 * Minecraft.getInstance().gameRenderer.renderDistance + source.radius
+			}
+		}
+	}
+
+	/**
+	 * Every source as kerr.glsl's Sources (camera-relative, game axes): [holes] first, then [others]. Whether light
+	 * then needs the general tracer (a spinning hole, or anything but holes).
+	 */
+	fun packSources(holes: List<BlackHole>, others: List<FieldSource>, camera: net.minecraft.world.phys.Vec3, into: Array<Vector4f>): Pair<Int, Boolean> {
+		var count = 0
+		var general = false
+		fun put(center: org.joml.Vector3dc, type: Float, a: Vector4f.() -> Unit, b: Vector4f.() -> Unit = { set(0f) }) {
+			if (count >= MAX_SOURCES) return
+			into[3 * count].set((center.x() - camera.x).toFloat(), (center.y() - camera.y).toFloat(), (center.z() - camera.z).toFloat(), type)
+			into[3 * count + 1].a()
+			into[3 * count + 2].b()
+			count += 1
+		}
+		for (hole in holes) {
+			val m = hole.mass
+			put(org.joml.Vector3d(hole.x, hole.y, hole.z), 1f, { set(m.toFloat(), (hole.spin * m).toFloat(), 0f, 0f) })
+			if (kotlin.math.abs(hole.spin) >= 0.05) general = true // kerr.glsl MIN_KERR_SPIN
+		}
+		for (source in others) {
+			general = true
+			when (source) {
+				is FieldSource.Mass -> put(source.center, 2f, { set(source.mass.toFloat(), source.softening.toFloat(), 0f, 0f) })
+				is FieldSource.Bubble -> {
+					val n = org.joml.Vector3d(source.direction).normalize()
+					put(source.center, 3f, { set(source.radius.toFloat(), (8.0 / source.radius).toFloat(), source.speed.toFloat(), 0f) }, { set(n.x.toFloat(), n.y.toFloat(), n.z.toFloat(), 0f) })
+				}
+			}
+		}
+		return count to general
+	}
+
 	/**
 	 * Uploads the nearest holes, relative to the camera, right before our pass runs. The pass runs at the end
 	 * of level rendering ("after_level" in the pipeline), before the hand is drawn and while depth is intact.
@@ -231,6 +280,7 @@ object BlackHoleLens {
 		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
 			// Veil runs stage passes inside perspective renders (other level views) too; they stay unlensed.
 			uniform("HoleCount") { setInt(0) }
+			uniform("SourceCount") { setInt(0) }
 			return
 		}
 		val minecraft = Minecraft.getInstance()
@@ -248,6 +298,10 @@ object BlackHoleLens {
 		uniform("HoleCount") { setInt(holes.size) }
 		uniform("Holes") { setVectors(*holeUniforms) }
 		uniform("HoleSpins") { setVectors(*spinUniforms) }
+		val (sourceCount, general) = packSources(holes, visibleSources(level), camera, sourceUniforms)
+		uniform("SourceCount") { setInt(sourceCount) }
+		uniform("Sources") { setVectors(*sourceUniforms) }
+		uniform("GeneralSpacetime") { setInt(if (general) 1 else 0) }
 		uniform("KerrTableEnabled") { setInt(kerrMode.ordinal) }
 		uniform("LensMode") { setInt(if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))

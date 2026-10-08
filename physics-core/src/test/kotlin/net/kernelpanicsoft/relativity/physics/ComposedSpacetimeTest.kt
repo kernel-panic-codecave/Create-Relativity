@@ -123,4 +123,19 @@ class ComposedSpacetimeTest {
 		ray.coordinateVelocity(HamiltonianRay.lightlike(spacetime, doubleArrayOf(0.0, 0.0, 0.0, 0.0), doubleArrayOf(-1.0, 0.0, 0.0)), v)
 		assertClose(speed - 1.0, v[0], 1e-6, "\"backward\" still moves forward")
 	}
+
+	@Test
+	fun `traced as a polyline, it agrees with NullRay round a spinning hole, both ways in time`() {
+		val kerr = Kerr(1.0, 0.9)
+		val composed = ComposedSpacetime(listOf(KerrSource(0.0, 0.0, 0.0, 1.0, 0.9)))
+		val origin = doubleArrayOf(-30.0, 7.0, 1.5)
+		val direction = doubleArrayOf(1.0, 0.0, 0.0)
+		for (arriving in listOf(false, true)) {
+			val reference = NullRay.trace(kerr, origin, direction, 60.0, 1.5, maxSegment = 0.05, arriving = arriving).points.last()
+			val path = HamiltonianRay(composed, rtol = 1e-10, atol = 1e-12).trace(origin, direction, 60.0, maxSegment = 0.05, arriving = arriving)
+			assertEquals(NullRay.End.LENGTH, path.end)
+			val end = path.points.last()
+			for (i in 0..2) assertEquals(reference[i], end[i], 0.1, "arriving=$arriving axis $i")
+		}
+	}
 }

@@ -482,7 +482,7 @@ bool inShadow(vec3 dir, KerrRay first) {
 void main() {
     vec3 dir = viewRay(texCoord);
     vec4 original = texture(DiffuseSampler0, texCoord);
-    if (HoleCount == 0 || LensMode == 4 || LensMode == 5) { fragColor = original; return; } // the frame as rendered (profiling)
+    if ((HoleCount == 0 && SourceCount == 0) || LensMode == 4 || LensMode == 5) { fragColor = original; return; } // the frame as rendered (profiling)
     if (KerrTableEnabled == 3) {
         // The table's error against a full march of this pixel: red, the exit direction's (a quarter per sample
         // spacing: a pixel's angle, or the exit direction's change per pixel where the lens squeezes the background);
@@ -518,7 +518,7 @@ void main() {
     if (sceneDist < 1e29) {
         // Geometry is already where its light appears; only the shadow can hide it (if it lies beyond the hole).
         scene = original.rgb;
-        if (inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
+        if (HoleCount > 0 && inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
     } else {
         hit = sceneNearest(dir, texCoord, sceneDist);
         scene = sceneColor(hit, original);

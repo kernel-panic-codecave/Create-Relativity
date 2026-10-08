@@ -13,7 +13,7 @@ out vec4 Table; // value (SceneHit), outcome (0: not marched)
 
 void main() {
     Table = vec4(0.0);
-    if (HoleCount == 0 || LensMode == 3 || LensMode == 5) return;
+    if ((HoleCount == 0 && SourceCount == 0) || LensMode == 3 || LensMode == 5) return;
     // Only sky pixels use the table (where the world is drawn, the vertex lens already put it in place), but every
     // texel round them is marched, so a sky pixel beside drawn ground still has neighbours to interpolate between.
     if (!skyNear(texCoord, 6.0)) return;

@@ -44,7 +44,9 @@ uniform sampler2D VoxelTex7;
 #define MAX_HOLES 8
 uniform int HoleCount;
 uniform vec4 Holes[MAX_HOLES]; // xyz: centre relative to the camera (blocks), w: Schwarzschild radius (blocks)
-uniform vec4 HoleSpins[MAX_HOLES]; // x: spin a/M, signed (+ counter-clockwise about up, seen from above); nearest first
+uniform vec4 HoleSpins[MAX_HOLES];
+uniform int GeneralSpacetime; // 1: paths are followed through every source together (spacetimeDerivative): a spinning
+                              // hole, or sources other than holes; 0: only non-spinning holes (the cheap lightBend) // x: spin a/M, signed (+ counter-clockwise about up, seen from above); nearest first
 
 const float SKY_DEPTH = 0.99999;
 
@@ -131,6 +133,27 @@ float weakShift(vec3 dir, float dist) {
             total += rs / b * (rD - r0 - dist * s0) / max(dist, 1e-3);
         }
     }
+    for (int i = 0; i < SourceCount; i += 1) {
+        vec4 s0 = Sources[3 * i];
+        if (s0.w == SOURCE_MASS) {
+            // As a hole of r_s 2|m| (either sign bends as much, one way or the other).
+            float rs = 2.0 * abs(Sources[3 * i + 1].x);
+            float tP = dot(s0.xyz, dir);
+            float b = max(length(s0.xyz - dir * tP), max(Sources[3 * i + 1].y, 1e-3));
+            float r0 = sqrt(tP * tP + b * b);
+            float s0n = -tP / r0;
+            if (dist > 1e29) {
+                total += rs / b * (1.0 - s0n);
+            } else {
+                float rD = sqrt((dist - tP) * (dist - tP) + b * b);
+                total += rs / b * (rD - r0 - dist * s0n) / max(dist, 1e-3);
+            }
+        } else if (s0.w == SOURCE_BUBBLE) {
+            // No first-order picture: anything whose straight path comes near the bubble counts as bent there.
+            float tP = clamp(dot(s0.xyz, dir), 0.0, min(dist, 1e6));
+            if (length(s0.xyz - dir * tP) < 2.0 * Sources[3 * i + 1].x) total += 1e3;
+        }
+    }
     return total;
 }
 
@@ -145,6 +168,20 @@ void weakPath(vec3 dir, float t, out vec3 x, out vec3 v) {
         vec3 toward = c - dir * tP;
         float b = max(length(toward), 1e-3);
         vec3 n = toward / b;
+        float r0 = sqrt(tP * tP + b * b);
+        float rT = sqrt((t - tP) * (t - tP) + b * b);
+        float s0 = -tP / r0;
+        x += n * (rs / b * (rT - r0 - t * s0));
+        v += n * (rs / b * ((t - tP) / rT - s0));
+    }
+    for (int i = 0; i < SourceCount; i += 1) {
+        vec4 c = Sources[3 * i];
+        if (c.w != SOURCE_MASS) continue;
+        float rs = 2.0 * Sources[3 * i + 1].x; // signed: a negative mass pushes the path away
+        float tP = dot(c.xyz, dir);
+        vec3 toward = c.xyz - dir * tP;
+        float b = max(length(toward), max(Sources[3 * i + 1].y, 1e-3));
+        vec3 n = toward / max(length(toward), 1e-6);
         float r0 = sqrt(tP * tP + b * b);
         float rT = sqrt((t - tP) * (t - tP) + b * b);
         float s0 = -tP / r0;
@@ -551,15 +588,12 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
     weakPath(dir, lo, x, v);
     float traveled = lo;
 
-    // Kerr state, started where the path first comes under the nearest hole's influence: local position, momentum.
-    bool kerr = abs(HoleSpins[0].x) >= MIN_KERR_SPIN;
-    bool kerrLive = false;
-    float kerrM = 0.5 * Holes[0].w;
-    float kerrA = HoleSpins[0].x * kerrM;
-    float kerrHorizon = kerrM + sqrt(max(kerrM * kerrM - kerrA * kerrA, 0.0));
-    vec3 kx = vec3(0.0);
-    vec3 kp = vec3(0.0);
-    float kpt = 0.0;
+    // General state (every source together), started where the path first comes under their influence: position and
+    // time (camera-relative, blocks), momentum.
+    bool general = GeneralSpacetime == 1;
+    bool generalLive = false;
+    vec4 gx = vec4(0.0);
+    vec4 gp = vec4(0.0);
     for (int n = 0; n < SCENE_STEPS; n += 1) {
         marchSteps = n + 1;
         // Nearest hole, in r_s, and whether every hole is settled (far, and the path leaving it).
@@ -573,10 +607,40 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
             if (r < near) {
                 near = r;
                 nearRs = Holes[i].w;
-                nearHorizon = Holes[i].w;
-                if (i == 0 && kerr) nearHorizon = kerrHorizon; // inside r_s when spinning
+                float m = 0.5 * Holes[i].w;
+                float a = HoleSpins[i].x * m;
+                nearHorizon = m + sqrt(max(m * m - a * a, 0.0)); // inside r_s when spinning
             }
             if (r < SETTLED * Holes[i].w || dot(d, v) < 0.0) settled = false;
+        }
+        for (int i = 0; i < SourceCount; i += 1) {
+            vec4 c = Sources[3 * i];
+            vec4 c1 = Sources[3 * i + 1];
+            if (c.w == SOURCE_MASS) {
+                vec3 d = x - c.xyz;
+                float r = length(d);
+                float rs = 2.0 * abs(c1.x);
+                if (r < near) {
+                    near = r;
+                    nearRs = max(rs, 0.5 * c1.y);
+                    nearHorizon = 0.0;
+                }
+                if (r < SETTLED * rs + c1.y || dot(d, v) < 0.0) settled = false;
+            } else if (c.w == SOURCE_BUBBLE) {
+                // Its walls are a sixteenth of its radius thick: steps no longer than half that near it.
+                vec3 d = x - (c.xyz + c1.z * Sources[3 * i + 2].xyz * gx.w);
+                float r = max(length(d) - c1.x, 0.0);
+                float wall = 1.0 / max(c1.y, 1e-3);
+                if (r < 2.0 * c1.x) {
+                    settled = false;
+                    if (r < near) {
+                        near = r + 2.0 * wall;
+                        nearRs = wall;
+                        nearHorizon = 0.0;
+                    }
+                }
+                if (dot(d, v) < 0.0) settled = false;
+            }
         }
         // Steps grow with distance travelled (hits are refined by bisection), and near a hole with the height above
         // its horizon, but no smaller than 15% of the radius (so a ray grazing the photon sphere takes ~40 steps an
@@ -589,32 +653,40 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
         if (settled) {
             xNext = x + v * ds;
             vNext = v;
-        } else if (kerr) {
-            if (!kerrLive) {
-                kx = toLocal(x - Holes[0].xyz);
-                kerrNullMomentum(kx, -toLocal(v), kerrM, kerrA, kp, kpt); // the photon arriving along the path
-                kerrLive = true;
+            gx += vec4(v * ds, -ds); // (straight and at light speed out here; the momentum carries on unchanged)
+        } else if (general) {
+            if (!generalLive) {
+                // The photon arriving along the path; the time it passed here is unknown to first order, so it's
+                // taken as the light-travel time along the straight stretch behind (traced back from the camera).
+                gx = vec4(x, gx.w - traveled);
+                gp = spacetimeArriving(gx, v);
+                generalLive = true;
             }
-            vec3 k1x;
-            vec3 k1p;
-            kerrBackward(kx, kp, kpt, kerrM, kerrA, k1x, k1p);
-            float dl = ds / max(length(k1x), 1e-6);
-            vec3 k2x;
-            vec3 k2p;
-            kerrBackward(kx + 0.5 * dl * k1x, kp + 0.5 * dl * k1p, kpt, kerrM, kerrA, k2x, k2p);
-            vec3 k3x;
-            vec3 k3p;
-            kerrBackward(kx + 0.5 * dl * k2x, kp + 0.5 * dl * k2p, kpt, kerrM, kerrA, k3x, k3p);
-            vec3 k4x;
-            vec3 k4p;
-            kerrBackward(kx + dl * k3x, kp + dl * k3p, kpt, kerrM, kerrA, k4x, k4p);
-            kx += dl / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
-            kp += dl / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
-            float h;
-            vec3 l;
-            if (kerrProfile(kx, kerrM, kerrA, h, l) < 1.02 * kerrHorizon) return sceneHit(SCENE_FELL_IN, vec3(0.0));
-            xNext = toGame(kx) + Holes[0].xyz;
-            vNext = normalize(toGame(k4x));
+            vec4 k1x;
+            vec4 k1p;
+            spacetimeBackward(gx, gp, k1x, k1p);
+            float dl = ds / max(length(k1x.xyz), 1e-6);
+            vec4 k2x;
+            vec4 k2p;
+            spacetimeBackward(gx + 0.5 * dl * k1x, gp + 0.5 * dl * k1p, k2x, k2p);
+            vec4 k3x;
+            vec4 k3p;
+            spacetimeBackward(gx + 0.5 * dl * k2x, gp + 0.5 * dl * k2p, k3x, k3p);
+            vec4 k4x;
+            vec4 k4p;
+            spacetimeBackward(gx + dl * k3x, gp + dl * k3p, k4x, k4p);
+            gx += dl / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+            gp += dl / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
+            for (int i = 0; i < HoleCount; i += 1) {
+                float m = 0.5 * Holes[i].w;
+                float a = HoleSpins[i].x * m;
+                float h;
+                vec3 l;
+                float horizon = m + sqrt(max(m * m - a * a, 0.0));
+                if (kerrProfile(toLocal(gx.xyz - Holes[i].xyz), m, a, h, l) < 1.02 * horizon) return sceneHit(SCENE_FELL_IN, vec3(0.0));
+            }
+            xNext = gx.xyz;
+            vNext = normalize(k4x.xyz);
         } else {
             vec3 k1v = lightBend(x, v);
             if ((ProfileFlags & 4) != 0) {
@@ -629,7 +701,7 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
             }
         }
         for (int i = 0; i < HoleCount; i += 1) {
-            if ((i > 0 || !kerr) && length(xNext - Holes[i].xyz) < 1.01 * Holes[i].w) return sceneHit(SCENE_FELL_IN, vec3(0.0));
+            if (!general && length(xNext - Holes[i].xyz) < 1.01 * Holes[i].w) return sceneHit(SCENE_FELL_IN, vec3(0.0));
         }
         if (UnseenSource == 1 && (ProfileFlags & 2) == 0) {
             vec3 at;

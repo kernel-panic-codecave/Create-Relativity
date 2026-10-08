@@ -1,7 +1,12 @@
 package net.kernelpanicsoft.relativity.gametest
 
 import com.mojang.blaze3d.platform.NativeImage
+import net.kernelpanicsoft.relativity.physics.geodesic.HamiltonianRay
 import net.kernelpanicsoft.relativity.physics.geodesic.NullRay
+import net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime
+import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
+import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
+import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
 import net.kernelpanicsoft.relativity.spacetime.GameFrame
 import net.minecraft.client.Minecraft
@@ -38,6 +43,36 @@ internal object LensReference {
 		minecraft: Minecraft, hole: BlackHole, columns: Int, rows: Int, maxLength: Double, fogFree: Double,
 		only: IntRange = 0 until rows,
 	): Array<Array<Kind?>> {
+		val capture = 1.02 * hole.equatorialExtent(hole.horizonRadius) // traced back, light only nears the horizon
+		return traceWith(minecraft, Vec3(hole.x, hole.y, hole.z), columns, rows, fogFree, only) { origin, direction ->
+			NullRay.trace(hole.spacetime(), origin, direction, maxLength, capture, maxSegment = 0.5, arriving = true)
+		}
+	}
+
+	/**
+	 * As [trace], through every source in the level together ([SpacetimeField]: holes and the rest), on physics-core's
+	 * [HamiltonianRay] instead of one hole's metric.
+	 */
+	fun traceField(minecraft: Minecraft, columns: Int, rows: Int, maxLength: Double, fogFree: Double, only: IntRange = 0 until rows): Array<Array<Kind?>> {
+		val eye = minecraft.gameRenderer.mainCamera.position
+		val at = Vector3d(eye.x, eye.y, eye.z)
+		val level = minecraft.level!!
+		val sources = SpacetimeField.blackHoles(level).map { hole ->
+			val p = DoubleArray(3)
+			GameFrame.toPhysics(Vector3d(hole.x, hole.y, hole.z).sub(at), p)
+			KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass) as MetricSource
+		} + SpacetimeField.fieldSources(level).map { it.toPhysics(at) }
+		val ray = HamiltonianRay(ComposedSpacetime(sources), rtol = 1e-8, atol = 1e-10)
+		return traceWith(minecraft, eye, columns, rows, fogFree, only) { origin, direction ->
+			ray.trace(origin, direction, maxLength, maxSegment = 0.5, arriving = true)
+		}
+	}
+
+	/** Each grid pixel's path from [pathOf] (physics axes, relative to [center]), clipped against the level's blocks. */
+	private fun traceWith(
+		minecraft: Minecraft, center: Vec3, columns: Int, rows: Int, fogFree: Double, only: IntRange,
+		pathOf: (DoubleArray, DoubleArray) -> NullRay.Path,
+	): Array<Array<Kind?>> {
 		val camera = minecraft.gameRenderer.mainCamera
 		val eye = camera.position
 		val look = Vector3d(camera.lookVector)
@@ -46,9 +81,8 @@ internal object LensReference {
 		val tanHalf = tan(Math.toRadians(minecraft.options.fov().get().toDouble()) / 2.0)
 		val aspect = minecraft.window.width.toDouble() / minecraft.window.height
 		val level = minecraft.level!!
-		val capture = 1.02 * hole.equatorialExtent(hole.horizonRadius) // traced back, light only nears the horizon
 		val origin = DoubleArray(3)
-		GameFrame.toPhysics(Vector3d(eye.x - hole.x, eye.y - hole.y, eye.z - hole.z), origin)
+		GameFrame.toPhysics(Vector3d(eye.x - center.x, eye.y - center.y, eye.z - center.z), origin)
 		return Array(rows) { row ->
 			Array(columns) inner@{ column ->
 				if (row !in only) return@inner null
@@ -57,13 +91,13 @@ internal object LensReference {
 				val view = Vector3d(look).add(Vector3d(right).mul(x)).add(Vector3d(up).mul(y)).normalize()
 				val direction = DoubleArray(3)
 				GameFrame.toPhysics(view, direction)
-				val path = NullRay.trace(hole.spacetime(), origin, direction, maxLength, capture, maxSegment = 0.5, arriving = true)
+				val path = pathOf(origin, direction)
 				var kind: Kind? = if (path.end == NullRay.End.CAPTURED) Kind.BLACK else Kind.SKY
 				var traveled = 0.0
 				var previous: Vec3? = null
 				for (point in path.points) {
 					val game = GameFrame.toGame(point, 0, Vector3d())
-					val at = Vec3(game.x + hole.x, game.y + hole.y, game.z + hole.z)
+					val at = Vec3(game.x + center.x, game.y + center.y, game.z + center.z)
 					val from = previous
 					previous = at
 					if (from == null) continue
