@@ -352,10 +352,28 @@ class LensClientGameTest {
 			waitTicks(40)
 			settle()
 			val kerrShot = takeScreenshot("kerr_vertex")
-			runOnClient { BlackHoleLens.profileFlags = 1024 }
-			waitTicks(10)
-			takeScreenshot("kerr_vertex_coarse") // the half-resolution table never marching (timing / quality)
-			runOnClient { BlackHoleLens.profileFlags = 0 }
+			// While the camera moves, the Kerr tables catch up over a few frames: drift it for a second, then compare
+			// before they settle.
+			run {
+				val start = computeOnClient { it.player!!.position() }
+				for (tick in 0 until 20) {
+					runOnClient { it.player!!.setPos(start.x + 0.04 * tick, start.y + 0.02 * tick, start.z) }
+					waitTick()
+				}
+				val movingShot = takeScreenshot("kerr_vertex_moving")
+				val columns = 160
+				val rows = computeOnClient { columns * it.window.height / it.window.width }
+				val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+				for (first in 0 until rows step 8) {
+					val part = computeOnClient { minecraft ->
+						LensReference.trace(minecraft, SpacetimeField.blackHoles(minecraft.level!!).single(), columns, rows, 200.0, 85.0, first until minOf(first + 8, rows))
+					}
+					for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+				}
+				CreateRelativity.LOGGER.info("Kerr vertex lens while moving vs reference: {}% of pixels in the wrong class", "%.1f".format(LensReference.compare(reference, movingShot) * 100))
+				runOnClient { it.player!!.setPos(start.x, start.y, start.z) }
+				waitTicks(20)
+			}
 			// Against the CPU trace of the same view (fog-free range only: past it colours fade into the fog).
 			run {
 				val columns = 160

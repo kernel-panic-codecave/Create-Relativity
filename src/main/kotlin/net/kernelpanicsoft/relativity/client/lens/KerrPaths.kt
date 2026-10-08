@@ -26,10 +26,16 @@ object KerrPaths {
 	const val WIDTH = 384
 	const val HEIGHT = 512
 
-	/** True if the last [draw] redrew the table (it skips when nothing it depends on changed). */
+	/** True if the last [draw] redrew any of the table (it stops once caught up with an unchanged camera and hole). */
 	var changed = false
 		private set
 	private var lastKey = FloatArray(0)
+
+	/** Rows redrawn per frame while the table catches up with a moving camera; the rest keep their last paths. */
+	@JvmField
+	var rowsPerFrame = HEIGHT / 4
+	private var nextRow = 0
+	private var drawnSinceChange = 0
 
 	/** The table (GL_TEXTURE_2D_ARRAY, RGBA32F, [LAYERS] layers); 0 until first drawn. */
 	var texture = 0
@@ -47,17 +53,21 @@ object KerrPaths {
 
 	/**
 	 * Draws the table for a hole at [holeGame] (camera-relative, game axes) with Schwarzschild radius [rs] and [spin],
-	 * paths followed out to [pathRadius] from it, unless the last one was for the same. False if it can't.
+	 * paths followed out to [pathRadius] from it: while that changes (the camera moves), [rowsPerFrame] rows a frame in
+	 * turn, so the table lags the camera by a few frames; whole when new. False if it can't.
 	 */
 	fun draw(holeGame: Vector3f, rs: Float, spin: Float, pathRadius: Float): Boolean {
 		if (failed || !ensureProgram()) return false
 		val width = WIDTH
 		val height = HEIGHT
 		val key = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, spin, pathRadius)
-		changed = !(key contentEquals lastKey) || texture == 0 || this.width != width || this.height != height
+		val fresh = texture == 0 || this.width != width || this.height != height
+		if (fresh || !(key contentEquals lastKey)) drawnSinceChange = 0
+		changed = drawnSinceChange < height
 		if (!changed) return true
 		lastKey = key
 		ensureTarget(width, height)
+		val rows = if (fresh) height else rowsPerFrame.coerceIn(1, height)
 		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, spin, pathRadius)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
@@ -69,6 +79,8 @@ object KerrPaths {
 		MemoryStack.stackPush().use { stack ->
 			val viewport = stack.mallocInt(4)
 			GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport)
+			val scissorBox = stack.mallocInt(4)
+			GL11.glGetIntegerv(GL11.GL_SCISSOR_BOX, scissorBox)
 			GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, framebuffer)
 			GlStateManager._viewport(0, 0, width, height)
 			GlStateManager._disableBlend()
@@ -82,7 +94,21 @@ object KerrPaths {
 			GL20.glUniform1f(uniform("PathRadius"), pathRadius)
 			GL20.glUniform2f(uniform("TableSize"), width.toFloat(), height.toFloat())
 			GL30.glBindVertexArray(vao)
-			GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
+			// This frame's rows (wrapping round), through the scissor.
+			GL11.glEnable(GL11.GL_SCISSOR_TEST)
+			var start = nextRow
+			var left = rows
+			while (left > 0) {
+				val count = minOf(left, height - start)
+				GL11.glScissor(0, start, width, count)
+				GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
+				left -= count
+				start = (start + count) % height
+			}
+			nextRow = start
+			drawnSinceChange += rows
+			GL11.glScissor(scissorBox[0], scissorBox[1], scissorBox[2], scissorBox[3])
+			GL11.glDisable(GL11.GL_SCISSOR_TEST)
 			GL30.glBindVertexArray(previousVao)
 			GlStateManager._glUseProgram(previousProgram) // the same program back, so ShaderInstance's cache stays right
 			GlStateManager._glBindFramebuffer(GL30.GL_FRAMEBUFFER, previousFramebuffer)

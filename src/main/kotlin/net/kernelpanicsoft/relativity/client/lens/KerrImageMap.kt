@@ -40,7 +40,7 @@ object KerrImageMap {
 
 	/** Layers solved per frame while the map catches up with the camera; the rest keep their last answer. */
 	@JvmField
-	var layersPerFrame = 8
+	var layersPerFrame = 4
 	private var nextLayer = 0
 	private var frame = 0
 
