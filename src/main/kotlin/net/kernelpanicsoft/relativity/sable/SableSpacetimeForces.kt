@@ -36,8 +36,8 @@ object SableSpacetimeForces {
 	fun onPrePhysicsTick(event: ForgeSablePrePhysicsTickEvent) {
 		val system = event.physicsSystem
 		val level = system.level
+		if (SpacetimeField.isFlat(level)) return
 		val holes = SpacetimeField.blackHoles(level)
-		if (holes.isEmpty()) return
 		val container = SubLevelContainer.getContainer(level) ?: return
 		val c = RelativityConfig.speedOfLight(level.dimension())
 		val dt = event.timeStep

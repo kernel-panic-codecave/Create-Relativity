@@ -86,27 +86,62 @@ object SpacetimeField {
 		return doomed.size
 	}
 
+	private val providers = java.util.concurrent.CopyOnWriteArrayList<FieldSource.Provider>()
+
+	/** Adds a supplier of non-hole sources (gravity generators, warp drives, tests); [removeProvider] takes it away. */
+	fun addProvider(provider: FieldSource.Provider) {
+		providers += provider
+	}
+
+	fun removeProvider(provider: FieldSource.Provider) {
+		providers -= provider
+	}
+
+	/** Whether nothing curves spacetime in [level]: no holes, no other sources. */
+	fun isFlat(level: Level): Boolean = blackHoles(level).isEmpty() && fieldSources(level).isEmpty()
+
+	/** Every non-hole source in [level]. */
+	fun fieldSources(level: Level): List<FieldSource> =
+		if (providers.isEmpty()) emptyList() else providers.flatMap { it.sources(level) }
+
 	/**
 	 * The curvature sources that matter at [position]: each hole as a [KerrSource] centred relative to [position]
 	 * (physics axes, so the point itself is the origin and precision doesn't depend on how far out in the world it is),
-	 * leaving out holes whose pull there is below [minPull] (blocks/s²) and holes whose singularity it's at.
+	 * leaving out holes whose pull there is below [minPull] (blocks/s²) and holes whose singularity it's at; then every
+	 * other source ([fieldSources]) as strong as that.
 	 */
-	private fun sourcesAt(level: Level, position: Vector3dc, minPull: Double): List<Pair<BlackHole, KerrSource>> {
+	private fun sourcesAt(level: Level, position: Vector3dc, minPull: Double): Sources {
 		val holes = blackHoles(level)
-		if (holes.isEmpty()) return emptyList()
+		val others = fieldSources(level)
+		if (holes.isEmpty() && others.isEmpty()) return Sources.NONE
 		val c = RelativityConfig.speedOfLight(level.dimension())
 		val rel = Vector3d()
 		val p = DoubleArray(3)
-		val out = ArrayList<Pair<BlackHole, KerrSource>>(holes.size)
+		val out = Sources()
 		for (hole in holes) {
 			Vector3d(hole.x, hole.y, hole.z).sub(position, rel)
 			val r = rel.length()
 			if (r < SINGULARITY_CUTOFF * hole.schwarzschildRadius) continue
 			if (c * c * hole.mass / (r * r) < minPull) continue
 			GameFrame.toPhysics(rel, p)
-			out += hole to KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass)
+			out.holes += hole to KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass)
+		}
+		for (source in others) {
+			if (c * c * source.strengthAt(position) < minPull || source.strengthAt(position) == 0.0) continue
+			out.others += source.toPhysics(position)
 		}
 		return out
+	}
+
+	private class Sources {
+		val holes = ArrayList<Pair<BlackHole, KerrSource>>()
+		val others = ArrayList<net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource>()
+		fun isEmpty() = holes.isEmpty() && others.isEmpty()
+		fun all() = holes.map { it.second } + others
+
+		companion object {
+			val NONE = Sources()
+		}
 	}
 
 	/**
@@ -123,17 +158,17 @@ object SpacetimeField {
 		val a = DoubleArray(3)
 		val add = Vector3d()
 		GameFrame.toPhysics(Vector3d(velocity).div(c), v)
-		val weak = sources.all { (hole, source) ->
+		val weak = sources.others.isEmpty() && sources.holes.all { (hole, source) ->
 			kotlin.math.sqrt(source.cx * source.cx + source.cy * source.cy + source.cz * source.cz) > WEAK_FIELD_RADII * hole.schwarzschildRadius
 		}
 		if (weak) {
-			for ((hole, source) in sources) {
+			for ((hole, source) in sources.holes) {
 				PostNewtonian.acceleration(hole.mass, doubleArrayOf(-source.cx, -source.cy, -source.cz), v, a)
 				dest.add(GameFrame.toGame(a, 0, add).mul(c * c))
 			}
 			return dest
 		}
-		CoordinateAcceleration(ComposedSpacetime(sources.map { it.second })).compute(DoubleArray(4), v, a)
+		CoordinateAcceleration(ComposedSpacetime(sources.all())).compute(DoubleArray(4), v, a)
 		return dest.add(GameFrame.toGame(a, 0, add).mul(c * c))
 	}
 
@@ -153,7 +188,7 @@ object SpacetimeField {
 			val beta2 = minOf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2], 1.0)
 			return kotlin.math.sqrt(1.0 - beta2)
 		}
-		return Geodesic.properTimeRate(ComposedSpacetime(sources.map { it.second }), DoubleArray(4), v)
+		return Geodesic.properTimeRate(ComposedSpacetime(sources.all()), DoubleArray(4), v)
 	}
 
 	/**

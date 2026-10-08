@@ -21,7 +21,7 @@ object ProperTimeHud {
 		val minecraft = Minecraft.getInstance()
 		val player = minecraft.player ?: return
 		val level = minecraft.level ?: return
-		if (minecraft.options.hideGui || SpacetimeField.blackHoles(level).isEmpty()) return
+		if (minecraft.options.hideGui || SpacetimeField.isFlat(level)) return
 
 		val center = Vector3d(player.x, player.y + player.bbHeight / 2.0, player.z)
 		val motion = player.deltaMovement

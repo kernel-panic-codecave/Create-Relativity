@@ -79,7 +79,7 @@ object LocalClocks {
 
 	/** dτ/dt for something at rest at block [pos], or on the ship whose plot holds it. */
 	fun rateAt(level: Level, pos: BlockPos): Double {
-		if (SpacetimeField.blackHoles(level).isEmpty() && SableCompanion.INSTANCE.getContaining(level, pos) == null) return 1.0
+		if (SpacetimeField.isFlat(level) && SableCompanion.INSTANCE.getContaining(level, pos) == null) return 1.0
 		val ship = SableCompanion.INSTANCE.getContaining(level, pos)
 		if (ship != null) return shipRate(level, ship)
 		return clean(SpacetimeField.properTimeRate(level, Vector3d(pos.x + 0.5, pos.y + 0.5, pos.z + 0.5), ZERO))
@@ -87,7 +87,7 @@ object LocalClocks {
 
 	/** dτ/dt for something at rest at [position] in the world (not on a ship). */
 	fun rateAt(level: Level, position: Vector3d): Double {
-		if (SpacetimeField.blackHoles(level).isEmpty()) return 1.0
+		if (SpacetimeField.isFlat(level)) return 1.0
 		return clean(SpacetimeField.properTimeRate(level, position, ZERO))
 	}
 
@@ -161,7 +161,7 @@ object LocalClocks {
 	fun shouldRandomTick(chunk: LevelChunk, section: LevelChunkSection): Boolean {
 		if (!enabled) return true
 		val level = chunk.level ?: return true
-		if (SpacetimeField.blackHoles(level).isEmpty() && SableCompanion.INSTANCE.getContaining(level, chunk.pos) == null) return true
+		if (SpacetimeField.isFlat(level) && SableCompanion.INSTANCE.getContaining(level, chunk.pos) == null) return true
 		val index = chunk.sections.indexOfFirst { it === section }
 		if (index < 0) return true
 		val sectionY = chunk.getSectionYFromSectionIndex(index)

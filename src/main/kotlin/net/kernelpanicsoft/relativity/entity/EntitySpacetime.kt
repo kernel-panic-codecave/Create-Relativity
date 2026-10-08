@@ -67,8 +67,8 @@ object EntitySpacetime {
 				return
 			}
 		}
-		if (SpacetimeField.blackHoles(level).isEmpty()) {
-			// No holes left (removed or evaporated): let go of any stretch.
+		if (SpacetimeField.isFlat(level)) {
+			// No holes left (removed or evaporated), nor anything else: let go of any stretch.
 			if (!level.isClientSide && entity is LivingEntity && SpacetimeAttachments.bodyStretch.get(entity) != 1.0) {
 				SpacetimeAttachments.bodyStretch.set(entity, 1.0)
 				net.kernelpanicsoft.relativity.spacetime.SpacetimeSync.update(entity)
@@ -166,6 +166,12 @@ object EntitySpacetime {
 			val r = maxOf(start.distance(hole.x, hole.y, hole.z), hole.schwarzschildRadius)
 			period = minOf(period, 2.0 * PI * kotlin.math.sqrt(r * r * r / gm))
 			if (r < 20.0 * hole.schwarzschildRadius) inDisk = true
+		}
+		for (source in SpacetimeField.fieldSources(level)) {
+			if (source !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass) continue
+			val gm = c * c * kotlin.math.abs(source.mass)
+			val r = maxOf(start.distance(source.center), source.softening)
+			period = minOf(period, 2.0 * PI * kotlin.math.sqrt(r * r * r / gm))
 		}
 		val dt = 1.0 / TICKS_PER_SECOND
 		val steps = kotlin.math.ceil(dt / (period / 40.0)).toInt().coerceIn(1, MAX_SUBSTEPS)
