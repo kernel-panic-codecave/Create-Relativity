@@ -132,6 +132,19 @@ SR kinematics:
   - **Topology**: a path through a wormhole throat continues at the other mouth, possibly in another dimension; the
     tracer hands position and direction across, and the post pass sees the far side through that mouth's capture (§9.4).
     The vertex lens can't place what's seen through a throat, so that's the post pass's.
+  - **Baked light maps per source region, not per chunk**: off-thread, from the metric field, a map for each region round
+    a source (or merged sources) from a ray entering its boundary (2 for where, 2 for direction) to where it leaves or
+    that it's captured. Rebuilt only when the source changes, not the camera, so it would remove the per-frame path
+    tables, their catch-up lag and the redraws after a jump. Through a wormhole it says where a ray leaves the other mouth.
+    - Symmetry sets the size: 1D for a non-spinning hole (deflection from impact parameter), 3D for a spinning one
+      (~16 MB), full 4D only for an arbitrary or merged region. Per chunk would be ~100 MB each, and the interpolation
+      error would add up chunk after chunk where bending is strongest.
+    - Limits: it knows only boundary to boundary, so hitting geometry inside the region (the ground round a hole), or a
+      camera inside it, still needs the path itself (or nested shells, each mapped to the next, at the price of error
+      added per shell). The vertex lens needs the inverse (where a point shows on screen), so it keeps an image map;
+      the baked map can only build that faster.
+    - First prototype: a spinning-hole map used while the camera is outside the hole's region, timed against the current
+      tables.
 
 ### Spacetime debug view (F3)
 - A new F3 toggle, next to F3+G's chunk borders: a **3D grid warped by spacetime** round every source (frame dragging
