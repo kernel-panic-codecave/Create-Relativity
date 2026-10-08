@@ -5,6 +5,8 @@ import net.kernelpanicsoft.relativity.entity.BlackHoleEntity
 import net.kernelpanicsoft.relativity.entity.RelativityEntities
 import net.kernelpanicsoft.relativity.physics.geodesic.CoordinateAcceleration
 import net.kernelpanicsoft.relativity.physics.geodesic.Geodesic
+import net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime
+import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
 import net.kernelpanicsoft.relativity.physics.weakfield.PostNewtonian
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.Level
@@ -85,64 +87,73 @@ object SpacetimeField {
 	}
 
 	/**
-	 * Coordinate acceleration (blocks/s²) of a free body at [position] (blocks) moving at [velocity] (blocks/s):
-	 * the exact geodesic acceleration of each hole, summed. Summing is exact near one hole and the usual
-	 * weak-field approximation between several. Writes into [dest] and returns it; zero with no sources.
+	 * The curvature sources that matter at [position]: each hole as a [KerrSource] centred relative to [position]
+	 * (physics axes, so the point itself is the origin and precision doesn't depend on how far out in the world it is),
+	 * leaving out holes whose pull there is below [minPull] (blocks/s²) and holes whose singularity it's at.
+	 */
+	private fun sourcesAt(level: Level, position: Vector3dc, minPull: Double): List<Pair<BlackHole, KerrSource>> {
+		val holes = blackHoles(level)
+		if (holes.isEmpty()) return emptyList()
+		val c = RelativityConfig.speedOfLight(level.dimension())
+		val rel = Vector3d()
+		val p = DoubleArray(3)
+		val out = ArrayList<Pair<BlackHole, KerrSource>>(holes.size)
+		for (hole in holes) {
+			Vector3d(hole.x, hole.y, hole.z).sub(position, rel)
+			val r = rel.length()
+			if (r < SINGULARITY_CUTOFF * hole.schwarzschildRadius) continue
+			if (c * c * hole.mass / (r * r) < minPull) continue
+			GameFrame.toPhysics(rel, p)
+			out += hole to KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass)
+		}
+		return out
+	}
+
+	/**
+	 * Coordinate acceleration (blocks/s²) of a free body at [position] (blocks) moving at [velocity] (blocks/s): the
+	 * geodesic acceleration in the spacetime of every hole together ([ComposedSpacetime]: exact near one hole, the
+	 * weak-field sum between several). Far from all of them, the cheap 1PN sum. Writes into [dest] and returns it.
 	 */
 	fun acceleration(level: Level, position: Vector3dc, velocity: Vector3dc, dest: Vector3d): Vector3d {
 		dest.zero()
-		val holes = blackHoles(level)
-		if (holes.isEmpty()) return dest
+		val sources = sourcesAt(level, position, MIN_ACCELERATION)
+		if (sources.isEmpty()) return dest
 		val c = RelativityConfig.speedOfLight(level.dimension())
-		val x = DoubleArray(4)
 		val v = DoubleArray(3)
 		val a = DoubleArray(3)
-		val rel = Vector3d()
 		val add = Vector3d()
 		GameFrame.toPhysics(Vector3d(velocity).div(c), v)
-		val p = DoubleArray(3)
-		for (hole in holes) {
-			position.sub(hole.x, hole.y, hole.z, rel)
-			val r = rel.length()
-			if (r < SINGULARITY_CUTOFF * hole.schwarzschildRadius) continue
-			if (c * c * hole.mass / (r * r) < MIN_ACCELERATION) continue
-			if (r > WEAK_FIELD_RADII * hole.schwarzschildRadius) {
-				GameFrame.toPhysics(rel, p)
-				PostNewtonian.acceleration(hole.mass, p, v, a)
-			} else {
-				GameFrame.toPhysics(rel, x, 1)
-				CoordinateAcceleration(hole.spacetime()).compute(x, v, a)
-			}
-			dest.add(GameFrame.toGame(a, 0, add).mul(c * c))
+		val weak = sources.all { (hole, source) ->
+			kotlin.math.sqrt(source.cx * source.cx + source.cy * source.cy + source.cz * source.cz) > WEAK_FIELD_RADII * hole.schwarzschildRadius
 		}
-		return dest
+		if (weak) {
+			for ((hole, source) in sources) {
+				PostNewtonian.acceleration(hole.mass, doubleArrayOf(-source.cx, -source.cy, -source.cz), v, a)
+				dest.add(GameFrame.toGame(a, 0, add).mul(c * c))
+			}
+			return dest
+		}
+		CoordinateAcceleration(ComposedSpacetime(sources.map { it.second })).compute(DoubleArray(4), v, a)
+		return dest.add(GameFrame.toGame(a, 0, add).mul(c * c))
 	}
 
 	/**
 	 * How fast a clock at [position] moving at [velocity] (blocks/s) runs against world time: 1 far from any hole,
-	 * less near one or at speed, 0 at a horizon. Several holes multiply (weak-field approximation between them);
-	 * with none, it's just special-relativistic time dilation.
+	 * less near one or at speed, 0 at a horizon. In the spacetime of every hole together; with none, it's just
+	 * special-relativistic time dilation.
 	 */
 	fun properTimeRate(level: Level, position: Vector3dc, velocity: Vector3dc): Double {
 		val c = RelativityConfig.speedOfLight(level.dimension())
 		val v = DoubleArray(3)
 		GameFrame.toPhysics(Vector3d(velocity).div(c), v)
-		val holes = blackHoles(level)
-		if (holes.isEmpty()) {
+		// At a singularity (left out of the sources) no clock runs, as anywhere inside a horizon.
+		if (blackHoles(level).any { position.distance(it.x, it.y, it.z) < SINGULARITY_CUTOFF * it.schwarzschildRadius }) return 0.0
+		val sources = sourcesAt(level, position, 0.0)
+		if (sources.isEmpty()) {
 			val beta2 = minOf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2], 1.0)
 			return kotlin.math.sqrt(1.0 - beta2)
 		}
-		val x = DoubleArray(4)
-		val rel = Vector3d()
-		var rate = 1.0
-		for ((i, hole) in holes.withIndex()) {
-			position.sub(hole.x, hole.y, hole.z, rel)
-			GameFrame.toPhysics(rel, x, 1)
-			// Velocity time dilation is counted once, with the first hole's metric.
-			val holeRate = Geodesic.properTimeRate(hole.spacetime(), x, if (i == 0) v else DoubleArray(3))
-			rate *= holeRate
-		}
-		return rate
+		return Geodesic.properTimeRate(ComposedSpacetime(sources.map { it.second }), DoubleArray(4), v)
 	}
 
 	/**
