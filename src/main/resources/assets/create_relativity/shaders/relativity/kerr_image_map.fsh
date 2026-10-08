@@ -1,7 +1,7 @@
 // The Kerr image map (KerrImageMap.kt; read by vertex_lens_core.glsl, prepended): for one radius layer of points round
 // a spinning hole, where each point's primary image is, found on the Kerr path table (relativityKerrImage) and stored as
-// how far it's turned from the straight line of sight (game axes), which interpolates smoothly between texels however
-// far the point is. Started from last frame's answer when there is one (a few Newton steps instead of a search), from
+// how far it's turned from the straight line of sight (game axes) per block of its distance from the camera, which
+// interpolates smoothly between texels however far the point is, and right by the camera. Started from last frame's answer when there is one (a few Newton steps instead of a search), from
 // the Schwarzschild image otherwise. Alpha 1 where there's an image, 0 where it's hidden (behind the hole, or at a fold:
 // the vertex lens hides vertices there and the post pass draws them).
 
@@ -56,6 +56,10 @@ void main() {
     mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
     vec3 game = RelativityLensData[6].xyz + d; // camera-relative
     vec3 straight = normalize(game);
+    // Stored per unit of the point's distance from the camera: near the camera the turn grows with the distance, from
+    // nothing, in a direction that swings round with the point's; over a block it barely changes (it's the local
+    // bending), so it interpolates where the turn itself wouldn't.
+    float span = length(game);
     vec3 p = transpose(viewToGame) * game;
     PathPosition = 99.0;
 
@@ -66,7 +70,7 @@ void main() {
     // own direction.
     if (RelativityLensData[7].y > 0.5) image = relativitySchwarzschildImage(p, seen, nearAxis);
     if (image == 2) {
-        Result = vec4(viewToGame * seen - straight, 1.0);
+        Result = vec4((viewToGame * seen - straight) / span, 1.0);
         return;
     }
     if (nearAxis) {
@@ -74,7 +78,7 @@ void main() {
         return;
     }
     if (DebugMode == 1) {
-        Result = vec4(viewToGame * seen - straight, 1.0);
+        Result = vec4((viewToGame * seen - straight) / span, 1.0);
         return;
     }
     vec3 kerr;
@@ -90,37 +94,54 @@ void main() {
         return;
     }
     if (lastV > 97.5 && lastV < 98.5 && !again && image == 1) {
-        Result = vec4(viewToGame * seen - straight, 1.0);
+        Result = vec4((viewToGame * seen - straight) / span, 1.0);
         PathPosition = 98.0;
         return;
     }
-    float v = 99.0;
+    // The starting guesses, tried in turn until one finds the image (one call site: each one inlined the whole solve,
+    // and the program took the driver 35 s to compile):
+    // last frame's answer; the thin-lens guess through every source; the image of the point just outside this one (the
+    // next layer out, drawn first: followed in from far away, where every point's image is its own direction, this is
+    // the primary image wherever it changes continuously, whatever bends the light); the Schwarzschild image.
+    vec3 seeds[4];
+    float warmV[4];
+    int count = 0;
     if (PreviousValid == 1 && previous.a > 0.5) {
-        found = relativityKerrImage(p, transpose(viewToGame) * normalize(straight + previous.rgb), lastV, kerr, v);
+        seeds[count] = transpose(viewToGame) * normalize(straight + previous.rgb * span);
+        warmV[count] = lastV;
+        count += 1;
     }
-    // From the thin-lens guess through every source.
-    if (found != 1 && image == 1 && SourceCount > 0) {
-        found = relativityKerrImage(p, transpose(viewToGame) * weakImage(game), 99.0, kerr, v);
+    if (image == 1 && SourceCount > 0) {
+        seeds[count] = transpose(viewToGame) * weakImage(game);
+        warmV[count] = 99.0;
+        count += 1;
     }
-    // From the image of the point just outside this one (the next layer out, drawn first): followed in from far away,
-    // where every point's image is its own direction, this is the primary image wherever it changes continuously,
-    // whatever bends the light.
-    if (found != 1 && image == 1 && Layer + 1 < int(size.z)) {
+    if (image == 1 && Layer + 1 < int(size.z)) {
         vec4 outer = texelFetch(PreviousMap, ivec3(texel, Layer + 1), 0);
         if (outer.a > 0.5) {
             float outerV = texelFetch(PreviousPath, ivec3(texel, Layer + 1), 0).r;
-            if (abs(outerV) > 14.0) outerV = 99.0;
-            found = relativityKerrImage(p, transpose(viewToGame) * normalize(straight + outer.rgb), outerV, kerr, v);
+            seeds[count] = transpose(viewToGame) * normalize(straight + outer.rgb * span);
+            warmV[count] = abs(outerV) > 14.0 ? 99.0 : outerV;
+            count += 1;
         }
     }
-    if (found != 1 && image == 1 && DebugMode != 2) found = relativityKerrImage(p, seen, 99.0, kerr, v);
+    if (image == 1 && DebugMode != 2) {
+        seeds[count] = seen;
+        warmV[count] = 99.0;
+        count += 1;
+    }
+    float v = 99.0;
+    for (int k = 0; k < count; k += 1) {
+        found = relativityKerrImage(p, seeds[k], warmV[k], kerr, v);
+        if (found == 1) break;
+    }
     if (RelativityLensData[1].w > 3.5 && RelativityLensData[1].w < 4.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image
     if (RelativityLensData[1].w > 0.5 && RelativityLensData[1].w < 1.5 && found == 0) found = -1; // debug 1: only placed
     if (found == 1) {
-        Result = vec4(viewToGame * kerr - straight, 1.0);
+        Result = vec4((viewToGame * kerr - straight) / span, 1.0);
         PathPosition = v;
     } else if (found == 0 && image == 1) {
-        Result = vec4(viewToGame * seen - straight, 1.0); // off the path table: the Schwarzschild image stands
+        Result = vec4((viewToGame * seen - straight) / span, 1.0); // off the path table: the Schwarzschild image stands
         PathPosition = 98.0;
     } else {
         Result = vec4(0.0);

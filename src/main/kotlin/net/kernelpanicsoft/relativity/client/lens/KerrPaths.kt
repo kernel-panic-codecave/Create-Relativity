@@ -79,7 +79,8 @@ object KerrPaths {
 		if (!changed) return true
 		lastKey = key
 		ensureTarget(width, height)
-		val rows = if (fresh || whole) height else rowsPerFrame.coerceIn(1, height)
+		// (A whole redraw is spread over two frames: all of it at once can stall the GPU.)
+		val rows = if (fresh || whole) height / 2 else rowsPerFrame.coerceIn(1, height)
 		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, pathRadius)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
@@ -228,8 +229,17 @@ object KerrPaths {
 		}
 	}
 
+	/**
+	 * Compiles and links the program now (at startup: the driver takes a while over it, and the first frame with a hole
+	 * in view shouldn't).
+	 */
+	fun warmUp() {
+		ensureProgram()
+	}
+
 	private fun ensureProgram(): Boolean {
 		if (program != 0) return true
+		if (failed) return false
 		val resources = Minecraft.getInstance().resourceManager
 		fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
 			.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }

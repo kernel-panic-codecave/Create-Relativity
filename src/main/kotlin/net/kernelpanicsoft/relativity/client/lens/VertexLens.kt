@@ -126,6 +126,10 @@ object VertexLens {
 	@JvmField
 	var skipTable = false
 
+	/** The world shaders' pixel check (vertex_lens_core.glsl's relativityPixelWrong); off for comparison (debug; GameTests). */
+	@JvmField
+	var pixelCheck = true
+
 	/** Bends a spinning hole as if it didn't spin (debug; GameTests). */
 	@JvmField
 	var kerrOff = false
@@ -235,6 +239,10 @@ object VertexLens {
 		GlStateManager._activeTexture(previous)
 	}
 
+	/** The angle one screen pixel covers through [projection] (radians, vertically). */
+	private fun pixelAngle(projection: Matrix4f): Float =
+		(2.0 / (projection.m11() * Minecraft.getInstance().window.height)).toFloat()
+
 	/** Switches lensing in the shaders on or off without changing the hole (e.g. around gizmos drawn after the lens). */
 	fun setEnabled(enabled: Boolean) {
 		if (buffer == 0) return
@@ -273,10 +281,12 @@ object VertexLens {
 				}
 				val camR = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
 				val reach = pathRadius(centre.scale, camR)
-				// The image map: from just outside the horizon (or the centre's own inner radius) out to the paths' end.
-				data.put(minOf(camR, reach).toFloat()).put(reach.toFloat()).put(centre.inner.toFloat()).put(reach.toFloat())
+				// The pixel check's pixel angle; the image map: from just outside the horizon (or the centre's own inner
+				// radius) out to the paths' end.
+				data.put(pixelAngle(projection)).put(if (pixelCheck) 0f else 1f).put(centre.inner.toFloat()).put(reach.toFloat())
 			} else {
-				repeat(24) { data.put(0f) }
+				repeat(20) { data.put(0f) }
+				data.put(pixelAngle(projection)).put(if (pixelCheck) 0f else 1f).put(0f).put(0f)
 			}
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)

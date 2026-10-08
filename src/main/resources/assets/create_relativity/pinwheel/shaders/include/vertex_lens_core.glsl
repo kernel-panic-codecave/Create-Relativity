@@ -11,8 +11,8 @@
 // [6] spinning hole (Kerr; [1].z = 1): xyz centre relative to the camera in game axes, w spin a / M
 // [7] the Kerr path table (KerrPaths): zw its size in texels (azimuth, angle from the hole; see relativityTableDir)
 // [8..10] view to game axes (a rotation), by column
-// [11] x: Boyer-Lindquist r where the table's paths start coming in (the camera, or their sphere); y: where they end
-//      going out (their sphere, past everything drawn); z, w: the Kerr image map's inner and outer radius (blocks)
+// [11] x: the angle one screen pixel covers (radians; the pixel check); y: 1 turns the pixel check off (debug); z, w: the image map's inner and
+//      outer radius (blocks)
 layout(std140) uniform RelativityLens {
     vec4 RelativityLensData[12];
 };
@@ -22,12 +22,18 @@ uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sq
 uniform sampler2DArray RelativityKerrPaths; // KerrPaths' table (kerr_paths.fsh): per texel, a view ray's path past a
                                             // spinning hole, as seen from the hole
 uniform sampler3D RelativityKerrMap; // KerrImageMap (kerr_image_map.fsh): per point round a spinning hole, how its image
-                                     // is turned from the straight line of sight (rgb, game axes), a 1 where it has one
+                                     // is turned from the straight line of sight per block of its distance (rgb, game
+                                     // axes), a 1 where it has one
 
 // The Kerr image map's texels: azimuth round the spin axis (game y), cos of the angle from it, and radius
 // (logarithmic from [11].z to [11].w). Texel (i, j, k) is the point at azimuth ((i + 0.5) / W - 0.5) 2 pi (as
 // atan(z, x)), cos j / (H - 1) * 2 - 1, radius [11].z ([11].w / [11].z)^(k / (D - 1)).
 const vec3 RELATIVITY_MAP_SIZE = vec3(128.0, 64.0, 48.0); // KerrImageMap.WIDTH, HEIGHT, DEPTH
+
+// Loop counts read from the block (kerrDebug, never negative, so this is 0), not constants: a constant-count loop gets
+// unrolled, and with the light steps and solves inlined into it the driver took tens of seconds to compile the programs
+// using them (35 s for the image map's).
+int relativityRuntimeZero() { return int(min(RelativityLensData[1].w, 0.0)); }
 
 const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's diagonal
 const float RELATIVITY_BEYOND = 1e4;   // NDC depth of hidden vertices: far past the far plane
@@ -224,13 +230,13 @@ bool relativityKerrSolve(inout vec3 x, vec3 n, float rP, out mat3 jacobian, out 
     vec3 steps = vec3(0.5, 0.5, 0.02);
     measured = false;
     jacobian = mat3(0.0);
-    for (int i = 0; i < 10; i += 1) {
+    for (int i = 0; i < 10 + relativityRuntimeZero(); i += 1) {
         bool ok;
         vec3 miss = relativityPathImage(x, n, rP, ok);
         if (!ok) return false;
         float current = dot(miss, miss);
         if (current < 1e-8) return true;
-        for (int c = 0; c < 3; c += 1) {
+        for (int c = 0; c < 3 + relativityRuntimeZero(); c += 1) {
             vec3 shifted = x;
             shifted[c] += steps[c];
             bool okShift;
@@ -252,7 +258,7 @@ bool relativityKerrSolve(inout vec3 x, vec3 n, float rP, out mat3 jacobian, out 
         // Halve a step that makes the miss worse.
         float scale = 1.0;
         vec3 next = x;
-        for (int k = 0; k < 5; k += 1) {
+        for (int k = 0; k < 5 + relativityRuntimeZero(); k += 1) {
             next = vec3(x.xy - step.xy * scale, clamp(x.z - step.z * scale, -14.0, 14.0));
             bool okNext;
             vec3 m = relativityPathImage(next, n, rP, okNext);
@@ -290,7 +296,7 @@ float relativityKerrMagnification(vec3 x, vec3 n, float rP, float d) {
     vec3 miss = relativityPathImage(x, n, rP, ok);
     vec3 steps = vec3(0.5, 0.5, 0.02);
     mat3 jacobian;
-    for (int c = 0; c < 3; c += 1) {
+    for (int c = 0; c < 3 + relativityRuntimeZero(); c += 1) {
         vec3 shifted = x;
         shifted[c] += steps[c];
         bool okShift;
@@ -307,7 +313,7 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
     int first = -14;
     if (outbound) first = 0;
     float last = relativityPathSample(t, first).z;
-    for (int k = 1; k <= 14; k += 1) {
+    for (int k = 1; k <= 14 + relativityRuntimeZero(); k += 1) {
         int j = outbound ? k : k - 14;
         float r = relativityPathSample(t, j).z;
         if ((r - rP) * (last - rP) <= 0.0) {
@@ -353,7 +359,7 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
     tries[2] = 0.0;
     // The image on the same side of the hole as the guess (within a quarter turn round it): the primary, not the one
     // across the ring.
-    for (int k = 0; k < 3; k += 1) {
+    for (int k = 0; k < 3 + relativityRuntimeZero(); k += 1) {
         vec3 x = vec3(start, tries[k]);
         mat3 jacobian;
         bool measured;
@@ -435,8 +441,161 @@ int relativityKerrMapImage(vec3 p, out vec3 seen) {
         (s * (size.z - 1.0) + 0.5) / size.z);
     vec4 m = texture(RelativityKerrMap, at);
     if (m.a < 0.999) return -1; // a texel round it without an image
-    seen = transpose(viewToGame) * normalize(normalize(game) + m.rgb);
+    seen = transpose(viewToGame) * normalize(normalize(game) + m.rgb * length(game)); // (stored per block of distance)
     return 1;
+}
+
+// The bending acceleration of light at x heading v (unit), round a hole at hole of radius rs: the photon orbit equation
+// in Cartesian form (as lightBend in lens_scene).
+vec3 relativityLightBend(vec3 x, vec3 v, vec3 hole, float rs) {
+    vec3 d = x - hole;
+    float r2 = dot(d, d);
+    vec3 hv = cross(d, v);
+    return -1.5 * rs * dot(hv, hv) * d / (r2 * r2 * sqrt(r2));
+}
+
+// Kerr light in Kerr-Schild coordinates on the hole's local axes (game z, x, y): kerr.glsl's kerrDerivative and
+// kerrNullMomentum, under names of their own (some programs include both files).
+vec3 relativityLocal(vec3 game) { return vec3(game.z, game.x, game.y); }
+vec3 relativityGame(vec3 local) { return vec3(local.y, local.z, local.x); }
+
+void relativityKerrStep(vec3 x, vec3 p, float pt, float m, float a, out vec3 dx, out vec3 dp) {
+    float a2 = a * a;
+    float w = dot(x, x) - a2;
+    float s = sqrt(0.25 * w * w + a2 * x.z * x.z);
+    float r2 = max(0.5 * w + s, 1e-12);
+    float r = sqrt(r2);
+    vec3 gradR = vec3(r2 * x.x, r2 * x.y, (r2 + a2) * x.z) / (2.0 * r * max(s, 1e-12));
+    float q = r2 * r2 + a2 * x.z * x.z;
+    float h = 2.0 * m * r * r2 / q;
+    float dhdr = 2.0 * m * r2 * (3.0 * q - 4.0 * r2 * r2) / (q * q);
+    vec3 gradH = gradR * dhdr + vec3(0.0, 0.0, -4.0 * m * r * r2 * a2 * x.z / (q * q));
+    float d = r2 + a2;
+    vec3 l = vec3((r * x.x + a * x.y) / d, (r * x.y - a * x.x) / d, x.z / r);
+    float lp = dot(l, p) - pt;
+    float along = x.x * p.x + x.y * p.y;
+    float across = x.y * p.x - x.x * p.y;
+    float dfdr = (along * d - (r * along + a * across) * 2.0 * r) / (d * d) - x.z * p.z / r2;
+    vec3 gradF = vec3((r * p.x - a * p.y) / d, (r * p.y + a * p.x) / d, p.z / r) + gradR * dfdr;
+    // Followed back in time (from where the light is seen).
+    dx = -(p - h * lp * l);
+    dp = -(0.5 * lp * lp * gradH + h * lp * gradF);
+}
+
+void relativityKerrMomentum(vec3 x, vec3 d, float m, float a, out vec3 p, out float pt) {
+    float a2 = a * a;
+    float w = dot(x, x) - a2;
+    float r2 = 0.5 * w + sqrt(0.25 * w * w + a2 * x.z * x.z);
+    float r = sqrt(max(r2, 1e-12));
+    float h0 = 2.0 * m * r * r2 / (r2 * r2 + a2 * x.z * x.z);
+    float dd = r2 + a2;
+    vec3 l0 = vec3((r * x.x + a * x.y) / dd, (r * x.y - a * x.x) / dd, x.z / r);
+    float ld = dot(l0, d);
+    float qa = 1.0 + h0 * ld * ld;
+    float qb = 2.0 * h0 * ld;
+    float qc = h0 - 1.0;
+    float k = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, 0.0))) / (2.0 * qa);
+    float lu = 1.0 + k * ld;
+    pt = -1.0 + h0 * lu;
+    p = k * d + h0 * l0 * lu;
+}
+
+// Where the light seen along view-space direction e is after coordinate distance dist, round a spinning hole ([6]:
+// game position relative to the camera, spin): four RK4 steps in Kerr-Schild coordinates. View space.
+vec3 relativityKerrNearEnd(vec3 e, float dist) {
+    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+    float m = 0.5 * RelativityLensData[0].w;
+    float a = RelativityLensData[6].w * m;
+    vec3 x = relativityLocal(-RelativityLensData[6].xyz); // the camera, from the hole
+    vec3 start = x;
+    vec3 p;
+    float pt;
+    relativityKerrMomentum(x, -relativityLocal(viewToGame * e), m, a, p, pt); // the photon arriving along e
+    int steps = 4 + relativityRuntimeZero();
+    for (int k = 0; k < steps; k += 1) {
+        float h = 0.25 * dist;
+        vec3 k1x;
+        vec3 k1p;
+        relativityKerrStep(x, p, pt, m, a, k1x, k1p);
+        float dl = h / max(length(k1x), 1e-6);
+        vec3 k2x;
+        vec3 k2p;
+        relativityKerrStep(x + 0.5 * dl * k1x, p + 0.5 * dl * k1p, pt, m, a, k2x, k2p);
+        vec3 k3x;
+        vec3 k3p;
+        relativityKerrStep(x + 0.5 * dl * k2x, p + 0.5 * dl * k2p, pt, m, a, k3x, k3p);
+        vec3 k4x;
+        vec3 k4p;
+        relativityKerrStep(x + dl * k3x, p + dl * k3p, pt, m, a, k4x, k4p);
+        x += dl / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+        p += dl / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
+    }
+    return transpose(viewToGame) * relativityGame(x - start);
+}
+
+// Near the camera, the tables (centred on the hole) are coarse, so light is followed there directly: from the camera
+// along e, four RK4 steps to p's distance, and e corrected by where that lands short of p; three rounds (a short path's
+// landing point moves with e almost one for one). The view direction of view-space point p.
+vec3 relativityNearImage(vec3 p, vec3 hole, float rs) {
+    float d = length(p);
+    vec3 e = p / d;
+    float h = 0.25 * d;
+    // A spinning hole: Kerr light (frame dragging shows even this close).
+    bool kerr = RelativityLensData[1].z > 0.5 && RelativityLensData[7].y > 0.5 && abs(RelativityLensData[6].w) > 0.0;
+    int rounds = 3 + relativityRuntimeZero();
+    for (int round = 0; round < rounds; round += 1) {
+        if (kerr) {
+            e = normalize(e + (p - relativityKerrNearEnd(e, d)) / d);
+            continue;
+        }
+        vec3 x = vec3(0.0);
+        vec3 v = e;
+        int steps = 4 + relativityRuntimeZero();
+        for (int k = 0; k < steps; k += 1) {
+            vec3 a1 = relativityLightBend(x, v, hole, rs);
+            vec3 a2 = relativityLightBend(x + 0.5 * h * v, v + 0.5 * h * a1, hole, rs);
+            vec3 a3 = relativityLightBend(x + 0.5 * h * v + 0.25 * h * h * a1, v + 0.5 * h * a2, hole, rs);
+            vec3 a4 = relativityLightBend(x + h * v + 0.5 * h * h * a2, v + h * a3, hole, rs);
+            x += h * v + h * h / 6.0 * (a1 + a2 + a3);
+            v = normalize(v + h / 6.0 * (a1 + 2.0 * a2 + 2.0 * a3 + a4));
+        }
+        e = normalize(e + (p - x) / d);
+    }
+    return e;
+}
+
+// Points this close to the camera (a fraction of its distance from the hole) take the near image, blending into the
+// tables' over the next stretch.
+const float RELATIVITY_NEAR = 0.25;
+const float RELATIVITY_NEAR_BLEND = 0.35;
+
+// The table's image of view-space point p: 1 placed (seen its direction), 2 nothing to bend, -1 hidden (behind the hole,
+// near its axis, or at a fold).
+int relativityFarImage(vec3 p, out vec3 seen) {
+    seen = normalize(p);
+    bool nearAxis = false;
+    int image = 1;
+    // The Schwarzschild image: alone for non-spinning holes; for anything else a hole's first guess and its axis cut.
+    // Round another source (a mass, a bubble) the map alone places points; outside it they stand where they are.
+    bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
+    if (holeCentre) {
+        image = relativitySchwarzschildImage(p, seen, nearAxis);
+        if (image == 2) return 2;
+    }
+    // Through every source: the image from the map.
+    if (RelativityLensData[1].z > 0.5 && !nearAxis) {
+        vec3 kerr;
+        int found = relativityKerrMapImage(p, kerr);
+        relativityLastFound = found;
+        if (found == 1) {
+            seen = kerr;
+            return 1;
+        }
+        if (found < 0) image = -1;
+        if (found == 0 && !holeCentre) return 2;
+    }
+    if (nearAxis) return -1;
+    return image;
 }
 
 // Works in view space (camera at the origin): the projection alone recovers that from the clip position, whatever
@@ -447,40 +606,68 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     vec4 view = inverse(proj) * clip;
     vec3 p = view.xyz / view.w;
     if (RelativityLensData[1].y > 0.5) return proj * vec4(p, 1.0);
-    vec3 seen = normalize(p);
-    bool nearAxis = false;
-    int image = 1;
-    // The Schwarzschild image: alone for non-spinning holes; for anything else a hole's first guess and its axis cut.
-    // Round another source (a mass, a bubble) the map alone places points; outside it they stand where they are.
+    float d = length(p);
+    vec3 hole = RelativityLensData[0].xyz;
+    float rc = length(hole);
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
-    if (holeCentre) {
-        image = relativitySchwarzschildImage(p, seen, nearAxis);
-        if (image == 2) return clip;
+    float nearness = holeCentre ? smoothstep(RELATIVITY_NEAR * rc, RELATIVITY_NEAR_BLEND * rc, d) : 1.0;
+    vec3 seen;
+    int image = 1;
+    if (nearness > 0.0) {
+        image = relativityFarImage(p, seen);
+        if (image == 2 && nearness >= 1.0) return clip;
+        if (image == 2) seen = normalize(p);
     }
-    // Through every source: the image from the map.
-    if (RelativityLensData[1].z > 0.5 && !nearAxis) {
-        vec3 kerr;
-        int found = relativityKerrMapImage(p, kerr);
-        relativityLastFound = found;
-        if (found == 1) return proj * vec4(kerr * length(p), 1.0);
-        if (found < 0) image = -1;
-        if (found == 0 && !holeCentre) return clip;
+    if (nearness < 1.0) {
+        vec3 near = relativityNearImage(p, hole, RelativityLensData[0].w);
+        // (The tables hiding a point this close is their coarseness, not a missing image.)
+        seen = image < 0 || nearness <= 0.0 ? near : normalize(mix(near, seen, nearness));
+        image = 1;
     }
     // No primary image, or near the axis: such a vertex gets a depth far past the far plane (toward the hole on
     // screen), so a triangle reaching it passes the far plane within a hair of its other vertices: clipped there, or
     // with depth clamping on, drawn at the far plane, which the post pass takes for sky and redraws.
-    if (image < 0 || nearAxis) {
-        vec4 hidden = proj * vec4(normalize(RelativityLensData[0].xyz) * length(p), 1.0);
+    if (image < 0) {
+        vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
         hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
         return hidden;
     }
-    return proj * vec4(seen * length(p), 1.0);
+    return proj * vec4(seen * d, 1.0);
 }
 
 // The lens for draws that may not use the level's projection (vanilla, Sodium, Flywheel: the hand, GUI items...).
 vec4 relativityLens(vec4 clip, mat4 proj) {
     if (RelativityLensData[1].x < 0.5 || !relativityLevelProjection(proj)) return clip;
     return relativityBend(clip, proj);
+}
+
+// ---- The pixel check (world fragment shaders) ----
+// A triangle is drawn with straight edges between its bent corners, but near the Einstein ring a block's image is a long
+// arc: a triangle there is stretched across the sky though each corner is right. So each pixel checks itself: the point
+// it shows (its corners' unbent positions, interpolated) must appear where it's drawn (the bent ones, interpolated), to
+// within RELATIVITY_PIXEL_SLACK pixels; if not, or if that point has no image, it's discarded, and what's truly there
+// shows through (the geometry behind, or the post pass). Close to the camera the corners are placed directly (the near
+// march) and the check is skipped: too costly per pixel, and not needed there.
+const float RELATIVITY_PIXEL_SLACK = 3.0;
+
+// Whether the lens bends draws made with projection proj (the level's, with lensing on): those carry the check.
+bool relativityLensed(mat4 proj) {
+    return RelativityLensData[0].w > 0.0 && RelativityLensData[1].x > 0.5 && RelativityLensData[1].y < 0.5 && relativityLevelProjection(proj);
+}
+
+// For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
+bool relativityPixelWrong(vec3 unbent, vec3 bent) {
+    if (RelativityLensData[11].y > 0.5) return false;
+    float d = length(unbent);
+    vec3 hole = RelativityLensData[0].xyz;
+    bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
+    if (holeCentre && d < RELATIVITY_NEAR_BLEND * length(hole)) return false;
+    vec3 seen;
+    int image = relativityFarImage(unbent, seen);
+    if (image == 2) return false;
+    if (image < 0) return true;
+    float angle = acos(clamp(dot(seen, normalize(bent)), -1.0, 1.0));
+    return angle > RELATIVITY_PIXEL_SLACK * RelativityLensData[11].x;
 }
 
 // For shader packs' world programs (always the level's view; their projection may be jittered for TAA, which comes

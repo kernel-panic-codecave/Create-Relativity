@@ -80,7 +80,11 @@ object KerrImageMap {
 
 	/** Layers drawn since the path table last [changed][draw]: once all are, the map stands until it changes again. */
 	private var drawnSinceChange = 0
+
+	/** The most layers drawn in one frame, even for a whole redraw. */
+	private const val MAX_LAYERS_PER_FRAME = 8
 	private var repairPending = false
+	private var repairLeft = 0
 
 	/**
 	 * Draws this frame's map for the hole the vertex lens's block describes (VertexLens uploads it first, with the
@@ -93,13 +97,15 @@ object KerrImageMap {
 			drawnSinceChange = 0
 			repairPending = true
 		}
-		// Caught up: once more, every layer, with every earlier failure searched again from its neighbours' answers in
-		// the finished map; then the map stands.
+		// Caught up: once more, every layer (a few a frame), with every earlier failure searched again against the
+		// finished path table; then the map stands.
 		var repair = false
 		if (drawnSinceChange >= DEPTH) {
 			if (!repairPending) return true
-			repairPending = false
+			if (repairLeft <= 0) repairLeft = DEPTH
 			repair = true
+			repairLeft -= MAX_LAYERS_PER_FRAME
+			if (repairLeft <= 0) repairPending = false
 		}
 		ensureTexture()
 		if (framebuffer == 0) framebuffer = GL30.glGenFramebuffers()
@@ -150,7 +156,8 @@ object KerrImageMap {
 			GL30.glBindVertexArray(vao)
 			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones. Outermost
 			// first: each layer starts its search from the one just outside it (kerr_image_map.fsh), already this frame's.
-			val redraw = if (previousValid && !whole && !repair) layersPerFrame.coerceIn(1, DEPTH) else DEPTH
+			// (Whole redraws too are spread over frames: all 48 layers at once can stall the GPU for seconds.)
+			val redraw = if (previousValid && !whole && !repair) layersPerFrame.coerceIn(1, DEPTH) else MAX_LAYERS_PER_FRAME
 			for (layer in DEPTH - 1 downTo 0) {
 				if (((layer - nextLayer) % DEPTH + DEPTH) % DEPTH >= redraw) continue
 				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[SCRATCH], 0, layer)
@@ -195,8 +202,17 @@ object KerrImageMap {
 
 	private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
 
+	/**
+	 * Compiles and links the program now (at startup: the driver takes a while over it, and the first frame with a hole
+	 * in view shouldn't).
+	 */
+	fun warmUp() {
+		ensureProgram()
+	}
+
 	private fun ensureProgram(): Boolean {
 		if (program != 0) return true
+		if (failed) return false
 		val resources = Minecraft.getInstance().resourceManager
 		fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
 			.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }

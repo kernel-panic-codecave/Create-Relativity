@@ -151,6 +151,14 @@ object BlackHoleLens {
 	private fun onClientTick() {
 		QuadSubdivision.tick()
 		val minecraft = Minecraft.getInstance()
+		// Once loaded (the title screen): the vertex lens's own programs, which the driver takes a while to compile.
+		if (!warmedUp && minecraft.overlay == null) {
+			warmedUp = true
+			val start = System.nanoTime()
+			KerrPaths.warmUp()
+			KerrImageMap.warmUp()
+			CreateRelativity.LOGGER.info("Lens programs compiled in {} ms", (System.nanoTime() - start) / 1_000_000)
+		}
 		if (!textureReady) {
 			val data = table?.getNow(null) ?: return
 			val texture = LensLookupTexture(LUT_WIDTH, LUT_HEIGHT, data)
@@ -167,6 +175,8 @@ object BlackHoleLens {
 		if (wanted && !post.isActive(PIPELINE)) post.add(PIPELINE)
 		else if (!wanted && post.isActive(PIPELINE)) post.remove(PIPELINE)
 	}
+
+	private var warmedUp = false
 
 	/** True while the lens pipeline is running this frame. */
 	val active: Boolean

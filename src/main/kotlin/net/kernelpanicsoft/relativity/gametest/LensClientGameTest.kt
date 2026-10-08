@@ -891,6 +891,142 @@ class LensClientGameTest {
 		}
 	}
 
+	/**
+	 * Where the vertex lens puts world points, against the light itself (#27): per scene, floor corners, a cloud of
+	 * points round the hole and points just in front of the camera; each placed point's light, traced back on the CPU
+	 * from the direction the GPU chose, must pass through it (error in pixels); each hidden one is searched for an image
+	 * on the CPU (a sample of them): found means a hole in the picture.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.vertexAccuracy() {
+		if (!ClientTestInput.selected("vertexAccuracy")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		// (hole x y z, r_s, spin; camera x y z, yaw, pitch)
+		val scenes = listOf(
+			"spinning, from 7 r_s" to doubleArrayOf(0.5, -54.0, 0.5, 2.0, 0.9, -13.5, -54.0, 0.5, -90.0, 10.0),
+			"spinning, from 4 r_s" to doubleArrayOf(0.5, -48.0, 0.5, 6.0, 0.9, -23.5, -48.0, 0.5, -90.0, 15.0),
+			"still, from 3 r_s" to doubleArrayOf(0.5, -50.0, 0.5, 4.0, 0.0, -11.5, -50.0, 0.5, -90.0, 20.0),
+			// The performance test's large spinning hole among floating blocks (where giant slabs showed).
+			"floating blocks, spinning, from 3.5 r_s" to doubleArrayOf(0.5, -54.0, 0.5, 6.0, 0.9, -20.5, -54.0, 0.5, -90.0, 5.0),
+		)
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false", "tick freeze",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val random = java.util.Random(11)
+				val colours = listOf(Blocks.WHITE_CONCRETE, Blocks.BLUE_CONCRETE, Blocks.RED_CONCRETE)
+				for (x in -48..48) for (z in -48..48) for (y in -60..-30) {
+					if ((x * x + (y + 54) * (y + 54) + z * z) < 400 || random.nextFloat() > 0.03f) continue
+					level.setBlock(BlockPos(x, y, z), colours[random.nextInt(3)].defaultBlockState(), 2)
+				}
+			}
+			for ((label, s) in scenes) {
+				command("relativity bh clear")
+				command("relativity bh create ${s[0]} ${s[1]} ${s[2]} ${s[3]} ${s[4]}")
+				command("tp @a ${s[5]} ${s[6]} ${s[7]} ${s[8]} ${s[9]}")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO; KerrImageMap.invalidate() }
+				waitTicks(40)
+				settle()
+				val shotName = "vertex_accuracy_${label.replace(Regex("[^a-z0-9]+"), "_")}"
+				takeScreenshot(shotName)
+				// The vertex lens alone (no post pass), with and without the pixel check: what it removes.
+				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true; VertexLens.pixelCheck = false }
+				waitTicks(5)
+				val unchecked = takeScreenshot("${shotName}_vertex_unchecked")
+				runOnClient { VertexLens.pixelCheck = true }
+				waitTicks(5)
+				val checked = takeScreenshot("${shotName}_vertex_checked")
+				runOnClient { BlackHoleLens.rawFrame = false; BlackHoleLens.skipTables = false }
+				val removed = Files.newInputStream(unchecked).use { NativeImage.read(it) }.use { a ->
+					Files.newInputStream(checked).use { NativeImage.read(it) }.use { b ->
+						var differ = 0L
+						for (y in 0 until a.height) for (x in 0 until a.width) if (a.getPixelRGBA(x, y) != b.getPixelRGBA(x, y)) differ += 1
+						differ.toDouble() / (a.width.toLong() * a.height)
+					}
+				}
+				CreateRelativity.LOGGER.info("Vertex accuracy, {}: the pixel check changes {}% of the vertex lens's picture", label, "%.2f".format(removed * 100))
+				val (eye, rotation) = computeOnClient { minecraft ->
+					val camera = minecraft.gameRenderer.mainCamera
+					camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+				}
+				val hole = net.minecraft.world.phys.Vec3(s[0], s[1], s[2])
+				val random = java.util.Random(11)
+				val points = ArrayList<Pair<String, net.minecraft.world.phys.Vec3>>()
+				for (x in -40..40 step 3) for (z in -40..40 step 3) points += "floor" to net.minecraft.world.phys.Vec3(hole.x + x, -60.0, hole.z + z)
+				repeat(500) {
+					val d = net.minecraft.world.phys.Vec3(random.nextGaussian(), random.nextGaussian(), random.nextGaussian()).normalize()
+					points += "round the hole" to hole.add(d.scale(s[3] * (1.3 + random.nextDouble() * 12.0)))
+				}
+				repeat(300) {
+					val d = net.minecraft.world.phys.Vec3(random.nextGaussian(), random.nextGaussian(), random.nextGaussian()).normalize()
+					points += "near the camera" to eye.add(d.scale(0.5 + random.nextDouble() * 8.0))
+				}
+				// The GPU's verdict per point: placed (and where on screen) or hidden.
+				val views = points.map { (_, p) -> rotation.transform(org.joml.Vector3f((p.x - eye.x).toFloat(), (p.y - eye.y).toFloat(), (p.z - eye.z).toFloat())).let { floatArrayOf(it.x, it.y, it.z) } }
+				val (results, projection) = computeOnClient { _ ->
+					views.chunked(1000).flatMap { KerrSolveCheck.run(it, VertexLens.lastProjection) } to org.joml.Matrix4f(VertexLens.lastProjection)
+				}
+				val gameFromView = org.joml.Quaternionf(rotation).conjugate()
+				val sources = computeOnClient { minecraft -> LensReference.sourcesAround(minecraft, eye) }
+				val ray = net.kernelpanicsoft.relativity.physics.geodesic.HamiltonianRay(net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime(sources), rtol = 1e-9, atol = 1e-11)
+				val pixel = computeOnClient { minecraft -> 2.0 * kotlin.math.tan(Math.toRadians(minecraft.options.fov().get().toDouble()) / 2.0) / minecraft.window.height }
+				val errors = HashMap<String, ArrayList<Double>>()
+				val worst = ArrayList<Triple<Double, String, net.minecraft.world.phys.Vec3>>()
+				val hidden = HashMap<String, ArrayList<net.minecraft.world.phys.Vec3>>()
+				for ((i, entry) in points.withIndex()) {
+					val (kind, p) = entry
+					val view = views[i]
+					if (view[2] > -0.05f) continue // behind the camera (in view space -z is ahead)
+					val r = results[i]
+					if (r[3] >= 99.5f && r[3] < 1000f) { hidden.getOrPut(kind) { ArrayList() } += p; continue }
+					if (r[3] >= 1000f) { hidden.getOrPut(kind) { ArrayList() } += p; continue } // at a fold
+					// Off screen: not drawn either way.
+					if (kotlin.math.abs(r[1]) > 1.0f || kotlin.math.abs(r[2]) > 1.0f) continue
+					val dirView = org.joml.Vector3f(r[1] / projection.m00(), r[2] / projection.m11(), -1f).normalize()
+					val dirGame = gameFromView.transform(dirView)
+					val placed = net.minecraft.world.phys.Vec3(dirGame.x.toDouble(), dirGame.y.toDouble(), dirGame.z.toDouble())
+					val truth = LensReference.nearestImage(ray, eye, p, placed)
+					// (9999: no true image near where it's drawn.)
+					val px = if (truth == null) 9999.0 else kotlin.math.acos(truth.dot(placed.normalize()).coerceIn(-1.0, 1.0)) / pixel
+					errors.getOrPut(kind) { ArrayList() } += px
+					worst += Triple(px, kind, p)
+				}
+				// A sample of the hidden: whether they have an image after all.
+				val missing = HashMap<String, Int>()
+				val searched = HashMap<String, Int>()
+				for ((kind, list) in hidden) for (p in list.shuffled(random).take(15)) {
+					searched.merge(kind, 1, Int::plus)
+					val image = LensReference.imageDirection(sources, eye, p) ?: continue
+					// Only if the image would be on screen.
+					val v = rotation.transform(org.joml.Vector3f(image.x.toFloat(), image.y.toFloat(), image.z.toFloat()))
+					if (v.z >= 0f) continue
+					val ndc = org.joml.Vector3f(projection.m00() * v.x / -v.z, projection.m11() * v.y / -v.z, 0f)
+					if (kotlin.math.abs(ndc.x) <= 1f && kotlin.math.abs(ndc.y) <= 1f) missing.merge(kind, 1, Int::plus)
+				}
+				worst.sortByDescending { it.first }
+				val report = errors.entries.joinToString("\n") { (kind, list) ->
+					list.sort()
+					val nowhere = list.count { it >= 9999.0 }
+					val real = list.filter { it < 9999.0 }
+					"  $kind: ${list.size} placed on screen, $nowhere with no image near; error median %.1f px, 95%% %.1f px, 99%% %.1f px, worst %.1f px; hidden ${hidden[kind]?.size ?: 0}, of ${searched[kind] ?: 0} searched ${missing[kind] ?: 0} have an image on screen".format(
+						real.getOrElse(real.size / 2) { 0.0 }, real.getOrElse((real.size * 0.95).toInt().coerceAtMost(real.size - 1)) { 0.0 },
+						real.getOrElse((real.size * 0.99).toInt().coerceAtMost(real.size - 1)) { 0.0 }, real.lastOrNull() ?: 0.0)
+				} + "\n  worst: " + worst.take(6).joinToString("; ") { "%.0f px %s at (%.1f, %.1f, %.1f)".format(it.first, it.second, it.third.x, it.third.y, it.third.z) }
+				CreateRelativity.LOGGER.info("Vertex accuracy, {} (camera at {}):\n{}", label, eye, report)
+			}
+		}
+	}
+
 	fun ClientGameTestContext.oceanScene() {
 		if (!ClientTestInput.selected("oceanScene")) return
 		runOnClient { minecraft ->

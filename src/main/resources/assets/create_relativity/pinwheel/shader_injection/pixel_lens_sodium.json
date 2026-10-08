@@ -1,0 +1,7 @@
+{
+  "target": [
+    "sodium:shaders/blocks/block_layer_opaque.fsh"
+  ],
+  "redirect": "create_relativity:pixel_lens.glsl",
+  "debug": true
+}

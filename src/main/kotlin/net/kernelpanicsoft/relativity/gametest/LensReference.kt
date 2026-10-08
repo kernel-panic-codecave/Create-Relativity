@@ -69,6 +69,110 @@ internal object LensReference {
 	}
 
 	/**
+	 * How far (radians, as seen from [eye]) the light seen looking along [direction] (game axes) passes from [target]:
+	 * its path traced back through [sources] (physics axes, relative to [eye]) on [ray], its closest approach to
+	 * [target] over [target]'s distance. NaN if the path is captured before getting there.
+	 */
+	fun missAngle(ray: HamiltonianRay, eye: Vec3, target: Vec3, direction: Vec3): Double {
+		val goal = DoubleArray(3)
+		GameFrame.toPhysics(Vector3d(target.x - eye.x, target.y - eye.y, target.z - eye.z), goal)
+		val dir = DoubleArray(3)
+		GameFrame.toPhysics(Vector3d(direction.x, direction.y, direction.z), dir)
+		val distance = target.distanceTo(eye)
+		val path = ray.trace(DoubleArray(3), dir, distance * 1.5 + 8.0, maxSegment = minOf(0.25, 0.05 * distance), arriving = true)
+		var best = Double.MAX_VALUE
+		for (k in 1 until path.points.size) {
+			val p0 = path.points[k - 1]
+			val p1 = path.points[k]
+			val sx = p1[0] - p0[0]; val sy = p1[1] - p0[1]; val sz = p1[2] - p0[2]
+			val len2 = sx * sx + sy * sy + sz * sz
+			val t = if (len2 > 0) (((goal[0] - p0[0]) * sx + (goal[1] - p0[1]) * sy + (goal[2] - p0[2]) * sz) / len2).coerceIn(0.0, 1.0) else 0.0
+			val dx = p0[0] + t * sx - goal[0]; val dy = p0[1] + t * sy - goal[1]; val dz = p0[2] + t * sz - goal[2]
+			best = minOf(best, dx * dx + dy * dy + dz * dz)
+		}
+		if (best == Double.MAX_VALUE) return Double.NaN
+		return kotlin.math.sqrt(best) / distance
+	}
+
+	/**
+	 * The true image of [target] nearest view direction [start] (game axes, from [eye]): Gauss-Newton on the direction,
+	 * the residual being how far the light seen along it passes from [target] (across its path, on the two axes square to
+	 * [start]); null if it doesn't get within [tolerance] of [target]'s distance (no image near [start]).
+	 */
+	fun nearestImage(ray: HamiltonianRay, eye: Vec3, target: Vec3, start: Vec3, tolerance: Double = 2e-4): Vec3? {
+		val goal = DoubleArray(3)
+		GameFrame.toPhysics(Vector3d(target.x - eye.x, target.y - eye.y, target.z - eye.z), goal)
+		val distance = target.distanceTo(eye)
+		val s0 = start.normalize()
+		val u = (if (kotlin.math.abs(s0.y) < 0.9) Vec3(0.0, 1.0, 0.0) else Vec3(1.0, 0.0, 0.0)).cross(s0).normalize()
+		val w = s0.cross(u)
+		val uP = DoubleArray(3).also { GameFrame.toPhysics(Vector3d(u.x, u.y, u.z), it) }
+		val wP = DoubleArray(3).also { GameFrame.toPhysics(Vector3d(w.x, w.y, w.z), it) }
+		fun dir(a: Double, b: Double) = s0.add(u.scale(a)).add(w.scale(b)).normalize()
+		// The miss vector at the path's closest approach to the target, on u and w, over the target's distance.
+		fun residual(a: Double, b: Double): DoubleArray? {
+			val d = dir(a, b)
+			val direction = DoubleArray(3).also { GameFrame.toPhysics(Vector3d(d.x, d.y, d.z), it) }
+			val path = ray.trace(DoubleArray(3), direction, distance * 1.5 + 8.0, maxSegment = minOf(0.25, 0.05 * distance), arriving = true)
+			var best = Double.MAX_VALUE
+			var miss = DoubleArray(3)
+			for (k in 1 until path.points.size) {
+				val p0 = path.points[k - 1]
+				val p1 = path.points[k]
+				val sx = p1[0] - p0[0]; val sy = p1[1] - p0[1]; val sz = p1[2] - p0[2]
+				val len2 = sx * sx + sy * sy + sz * sz
+				val t = if (len2 > 0) (((goal[0] - p0[0]) * sx + (goal[1] - p0[1]) * sy + (goal[2] - p0[2]) * sz) / len2).coerceIn(0.0, 1.0) else 0.0
+				val m = doubleArrayOf(p0[0] + t * sx - goal[0], p0[1] + t * sy - goal[1], p0[2] + t * sz - goal[2])
+				val d2 = m[0] * m[0] + m[1] * m[1] + m[2] * m[2]
+				if (d2 < best) { best = d2; miss = m }
+			}
+			if (best == Double.MAX_VALUE) return null
+			return doubleArrayOf((miss[0] * uP[0] + miss[1] * uP[1] + miss[2] * uP[2]) / distance, (miss[0] * wP[0] + miss[1] * wP[1] + miss[2] * wP[2]) / distance, kotlin.math.sqrt(best) / distance)
+		}
+		var a = 0.0
+		var b = 0.0
+		var r = residual(a, b) ?: return null
+		val h = 1e-5
+		repeat(12) {
+			if (r[2] < tolerance) return dir(a, b)
+			val ra = residual(a + h, b) ?: return null
+			val rb = residual(a, b + h) ?: return null
+			val j00 = (ra[0] - r[0]) / h; val j10 = (ra[1] - r[1]) / h
+			val j01 = (rb[0] - r[0]) / h; val j11 = (rb[1] - r[1]) / h
+			val det = j00 * j11 - j01 * j10
+			if (kotlin.math.abs(det) < 1e-18) return null
+			var da = -(j11 * r[0] - j01 * r[1]) / det
+			var db = -(-j10 * r[0] + j00 * r[1]) / det
+			val step = kotlin.math.sqrt(da * da + db * db)
+			if (step > 0.05) { da *= 0.05 / step; db *= 0.05 / step } // stay near the start: the image nearest it
+			// Halve a step that makes it worse.
+			var scale = 1.0
+			var next: DoubleArray? = null
+			for (k in 0 until 6) {
+				val candidate = residual(a + da * scale, b + db * scale)
+				if (candidate != null && candidate[2] < r[2]) { next = candidate; break }
+				scale *= 0.5
+			}
+			if (next == null) return null
+			a += da * scale
+			b += db * scale
+			r = next
+		}
+		return if (r[2] < tolerance) dir(a, b) else null
+	}
+
+	/** Every source in the level (holes and the rest) on physics axes relative to [eye]. */
+	fun sourcesAround(minecraft: Minecraft, eye: Vec3): List<MetricSource> {
+		val level = minecraft.level!!
+		val at = Vector3d(eye.x, eye.y, eye.z)
+		return SpacetimeField.blackHoles(level).map { hole ->
+			val p = DoubleArray(3)
+			GameFrame.toPhysics(Vector3d(hole.x, hole.y, hole.z).sub(at), p)
+			KerrSource(p[0], p[1], p[2], hole.mass, hole.spin * hole.mass) as MetricSource
+		} + SpacetimeField.fieldSources(level).map { it.toPhysics(at) }
+	}
+
+	/**
 	 * The view direction (game axes, unit) from [eye] whose light, traced back through [sources] (physics axes, relative
 	 * to [eye]), passes through [target]: Nelder-Mead on the miss from the straight line of sight; null if it can't get
 	 * within 0.05 blocks.
