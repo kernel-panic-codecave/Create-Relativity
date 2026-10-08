@@ -52,15 +52,22 @@ object KerrPaths {
 	private val uniforms = HashMap<String, Int>()
 
 	/**
-	 * Draws the table for a hole at [holeGame] (camera-relative, game axes) with Schwarzschild radius [rs] and [spin],
-	 * paths followed out to [pathRadius] from it: while that changes (the camera moves), [rowsPerFrame] rows a frame in
-	 * turn, so the table lags the camera by a few frames; whole when new or [whole] (a jump). False if it can't.
+	 * Draws the table round the lens centre [holeGame] (camera-relative, game axes; the dominant source) of size [rs]
+	 * (r_s of a hole), its paths through every source in [sources] (the first [sourceCount], packed as kerr.glsl's Sources:
+	 * [BlackHoleLens.packSources]) followed out to [pathRadius] from the centre: while that changes (the camera moves),
+	 * [rowsPerFrame] rows a frame in turn, so the table lags the camera by a few frames; whole when new or [whole] (a
+	 * jump). False if it can't.
 	 */
-	fun draw(holeGame: Vector3f, rs: Float, spin: Float, pathRadius: Float, whole: Boolean = false): Boolean {
+	fun draw(holeGame: Vector3f, rs: Float, pathRadius: Float, sources: Array<org.joml.Vector4f>, sourceCount: Int, whole: Boolean = false): Boolean {
 		if (failed || !ensureProgram()) return false
 		val width = WIDTH
 		val height = HEIGHT
-		val key = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, spin, pathRadius)
+		val key = FloatArray(5 + 12 * sourceCount)
+		key[0] = holeGame.x; key[1] = holeGame.y; key[2] = holeGame.z; key[3] = rs; key[4] = pathRadius
+		for (i in 0 until 3 * sourceCount) {
+			val v = sources[i]
+			key[5 + 4 * i] = v.x; key[6 + 4 * i] = v.y; key[7 + 4 * i] = v.z; key[8 + 4 * i] = v.w
+		}
 		val fresh = texture == 0 || this.width != width || this.height != height
 		if (fresh || !(key contentEquals lastKey)) drawnSinceChange = 0
 		changed = drawnSinceChange < height
@@ -68,7 +75,7 @@ object KerrPaths {
 		lastKey = key
 		ensureTarget(width, height)
 		val rows = if (fresh || whole) height else rowsPerFrame.coerceIn(1, height)
-		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, spin, pathRadius)
+		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, pathRadius)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
 		val previousVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING)
@@ -88,9 +95,13 @@ object KerrPaths {
 			GlStateManager._disableCull()
 			GlStateManager._disableScissorTest()
 			GlStateManager._glUseProgram(program)
-			GL20.glUniform3f(uniform("HoleGame"), holeGame.x, holeGame.y, holeGame.z)
-			GL20.glUniform1f(uniform("HoleRs"), rs)
-			GL20.glUniform1f(uniform("HoleSpin"), spin)
+			GL20.glUniform3f(uniform("CentreGame"), holeGame.x, holeGame.y, holeGame.z)
+			GL20.glUniform1f(uniform("CentreScale"), rs)
+			GL20.glUniform1i(uniform("SourceCount"), sourceCount)
+			val packed = stack.mallocFloat(4 * sources.size)
+			for (v in sources) packed.put(v.x).put(v.y).put(v.z).put(v.w)
+			packed.flip()
+			GL20.glUniform4fv(uniform("Sources"), packed)
 			GL20.glUniform1f(uniform("PathRadius"), pathRadius)
 			GL20.glUniform2f(uniform("TableSize"), width.toFloat(), height.toFloat())
 			GL30.glBindVertexArray(vao)
@@ -130,7 +141,7 @@ object KerrPaths {
 		return data
 	}
 
-	/** The parameters of the last [draw] (debug; GameTests): hole (game, camera-relative), r_s, spin, path radius. */
+	/** The parameters of the last [draw] (debug; GameTests): centre (game, camera-relative), its size, path radius. */
 	var lastDraw = FloatArray(0)
 		private set
 
@@ -195,7 +206,7 @@ object KerrPaths {
 			    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 			}
 		""".trimIndent()
-		val fragmentSource = "#version 330 core\n$kerr\n$core\n$body"
+		val fragmentSource = "#version 330 core\n#define RELATIVITY_PATHS\n$kerr\n$core\n$body"
 		val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
 		val fragment = compile(GL20.GL_FRAGMENT_SHADER, fragmentSource) ?: return false.also { failed = true }
 		val id = GL20.glCreateProgram()

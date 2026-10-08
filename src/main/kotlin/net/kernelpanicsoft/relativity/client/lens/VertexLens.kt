@@ -135,6 +135,7 @@ object VertexLens {
 	/** Camera movement relative to the hole in one frame past which the Kerr tables are redrawn whole (blocks). */
 	private const val JUMP_BLOCKS = 0.5f
 	private val lastHoleGame = Vector3f(Float.MAX_VALUE)
+	private val sources = Array(3 * BlackHoleLens.MAX_SOURCES) { org.joml.Vector4f() }
 	private var jump = false
 
 	/** The hole the Kerr image map was last drawn for (a new one starts it over). */
@@ -166,9 +167,13 @@ object VertexLens {
 			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
 			lastHoleGame.set(holeGame)
 			if (BlackHoleLens.timeGpu) pathsTimer.begin()
+			val (count, _) = BlackHoleLens.packSources(
+				BlackHoleLens.visibleHoles(level!!).sortedBy { it.center.distanceToSqr(camera) },
+				BlackHoleLens.visibleSources(level), camera, sources,
+			)
 			kerr = KerrPaths.draw(
-				holeGame, nearest.schwarzschildRadius.toFloat(), nearest.spin.toFloat(),
-				pathRadius(nearest, holeGame.length().toDouble()).toFloat(), jump,
+				holeGame, nearest.schwarzschildRadius.toFloat(), pathRadius(nearest, holeGame.length().toDouble()).toFloat(),
+				sources, count, jump,
 			)
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
@@ -225,7 +230,7 @@ object VertexLens {
 				val dy = hole.y - camY
 				val dz = hole.z - camZ
 				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put(hole.spin.toFloat())
-				data.put(0f).put(0f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+				data.put(hole.schwarzschildRadius.toFloat()).put(0f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
 					val c = viewToGame.getColumn(column, Vector3f())

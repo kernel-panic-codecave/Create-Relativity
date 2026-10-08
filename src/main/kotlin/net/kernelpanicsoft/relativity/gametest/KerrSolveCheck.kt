@@ -86,7 +86,7 @@ object KerrSolveCheck {
 			return shader
 		}
 		val vertex = compile(GL20.GL_VERTEX_SHADER, "#version 330 core\nvoid main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }")
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n$core\n$body")
+		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$core\n$body")
 		val id = GL20.glCreateProgram()
 		GL20.glAttachShader(id, vertex)
 		GL20.glAttachShader(id, fragment)

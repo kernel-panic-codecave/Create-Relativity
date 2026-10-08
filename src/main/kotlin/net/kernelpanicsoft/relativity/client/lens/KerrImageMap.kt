@@ -206,7 +206,7 @@ object KerrImageMap {
 			}
 		""".trimIndent()
 		val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n$core\n$body") ?: return false.also { failed = true }
+		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$core\n$body") ?: return false.also { failed = true }
 		val id = GL20.glCreateProgram()
 		GL20.glAttachShader(id, vertex)
 		GL20.glAttachShader(id, fragment)
