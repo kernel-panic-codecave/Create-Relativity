@@ -15,7 +15,8 @@ uniform vec4 LensFogColor;    // the terrain fog's colour (alpha its strength)
 uniform int ProfileFlags;     // profiling only (0 normally): 2 skips geometry, 4 uses Euler for bending, 8 ignores the
                               // render distance; 16 draws fogged geometry as drawn; 32 (LensMode 1) paints traced hits' fog distance; 64 no full-resolution
                               // re-march; 128 a plain sky; 256 no (Schwarzschild) disk; 512 marches where the half-res
-                              // table's neighbours disagree; 1024 the half-res table never marches
+                              // table's neighbours disagree; 1024 the half-res table never marches;
+                              // 2048 / 4096 the lens pass leaves drawn / sky pixels as they are
 uniform int UnseenSource; // what bent paths can meet: 0 nothing (the sky), 1 the geometry round the hole (LensVoxels)
 uniform usampler3D Voxels;      // LensVoxels' fine grid: per one-block cell, its quads as (start << 8) | count
 uniform samplerBuffer VoxelQuads; // its quads, 6 texels each (LensVoxels.writeQuad), relative to their cell
@@ -264,6 +265,9 @@ bool cellHit(uint run, vec3 o, vec3 d, float t0, float t1, out float tHit, out v
                 pb = p2;
                 pc = p3;
             }
+            // Back faces aren't drawn (as the level renders, culling them: from inside a block, nothing of it shows).
+            vec3 facing = cross(pb - p0, pc - p0);
+            if (dot(facing, d) > 0.0) continue;
             float t;
             vec2 bary;
             if (!triangleHit(o, d, p0, pb, pc, t, bary) || t < t0 || t >= t1) continue;
@@ -272,8 +276,7 @@ bool cellHit(uint run, vec3 o, vec3 d, float t0, float t1, out float tHit, out v
             vec3 color;
             if (!quadPixel(q, k == 1, bary, 0.0, uvec2(0u), color)) continue;
             tHit = t;
-            normal = normalize(cross(pb - p0, pc - p0));
-            if (dot(normal, d) > 0.0) normal = -normal;
+            normal = normalize(facing);
             found = true;
         }
     }

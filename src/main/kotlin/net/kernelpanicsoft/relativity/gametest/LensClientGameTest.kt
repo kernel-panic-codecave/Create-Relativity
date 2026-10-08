@@ -661,10 +661,14 @@ class LensClientGameTest {
 				val lens = time {}
 				val full = time { BlackHoleLens.marchEveryPixel = true }
 				// The lens pass's parts: without the full-resolution re-march, with a plain sky, without the disk, none.
-				val parts = listOf(64, 128, 256, 64 or 128 or 256).map { flags -> time { BlackHoleLens.profileFlags = flags } }
+				val parts = listOf(64, 128, 256, 64 or 128 or 256, 2048, 4096).map { flags -> time { BlackHoleLens.profileFlags = flags } }
 				// The tables' parts: the half-resolution one never marching; no geometry in any march.
 				val tableParts = listOf(1024, 2).map { flags -> time { BlackHoleLens.rawFrame = true; BlackHoleLens.profileFlags = flags } - fixed }
+				// Back to the whole lens (the timings above leave their switches set) for the pictures.
 				runOnClient {
+					BlackHoleLens.rawFrame = false
+					BlackHoleLens.skipTables = false
+					BlackHoleLens.marchEveryPixel = false
 					BlackHoleLens.profileFlags = 0
 					BlackHoleLens.marchStepsDebug = true
 				}
@@ -684,9 +688,9 @@ class LensClientGameTest {
 				val sceneRemarched = fraction(shot) { r, _, _ -> r > 128 }
 				val kerrRemarched = fraction(shot) { _, _, b -> b > 128 }
 				lines += ("%s: fixed %.2f, tables %.2f, lens pass %.2f (total %.2f; re-marched %.1f%% scene, %.1f%% Kerr);" +
-					" march every pixel %.2f (%.1f steps a pixel); lens pass without re-march %.2f, plain sky %.2f, no disk %.2f, none %.2f; tables with no half-res march %.2f, without geometry %.2f").format(
+					" march every pixel %.2f (%.1f steps a pixel); lens pass without re-march %.2f, plain sky %.2f, no disk %.2f, none %.2f, drawn pixels untouched %.2f, sky pixels untouched %.2f; tables with no half-res march %.2f, without geometry %.2f").format(
 					name, fixed, tables - fixed, lens - tables, lens, sceneRemarched * 100, kerrRemarched * 100, full, meanSteps,
-					parts[0] - tables, parts[1] - tables, parts[2] - tables, parts[3] - tables,
+					parts[0] - tables, parts[1] - tables, parts[2] - tables, parts[3] - tables, parts[4] - tables, parts[5] - tables,
 					tableParts[0], tableParts[1],
 				)
 			}

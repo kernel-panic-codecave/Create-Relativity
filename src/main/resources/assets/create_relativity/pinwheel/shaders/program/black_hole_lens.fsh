@@ -506,6 +506,11 @@ void main() {
         return;
     }
     float sceneDist = sceneDistance(texCoord);
+    // (timing: 2048 leaves drawn pixels as drawn, 4096 sky pixels)
+    if ((sceneDist < 1e29 && (ProfileFlags & 2048) != 0) || (sceneDist >= 1e29 && (ProfileFlags & 4096) != 0)) {
+        fragColor = original;
+        return;
+    }
     // The nearest hole, if spinning, is marched once for both its lens and its disk.
     KerrRay first = kerrNearest(dir, texCoord);
     vec3 scene;
