@@ -15,6 +15,9 @@ import org.lwjgl.opengl.GL13
 import org.lwjgl.opengl.GL20
 import org.lwjgl.opengl.GL30
 import org.lwjgl.system.MemoryStack
+import net.kernelpanicsoft.relativity.physics.lens.KerrSlotBaker
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import kotlin.math.acos
 import kotlin.math.atan2
 import kotlin.math.floor
@@ -43,22 +46,26 @@ object KerrSlots {
 	const val MAX_SLOTS = 40
 
 	/** Baked slots (key: r index * 1000 + theta index): their map textures, last used frame. */
-	private class Slot(val texture: Int, var used: Long)
+	private class Slot(val texture: Int, val second: Int, var used: Long) {
+		fun delete() = GL11.glDeleteTextures(intArrayOf(texture, second))
+	}
+
+	/** The live secondary-image map (the blend of the slots' secondary maps; VertexLens.drawSecondImages), and whether
+	 * this frame's is one. */
+	var secondTexture = 0
+		private set
+	var secondBlending = false
+		private set
 	private val slots = HashMap<Int, Slot>()
 	private var cacheKey = ""
 	private var frame = 0L
 
-	/** The slot being baked (key) and its own solvers, or -1. */
+	/** The slot being baked (key), or -1; its bake, on the CPU (KerrSlotBaker: spare cores, a second or so), and for which
+	 * cache key (a bake finishing after the hole changed is dropped). */
 	private var baking = -1
-	private var mapStarted = false
-	// Background work, on a budget each frame: a slot takes a few seconds to bake.
-	// (Measured: two map layers and 32 path rows every frame cost ~20 ms a frame on an iGPU; this is a few ms.)
-	private val paths = PathTableSolver().also { it.rowsPerFrame = PathTableSolver.HEIGHT / 32 }
-	private val map = ImageMapSolver().also { it.maxLayersPerFrame = 1; it.layersPerFrame = 1; it.repairs = false }
-
-	/** Baking works one frame in this many. */
-	private const val BAKE_EVERY = 3
-	private val sources = Array(3 * BlackHoleLens.MAX_SOURCES) { Vector4f() }
+	private var bakeJob: CompletableFuture<Array<FloatArray>>? = null
+	private var bakeKey = ""
+	private val baker = Executors.newSingleThreadExecutor { Thread(it, "Relativity slot baker").apply { isDaemon = true; priority = Thread.MIN_PRIORITY } }
 
 	/** Debug (GameTests): slots baked so far, and whether this frame's live map is a blend. */
 	val bakedSlots: Int get() = slots.size
@@ -101,6 +108,7 @@ object KerrSlots {
 	 */
 	fun update(hole: BlackHole, camera: Vec3): Boolean {
 		blending = false
+		secondBlending = false
 		if (!enabled) return false
 		frame += 1
 		val keyNow = "${hole.id}/${hole.schwarzschildRadius}/${hole.spin}"
@@ -113,15 +121,10 @@ object KerrSlots {
 		val i0 = floor(u).toInt().coerceIn(0, R_SLOTS - 2)
 		val j0 = floor(v).toInt().coerceIn(0, THETA_SLOTS - 2)
 		if (BlackHoleLens.timeGpu) bakeTimer.begin()
-		if ((baking >= 0 || bakeNew) && frame % BAKE_EVERY == 0L) {
-			if (measureBakes) GL11.glFinish()
+		if (baking >= 0 || bakeNew) {
 			val start = System.nanoTime()
-			val phase = if (baking >= 0 && !mapStarted) "paths" else "map"
 			bake(hole, i0, j0)
-			if (measureBakes) {
-				GL11.glFinish()
-				bakeCosts.getOrPut(phase) { ArrayList() } += (System.nanoTime() - start) / 1e6
-			}
+			if (measureBakes) bakeCosts.getOrPut("frame") { ArrayList() } += (System.nanoTime() - start) / 1e6
 		}
 		if (BlackHoleLens.timeGpu) bakeTimer.end()
 		val needed = listOf(key(i0, j0), key(i0 + 1, j0), key(i0, j0 + 1), key(i0 + 1, j0 + 1))
@@ -135,66 +138,90 @@ object KerrSlots {
 		val cameraInSlots = Vector3d(rel.x * kotlin.math.cos(-azimuth) - rel.z * kotlin.math.sin(-azimuth), rel.y, rel.x * kotlin.math.sin(-azimuth) + rel.z * kotlin.math.cos(-azimuth))
 		val slotCameras = needed.map { k -> slotCamera(k / 1000, k % 1000, hole) }
 		if (BlackHoleLens.timeGpu) blendTimer.begin()
-		blending = blend(needed.map { slots[it]!!.texture }, weights, azimuth.toFloat(), hole, cameraInSlots, slotCameras)
+		blending = blend(needed.map { slots[it]!!.texture }, weights, azimuth.toFloat(), hole, cameraInSlots, slotCameras, KerrImageMap.texture)
+		if (secondTexture == 0) secondTexture = ImageMapSolver.newMapTexture()
+		secondBlending = blending && blend(needed.map { slots[it]!!.second }, weights, azimuth.toFloat(), hole, cameraInSlots, slotCameras, secondTexture)
 		if (BlackHoleLens.timeGpu) blendTimer.end()
 		return blending
 	}
 
 	private fun clear(keyNow: String) {
-		for (slot in slots.values) GL11.glDeleteTextures(slot.texture)
+		for (slot in slots.values) slot.delete()
 		slots.clear()
 		baking = -1
-		map.invalidate()
+		bakeJob = null
 		cacheKey = keyNow
 	}
 
-	/** Works on the nearest unbaked slot to (i0, j0) (the four round the camera first, then the ring round them). */
+	/**
+	 * Picks the nearest unbaked slot to (i0, j0) (the four round the camera first, then the ring round them) and starts its
+	 * bake in the background; takes in a finished one (uploaded as the slot's map).
+	 */
 	private fun bake(hole: BlackHole, i0: Int, j0: Int) {
-		if (baking < 0) {
-			var best = -1
-			var bestDistance = Double.MAX_VALUE
-			for (di in -1..2) for (dj in -1..2) {
-				val i = i0 + di
-				val j = j0 + dj
-				if (i !in 0 until R_SLOTS || j !in 0 until THETA_SLOTS || key(i, j) in slots) continue
-				val distance = (di - 0.5) * (di - 0.5) + (dj - 0.5) * (dj - 0.5)
-				if (distance < bestDistance) {
-					bestDistance = distance
-					best = key(i, j)
+		val job = bakeJob
+		if (job != null) {
+			if (!job.isDone) return
+			bakeJob = null
+			val maps = try { job.get() } catch (e: Exception) { CreateRelativity.LOGGER.error("Kerr slot bake failed", e); null }
+			if (maps != null && bakeKey == cacheKey) {
+				slots[baking] = Slot(upload(maps[0]), upload(maps[1]), frame)
+				if (slots.size > MAX_SLOTS) {
+					val oldest = slots.entries.minBy { it.value.used }
+					oldest.value.delete()
+					slots.remove(oldest.key)
 				}
 			}
-			if (best < 0) return
-			baking = best
-			mapStarted = false
-		}
-		val i = baking / 1000
-		val j = baking % 1000
-		// The virtual camera, at azimuth 0 (the hole's +x side).
-		val rel = slotCamera(i, j, hole)
-		val outer = outer(hole)
-		VertexLens.uploadVirtual(hole, rel, outer)
-		val (count, _) = BlackHoleLens.packSources(listOf(hole), emptyList(), Vec3(hole.x + rel.x, hole.y + rel.y, hole.z + rel.z), sources)
-		paths.draw(Vector3f((-rel.x).toFloat(), (-rel.y).toFloat(), (-rel.z).toFloat()), hole.schwarzschildRadius.toFloat(), outer.toFloat(), sources, count, whole = true)
-		// The map once the path table is whole (solving against a half-drawn one is wasted), from the last slot's answers.
-		if (paths.changed) return
-		if (!mapStarted) {
-			map.restart()
-			// (The first slot searches everything; the next start from it and keep its hidden texels hidden.)
-			map.retryHidden = slots.isEmpty()
-			mapStarted = true
-		}
-		map.ensureTexture()
-		VertexLens.bindPathTable(paths.texture)
-		map.draw(false, whole = true, sources, count)
-		if (map.settled) {
-			slots[baking] = Slot(map.copyTexture(), frame)
 			baking = -1
-			if (slots.size > MAX_SLOTS) {
-				val oldest = slots.entries.minBy { it.value.used }
-				GL11.glDeleteTextures(oldest.value.texture)
-				slots.remove(oldest.key)
+		}
+		if (!bakeNew) return
+		var best = -1
+		var bestDistance = Double.MAX_VALUE
+		for (di in -1..2) for (dj in -1..2) {
+			val i = i0 + di
+			val j = j0 + dj
+			if (i !in 0 until R_SLOTS || j !in 0 until THETA_SLOTS || key(i, j) in slots) continue
+			val distance = (di - 0.5) * (di - 0.5) + (dj - 0.5) * (dj - 0.5)
+			if (distance < bestDistance) {
+				bestDistance = distance
+				best = key(i, j)
 			}
 		}
+		if (best < 0) return
+		baking = best
+		bakeKey = cacheKey
+		// The virtual camera, at azimuth 0 (the hole's +x side).
+		val rel = slotCamera(best / 1000, best % 1000, hole)
+		val m = hole.mass
+		val a = hole.spin * m
+		val inner = 1.05 * (m + sqrt(maxOf(m * m - a * a, 0.0)))
+		val baker = KerrSlotBaker(m, a, doubleArrayOf(rel.x, rel.y, rel.z), inner, outer(hole), ImageMapSolver.WIDTH, ImageMapSolver.HEIGHT, ImageMapSolver.DEPTH)
+		val started = System.nanoTime()
+		bakeJob = CompletableFuture.supplyAsync({
+			baker.bakeBoth().also { if (measureBakes) synchronized(bakeCosts) { bakeCosts.getOrPut("slot") { ArrayList() } += (System.nanoTime() - started) / 1e6 } }
+		}, this.baker)
+	}
+
+	/** A new map texture holding [map] (KerrSlotBaker's layout: x fastest, then y, then layer; RGBA). */
+	private fun upload(map: FloatArray): Int {
+		val texture = ImageMapSolver.newMapTexture()
+		val buffer = org.lwjgl.system.MemoryUtil.memAllocFloat(map.size)
+		try {
+			buffer.put(map).flip()
+			val previous = GL11.glGetInteger(GL12.GL_TEXTURE_BINDING_3D)
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture)
+			// (Unpacking as Minecraft may have left it set for its own uploads: plain rows here.)
+			GlStateManager._pixelStore(GL11.GL_UNPACK_ROW_LENGTH, 0)
+			GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_ROWS, 0)
+			GlStateManager._pixelStore(GL11.GL_UNPACK_SKIP_PIXELS, 0)
+			GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4)
+			GL11.glPixelStorei(GL12.GL_UNPACK_IMAGE_HEIGHT, 0)
+			GL11.glPixelStorei(GL12.GL_UNPACK_SKIP_IMAGES, 0)
+			GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, 0, ImageMapSolver.WIDTH, ImageMapSolver.HEIGHT, ImageMapSolver.DEPTH, GL11.GL_RGBA, GL11.GL_FLOAT, buffer)
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, previous)
+		} finally {
+			org.lwjgl.system.MemoryUtil.memFree(buffer)
+		}
+		return texture
 	}
 
 	/** Slot (i, j)'s camera from the hole (blocks): azimuth 0, the hole's +x side. */
@@ -210,7 +237,7 @@ object KerrSlots {
 	private var failed = false
 
 	/** The blend pass into [KerrImageMap]'s live texture, layer by layer. */
-	private fun blend(textures: List<Int>, weights: Vector4f, azimuth: Float, hole: BlackHole, camera: Vector3d, slotCameras: List<Vector3d>): Boolean {
+	private fun blend(textures: List<Int>, weights: Vector4f, azimuth: Float, hole: BlackHole, camera: Vector3d, slotCameras: List<Vector3d>, target: Int): Boolean {
 		if (failed || !ensureProgram()) return false
 		KerrImageMap.ensureTexture()
 		if (framebuffer == 0) framebuffer = GL30.glGenFramebuffers()
@@ -253,7 +280,7 @@ object KerrSlots {
 			GL30.glBindVertexArray(vao)
 			val layerUniform = GL20.glGetUniformLocation(program, "Layer")
 			for (layer in 0 until ImageMapSolver.DEPTH) {
-				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, KerrImageMap.texture, 0, layer)
+				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, target, 0, layer)
 				GL20.glUniform1i(layerUniform, layer)
 				GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
 			}

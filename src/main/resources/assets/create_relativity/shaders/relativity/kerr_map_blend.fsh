@@ -91,6 +91,11 @@ void main() {
     vec2 sb = slotShift(b, SlotCamera[1], inSlot);
     vec2 sc = slotShift(c, SlotCamera[2], inSlot);
     vec2 se = slotShift(e, SlotCamera[3], inSlot);
+    // (Azimuth shifts near half a turn, as the secondary images' are, wrap: each taken on the turn nearest the first's.)
+    vec2 ref = sa;
+    sb.y -= 6.28318530718 * floor((sb.y - ref.y) / 6.28318530718 + 0.5);
+    sc.y -= 6.28318530718 * floor((sc.y - ref.y) / 6.28318530718 + 0.5);
+    se.y -= 6.28318530718 * floor((se.y - ref.y) / 6.28318530718 + 0.5);
     vec2 shift = Weights.x * sa + Weights.y * sb + Weights.z * sc + Weights.w * se;
     // Slots that disagree (an image on another branch in one of them, past a fold, or their maps' texels mixing two):
     // no average of them is right, so none (hidden: the post pass draws it). Near the hole neighbouring slots' shifts

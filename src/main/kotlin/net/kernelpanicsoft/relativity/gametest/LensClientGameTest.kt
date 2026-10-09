@@ -1238,12 +1238,19 @@ class LensClientGameTest {
 				}
 			}
 			command("tick freeze")
+			for (spin in listOf(0.0, 0.9)) {
 			command("relativity bh clear")
-			command("relativity bh create 0.5 -54 0.5 2.0 0")
+			command("relativity bh create 0.5 -54 0.5 2.0 $spin")
 			command("tp @a -14.5 -54 0.5 -90 5")
 			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
 			waitTicks(40)
 			settle()
+			// A spinning hole's secondary images come with its baked slots.
+			if (spin != 0.0) {
+				var waited = 0
+				while (waited < 1200 && !computeOnClient { KerrSlots.secondBlending }) { waitTicks(10); waited += 10 }
+				CreateRelativity.LOGGER.info("Second images, spin {}: secondary map blended after {} ticks: {}", spin, waited, computeOnClient { KerrSlots.secondBlending })
+			}
 			fun ClientGameTestContext.fps(): Double {
 				waitTicks(30)
 				return (0 until 3).map { waitTicks(20); computeOnClient { it.fps }.toDouble() }.average()
@@ -1253,19 +1260,18 @@ class LensClientGameTest {
 			for (on in listOf(false, true)) {
 				runOnClient { VertexLens.secondImages = on; BlackHoleLens.profileFlags = 4096 }
 				waitTicks(5)
-				shots["vertex_$on"] = takeScreenshot("second_images_vertex_$on")
+				shots["vertex_$on"] = takeScreenshot("second_images_${spin}_vertex_$on")
 				runOnClient { BlackHoleLens.profileFlags = 0 }
 				waitTicks(5)
-				shots["lens_$on"] = takeScreenshot("second_images_lens_$on")
+				shots["lens_$on"] = takeScreenshot("second_images_${spin}_lens_$on")
 				rates[on] = fps()
 			}
-			runOnClient { VertexLens.secondImages = true }
 			fun changed(a: java.nio.file.Path, b: java.nio.file.Path): Double = Files.newInputStream(a).use { NativeImage.read(it) }.use { x ->
 				Files.newInputStream(b).use { NativeImage.read(it) }.use { y ->
 					var differ = 0L
-					for (j in 0 until x.height) for (i in 0 until x.width) {
-						val p = x.getPixelRGBA(i, j)
-						val q = y.getPixelRGBA(i, j)
+					for (jj in 0 until x.height) for (ii in 0 until x.width) {
+						val p = x.getPixelRGBA(ii, jj)
+						val q = y.getPixelRGBA(ii, jj)
 						var d = 0
 						for (c in 0..2) d = maxOf(d, kotlin.math.abs(((p shr (8 * c)) and 255) - ((q shr (8 * c)) and 255)))
 						if (d > 48) differ += 1
@@ -1273,10 +1279,13 @@ class LensClientGameTest {
 					differ.toDouble() / (x.width.toLong() * x.height)
 				}
 			}
-			CreateRelativity.LOGGER.info("Second images: they change {}% of the vertex lens's picture and {}% of the whole lens's; {} fps with them, {} without",
+			CreateRelativity.LOGGER.info("Second images, spin {}: they change {}% of the vertex lens's picture and {}% of the whole lens's; {} fps with them, {} without", spin,
 				"%.2f".format(100 * changed(shots["vertex_false"]!!, shots["vertex_true"]!!)), "%.2f".format(100 * changed(shots["lens_false"]!!, shots["lens_true"]!!)),
 				"%.0f".format(rates[true]), "%.0f".format(rates[false]))
+			}
+			runOnClient { VertexLens.secondImages = true }
 		}
+
 	}
 
 	/**

@@ -256,8 +256,11 @@ object VertexLens {
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrImageMap.texture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 4)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrSlots.secondTexture)
 		GlStateManager._activeTexture(previous)
-		secondsWanted = !perspective && centre?.hole != null && !kerr && secondTexture != 0 && secondImages
+		// Round a spinning hole only while the slots blend its secondary map (none solved per frame).
+		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || (slotted && KerrSlots.secondBlending))
 	}
 
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
@@ -451,7 +454,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, "RelativityKerrSecondMap" to TEXTURE_UNIT - 4)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {

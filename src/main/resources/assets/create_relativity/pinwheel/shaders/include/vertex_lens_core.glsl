@@ -24,6 +24,8 @@ uniform sampler3D RelativitySecondImages; // SchwarzschildImages.buildSecondaryT
                                           // of the secondary image (the long way round), g whether there's one
 uniform sampler2DArray RelativityKerrPaths; // KerrPaths' table (kerr_paths.fsh): per texel, a view ray's path past a
                                             // spinning hole, as seen from the hole
+uniform sampler3D RelativityKerrSecondMap; // KerrSlots' secondary-image map (as RelativityKerrMap: the light the long way
+                                           // round), for spinning holes' secondary images
 uniform sampler3D RelativityKerrMap; // KerrImageMap (kerr_image_map.fsh): per point round a spinning hole, how its image
                                      // is turned from the straight line of sight per block of its distance (rgb, game
                                      // axes), a 1 where it has one
@@ -465,7 +467,7 @@ int relativityKerrMapImage(vec3 p, out vec3 seen) {
     vec3 size = RELATIVITY_MAP_SIZE;
     vec3 at = vec3(atan(d.z, d.x) / 6.28318530718 + 0.5, ((d.y / r * 0.5 + 0.5) * (size.y - 1.0) + 0.5) / size.y,
         (s * (size.z - 1.0) + 0.5) / size.z);
-    vec4 m = texture(RelativityKerrMap, at);
+    vec4 m = relativitySecond() ? texture(RelativityKerrSecondMap, at) : texture(RelativityKerrMap, at);
     // (Every texel round p must have an image: averaging over those that do misplaces points by the shadow's edge,
     // where neighbouring texels sit either side of capture.)
     if (m.a < 0.999) return -1;
@@ -612,8 +614,13 @@ int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     // Round another source (a mass, a bubble) the map alone places points; outside it they stand where they are.
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
     if (relativitySecond()) {
-        // (Secondary images only round a non-spinning hole, for now: VertexLens draws them only then.)
-        if (RelativityLensData[1].z > 0.5) return -1;
+        // Round a spinning hole, from its secondary-image map (only drawn while the slots blend one: VertexLens).
+        if (RelativityLensData[1].z > 0.5) {
+            vec3 kerr;
+            if (relativityKerrMapImage(p, kerr) != 1) return -1;
+            seen = kerr;
+            return 1;
+        }
         image = relativitySchwarzschildImage(p, seen, nearAxis);
         if (image == 2 || nearAxis) return -1;
         return image;
