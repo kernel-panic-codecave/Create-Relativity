@@ -41,10 +41,6 @@ const vec3 RELATIVITY_MAP_SIZE = vec3(128.0, 64.0, 48.0); // KerrImageMap.WIDTH,
 // Whether this draw places vertices at their secondary images ([11].y bit 2).
 bool relativitySecond() { return RelativityLensData[11].y > 1.5; }
 
-// The secondary images are drawn for points within this many r_s of the hole: further out their images are slivers on the
-// photon ring, which the post pass draws.
-const float RELATIVITY_SECOND_REACH = 24.0;
-
 int relativityRuntimeZero() { return int(min(RelativityLensData[1].w, 0.0)); }
 
 const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's diagonal
@@ -676,10 +672,11 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     float rc = length(hole);
     if (relativitySecond()) {
         // The secondary image at the length of the light's way round (at least the way via the hole), so the primary
-        // image of whatever is in front along the same ray wins the depth test. Far from the hole, none (hidden).
+        // image of whatever is in front along the same ray wins the depth test. Every point drawn has one (out to the
+        // render distance: far ones are slivers by the photon ring, cheap to draw; measured ~2 ms for all of them).
         float rp = length(p - hole);
         vec3 seen;
-        if (rp > RELATIVITY_SECOND_REACH * RelativityLensData[0].w || relativityFarImage(p, seen, false) != 1) {
+        if (relativityFarImage(p, seen, false) != 1) {
             vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
             hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
             return hidden;
