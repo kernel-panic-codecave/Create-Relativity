@@ -22,7 +22,7 @@ object RelativityClient {
 		NeoForge.EVENT_BUS.addListener(ClientClocks::onClientTick)
 		NeoForge.EVENT_BUS.addListener(LightDelay::onClientTick)
 		NeoForge.EVENT_BUS.addListener(LightDelay::onLoggingOut)
-		MOD_BUS.addListener(ProperTimeHud::register)
+		NeoForge.EVENT_BUS.addListener(ProperTimeHud::onDebugText)
 		MOD_BUS.addListener(EntityRenderersEvent.RegisterRenderers::class.java) {
 			// Holes draw nothing themselves: the lens and disk passes show them.
 			it.registerEntityRenderer(RelativityEntities.BLACK_HOLE.get(), ::NoopRenderer)

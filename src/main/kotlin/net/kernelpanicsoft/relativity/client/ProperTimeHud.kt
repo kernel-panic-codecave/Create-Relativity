@@ -1,27 +1,22 @@
 package net.kernelpanicsoft.relativity.client
 
-import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
-import net.minecraft.client.DeltaTracker
 import net.minecraft.client.Minecraft
-import net.minecraft.client.gui.GuiGraphics
-import net.minecraft.network.chat.Component
-import net.neoforged.neoforge.client.event.RegisterGuiLayersEvent
-import net.neoforged.neoforge.client.gui.VanillaGuiLayers
+import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent
 import org.joml.Vector3d
 
-/** Chronometer in the top-right corner: how fast your clock runs, how far behind world time it is, and the horizon. */
+/**
+ * The chronometer, on the F3 screen's right side: how fast your clock runs, how far behind world time it is, how far
+ * tides stretch you, and whether you're inside a horizon. Shown while spacetime round you isn't flat.
+ */
 object ProperTimeHud {
-	private val LAYER = CreateRelativity.id("proper_time")
-
-	fun register(event: RegisterGuiLayersEvent) = event.registerAbove(VanillaGuiLayers.DEBUG_OVERLAY, LAYER, ::render)
-
-	private fun render(graphics: GuiGraphics, delta: DeltaTracker) {
+	fun onDebugText(event: CustomizeGuiOverlayEvent.DebugText) {
 		val minecraft = Minecraft.getInstance()
+		if (!minecraft.debugOverlay.showDebugScreen()) return
 		val player = minecraft.player ?: return
 		val level = minecraft.level ?: return
-		if (minecraft.options.hideGui || SpacetimeField.isFlat(level)) return
+		if (SpacetimeField.isFlat(level)) return
 
 		val center = Vector3d(player.x, player.y + player.bbHeight / 2.0, player.z)
 		val motion = player.deltaMovement
@@ -29,19 +24,10 @@ object ProperTimeHud {
 		val lag = SpacetimeAttachments.properTimeLag.get(player)
 		val inside = SpacetimeField.insideHorizon(level, center) != null
 		val stretch = SpacetimeAttachments.bodyStretch.get(player)
-		if (rate > 0.9995 && lag < 0.05 && !inside && stretch < 1.01) return
-
-		val font = minecraft.font
-		val lines = buildList {
-			add(Component.translatable("hud.create_relativity.clock_rate", "%.4f".format(rate)))
-			add(Component.translatable("hud.create_relativity.clock_lag", "%.2f".format(lag)))
-			if (stretch >= 1.01) add(Component.translatable("hud.create_relativity.body_stretch", "%.2f".format(stretch)))
-			if (inside) add(Component.translatable("hud.create_relativity.inside_horizon"))
-		}
-		val right = graphics.guiWidth() - 4
-		for ((i, line) in lines.withIndex()) {
-			val color = if (inside && i == lines.lastIndex) 0xFF5555 else 0xE0E0FF
-			graphics.drawString(font, line, right - font.width(line), 4 + i * (font.lineHeight + 2), color)
-		}
+		val right = event.right
+		right += ""
+		right += "Relativity: clock rate %.4f, %.2f s behind world time".format(rate, lag)
+		if (stretch >= 1.01) right += "Tidal stretch: %.2fx".format(stretch)
+		if (inside) right += "§cInside an event horizon"
 	}
 }
