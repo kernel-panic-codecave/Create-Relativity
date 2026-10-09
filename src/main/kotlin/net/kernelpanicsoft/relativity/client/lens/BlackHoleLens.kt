@@ -20,6 +20,8 @@ import net.minecraft.world.level.Level
 import net.neoforged.neoforge.client.event.ClientTickEvent
 import net.neoforged.neoforge.common.NeoForge
 import org.joml.Matrix4f
+import org.joml.Quaternionf
+import org.joml.Vector3f
 import org.joml.Vector4f
 import java.util.concurrent.CompletableFuture
 
@@ -178,6 +180,42 @@ object BlackHoleLens {
 
 	private var warmedUp = false
 
+	/**
+	 * The tables' view (lens_scene.glsl's TableToWorld / TableFromWorld): the screen's, [SCALE] times wider each way, in
+	 * an orientation kept while every screen corner stays inside it, so the camera turning within it reuses the tables;
+	 * turned to the camera's when it doesn't.
+	 */
+	object TableFrame {
+		const val SCALE = 1.35f
+		var rotation = Quaternionf()
+			private set
+		val toWorld = Matrix4f()
+		val fromWorld = Matrix4f()
+		private val projection = Matrix4f()
+
+		fun update(view: Quaternionf, screen: Matrix4f) {
+			val wide = Matrix4f(screen)
+			wide.m00(screen.m00() / SCALE)
+			wide.m11(screen.m11() / SCALE)
+			val screenToWorld = Matrix4f(screen).rotate(view).invert()
+			val changedProjection = !wide.equals(projection, 1e-6f)
+			var covered = !changedProjection
+			if (covered) {
+				for ((x, y) in listOf(-1f to -1f, 1f to -1f, -1f to 1f, 1f to 1f, 0f to 0f)) {
+					val d = org.joml.Vector4f(x, y, 1f, 1f).mul(screenToWorld)
+					val dir = Vector3f(d.x / d.w, d.y / d.w, d.z / d.w).normalize()
+					val clip = org.joml.Vector4f(dir.x, dir.y, dir.z, 1f).mul(fromWorld)
+					if (clip.w <= 0f || kotlin.math.abs(clip.x / clip.w) > 1f || kotlin.math.abs(clip.y / clip.w) > 1f) covered = false
+				}
+			}
+			if (covered) return
+			rotation = Quaternionf(view)
+			projection.set(wide)
+			fromWorld.set(wide).rotate(view)
+			toWorld.set(fromWorld).invert()
+		}
+	}
+
 	/** True while the lens pipeline is running this frame. */
 	val active: Boolean
 		get() = VeilRenderSystem.renderer().postProcessingManager.isActive(PIPELINE)
@@ -326,9 +364,17 @@ object BlackHoleLens {
 		uniform("ViewChunks") { setInt(minecraft.options.effectiveRenderDistance) }
 		uniform("CameraInChunk") { setVector((camera.x - 16.0 * kotlin.math.floor(camera.x / 16.0)).toFloat(), (camera.z - 16.0 * kotlin.math.floor(camera.z / 16.0)).toFloat()) }
 
-		// Whether the tables can be last frame's (TableCache): everything they read, as a key.
+		// The tables' own view: kept while the screen stays inside it, so turning reuses them.
+		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
+		TableFrame.update(view, VertexLens.lastProjection)
+		uniform("TableToWorld") { setMatrix(TableFrame.toWorld) }
+		uniform("TableFromWorld") { setMatrix(TableFrame.fromWorld) }
+		uniform("TableScale") { setFloat(TableFrame.SCALE) }
+
+		// Whether the tables can be last frame's (TableCache): everything they read, as a key (the table frame's
+		// orientation, not the camera's: turning inside it changes nothing they hold).
 		run {
-			val rotation = minecraft.gameRenderer.mainCamera.rotation()
+			val rotation = TableFrame.rotation
 			val key = ArrayList<Float>(200)
 			fun add(v: Double) {
 				val high = v.toFloat()

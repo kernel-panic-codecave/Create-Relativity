@@ -17,6 +17,6 @@ void main() {
     // Only sky pixels use the table (where the world is drawn, the vertex lens already put it in place), but every
     // texel round them is marched, so a sky pixel beside drawn ground still has neighbours to interpolate between.
     if (!skyNear(texCoord, 9.0)) return;
-    SceneHit hit = marchScene(viewRay(texCoord), 1e30);
+    SceneHit hit = marchScene(tableRay(texCoord), 1e30);
     Table = vec4(hit.value, float(hit.outcome));
 }

@@ -1258,6 +1258,19 @@ class LensClientGameTest {
 				runOnClient { it.player!!.setPos(start.x, start.y, start.z) }
 				return samples.average()
 			}
+			// The same while the camera only turns (a few degrees a tick, side to side, as when looking round).
+			fun ClientGameTestContext.fpsTurning(): Double {
+				val yaw = computeOnClient { it.player!!.yRot }
+				val samples = ArrayList<Double>()
+				for (tick in 0 until 90) {
+					val offset = 1.0f * (tick % 20 - 10)
+					runOnClient { it.player!!.yRot = yaw + offset; it.player!!.yRotO = yaw + offset }
+					waitTick()
+					if (tick >= 30 && tick % 20 == 0) samples += computeOnClient { it.fps }.toDouble()
+				}
+				runOnClient { it.player!!.yRot = yaw; it.player!!.yRotO = yaw }
+				return samples.average()
+			}
 			command("relativity bh clear")
 			command("tp @a -14.5 -54 0.5 -90 5")
 			settle()
@@ -1288,6 +1301,7 @@ class LensClientGameTest {
 				runOnClient { BlackHoleLens.timeGpu = true }
 				val fpsLens = fps()
 				val fpsLensMoving = fpsMoving()
+				val fpsLensTurning = fpsTurning()
 				val kerrMs = computeOnClient { "last drawn: Kerr paths %.1f ms, image map %.1f ms; slots: bake %.1f ms, blend %.1f ms, %d baked, blending %s".format(
 					VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis, KerrSlots.bakeTimer.millis, KerrSlots.blendTimer.millis, KerrSlots.bakedSlots, KerrSlots.blending) }
 				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
@@ -1305,7 +1319,7 @@ class LensClientGameTest {
 				runOnClient { VertexLens.kerrSolveOff = false; VertexLens.kerrOff = true }
 				val fpsSchwarzschild = fps()
 				runOnClient { VertexLens.kerrOff = false; BlackHoleLens.rawFrame = false; BlackHoleLens.skipTables = false }
-				lines += "%s: %.0f fps with the lens (moving %.0f); post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f (%s)".format(name, fpsLens, fpsLensMoving, fpsVertex, fpsPaths, fpsSchwarzschild, kerrMs)
+				lines += "%s: %.0f fps with the lens (moving %.0f, turning %.0f); post pass cut: %.0f; and no Kerr solve: %.0f; and no Kerr paths: %.0f (%s)".format(name, fpsLens, fpsLensMoving, fpsLensTurning, fpsVertex, fpsPaths, fpsSchwarzschild, kerrMs)
 				val fixed = time { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val tables = time { BlackHoleLens.rawFrame = true }
 				val lens = time {}

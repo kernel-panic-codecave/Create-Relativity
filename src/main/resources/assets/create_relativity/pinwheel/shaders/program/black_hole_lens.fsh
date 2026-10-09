@@ -163,12 +163,12 @@ KerrRay kerrNearest(vec3 dir, vec2 uv) {
         // isn't paid for with a march. Interpolation is off by an eighth of the second difference, and a texel's
         // change spans several pixels; so the error, in units of the change per pixel, is
         // (D2 / 8) / (step / pixelsPerTexel).
-        float limit = 8.0 / (float(textureSize(DiffuseSampler0, 0).y) / float(size.y)) * TABLE_TOLERANCE;
+        float limit = 8.0 / (float(textureSize(DiffuseSampler0, 0).y) * TableScale / float(size.y)) * TABLE_TOLERANCE;
         if (a0.w == 0.0) {
-            vec3 exitA = viewRay((vec2(base) + 0.5) / vec2(size)) + a0.xyz;
-            vec3 exitB = viewRay((vec2(base + ivec2(1, 0)) + 0.5) / vec2(size)) + b0.xyz;
-            vec3 exitC = viewRay((vec2(base + ivec2(0, 1)) + 0.5) / vec2(size)) + c0.xyz;
-            vec3 exitD = viewRay((vec2(base + ivec2(1, 1)) + 0.5) / vec2(size)) + d0.xyz;
+            vec3 exitA = tableRay((vec2(base) + 0.5) / vec2(size)) + a0.xyz;
+            vec3 exitB = tableRay((vec2(base + ivec2(1, 0)) + 0.5) / vec2(size)) + b0.xyz;
+            vec3 exitC = tableRay((vec2(base + ivec2(0, 1)) + 0.5) / vec2(size)) + c0.xyz;
+            vec3 exitD = tableRay((vec2(base + ivec2(1, 1)) + 0.5) / vec2(size)) + d0.xyz;
             float step = max(max(length(exitA - exitB), length(exitA - exitC)), max(length(exitD - exitB), length(exitD - exitC)));
             agree = secondDifference(deflection) < limit * step;
         }
@@ -493,7 +493,7 @@ void main() {
         // The table's error against a full march of this pixel: red, the exit direction's (a quarter per sample
         // spacing: a pixel's angle, or the exit direction's change per pixel where the lens squeezes the background);
         // green, a different fate or disk image; blue, the disk hit point's (a quarter per percent of its radius).
-        KerrRay table = kerrNearest(dir, texCoord);
+        KerrRay table = kerrNearest(dir, tableUv(dir));
         vec2 diskRadii = vec2(0.0);
         if (Disk.x > 0.0) diskRadii = Disk.yz;
         KerrRay marched = kerrMarch(Holes[0].xyz, Holes[0].w, HoleSpins[0].x, dir, diskRadii);
@@ -501,7 +501,8 @@ void main() {
         float spacing = max(pixelAngle(), max(length(dFdx(marched.exitDir)), length(dFdy(marched.exitDir))));
         if (marched.status == 0 && table.status == 0) exitError = length(table.exitDir - marched.exitDir) / spacing; // chord, not acos: float precision
         float fate = 0.0;
-        if (table.status != marched.status || (table.diskRho > 0.0) != (marched.diskRho > 0.0)) fate = 1.0;
+        // (Status 2 from the table: outside the shadow's and disk's reach, where the lens pass doesn't read it.)
+        if (table.status != 2 && (table.status != marched.status || (table.diskRho > 0.0) != (marched.diskRho > 0.0))) fate = 1.0;
         float diskError = 0.0;
         if (table.diskRho > 0.0 && marched.diskRho > 0.0) {
             vec2 a = table.diskRho * vec2(cos(table.diskAngle), sin(table.diskAngle));
@@ -518,7 +519,7 @@ void main() {
         return;
     }
     // The nearest hole, if spinning, is marched once for both its lens and its disk.
-    KerrRay first = kerrNearest(dir, texCoord);
+    KerrRay first = kerrNearest(dir, tableUv(dir));
     vec3 scene;
     SceneHit hit = sceneHit(0, vec3(0.0));
     if (sceneDist < 1e29) {
@@ -526,12 +527,14 @@ void main() {
         scene = original.rgb;
         if (HoleCount > 0 && inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
     } else {
-        hit = sceneNearest(dir, texCoord, sceneDist);
+        hit = sceneNearest(dir, tableUv(dir), sceneDist);
         scene = sceneColor(hit, original);
     }
     vec4 disk = kerrDisk(first, sceneDist);
     if (first.status == 2 && (ProfileFlags & 256) == 0) disk = diskSample(dir, sceneDist);
-    fragColor = vec4(mix(scene, disk.rgb, disk.a), 1.0);
+    // Alpha marks what this pass made (lens_aa.fsh smooths and sharpens just those): 1 where the world's own pixel stands.
+    bool made = disk.a > 0.0 || (sceneDist >= 1e29 && hit.outcome != SCENE_UNBENT && hit.outcome != 0) || scene != original.rgb;
+    fragColor = vec4(mix(scene, disk.rgb, disk.a), made ? 0.5 : 1.0);
     if (LensMode == 2) fragColor = vec4(vec3(float(marchSteps) / 64.0), 1.0);
     if (LensMode == 1) {
         // grey none (drawn geometry), green unbent, white escaped (cyan: out of steps), black fell in, yellow geometry

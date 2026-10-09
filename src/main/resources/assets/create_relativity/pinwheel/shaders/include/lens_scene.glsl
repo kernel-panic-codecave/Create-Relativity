@@ -55,6 +55,33 @@ vec3 viewRay(vec2 uv) {
     return normalize((VeilCamera.IViewMat * vec4(view.xyz / view.w, 0.0)).xyz);
 }
 
+// The tables' own view (BlackHoleLens.TableFrame): wider than the screen and fixed in orientation while the camera only
+// turns, so looking round inside it reuses them. TableToWorld: a table position's clip coordinates to a world-axes
+// direction (camera-relative); TableFromWorld: back. TableScale: the table's field over the screen's (> 1).
+uniform mat4 TableToWorld;
+uniform mat4 TableFromWorld;
+uniform float TableScale;
+
+// The direction through table position uv.
+vec3 tableRay(vec2 uv) {
+    vec4 d = TableToWorld * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    return normalize(d.xyz / d.w);
+}
+
+// The table position of direction dir (world axes).
+vec2 tableUv(vec3 dir) {
+    vec4 clip = TableFromWorld * vec4(dir, 1.0);
+    return clip.xy / clip.w * 0.5 + 0.5;
+}
+
+// The screen position of direction dir, and whether it's on screen (in front, inside the frame).
+bool screenUv(vec3 dir, out vec2 uv) {
+    vec4 clip = VeilCamera.ProjMat * (VeilCamera.ViewMat * vec4(dir, 0.0));
+    if (clip.w <= 0.0) return false;
+    uv = clip.xy / clip.w * 0.5 + 0.5;
+    return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
+}
+
 // Distance to the surface drawn at uv; the sky (nothing drawn) counts as infinitely far.
 float sceneDistance(vec2 uv) {
     float depth = texture(DiffuseDepthSampler, uv).r;
@@ -485,7 +512,10 @@ float secondDifference(vec3 v[16]) {
 }
 
 // Whether the frame shows sky anywhere within radius pixels of uv (a 3x3 pattern over that square).
-bool skyNear(vec2 uv, float radius) {
+// Whether sky shows within radius screen pixels of the table position uv (off screen: assumed so, it may turn into view).
+bool skyNear(vec2 tableAt, float radius) {
+    vec2 uv;
+    if (!screenUv(tableRay(tableAt), uv)) return true;
     vec2 pixel = radius / vec2(textureSize(DiffuseDepthSampler, 0));
     for (int j = -1; j <= 1; j += 1) {
         for (int i = -1; i <= 1; i += 1) {
@@ -552,7 +582,7 @@ bool sceneTableAt(sampler2D table, vec2 uv, out SceneHit hit, out SceneHit neare
         if (!same[k]) v[k] = 2.0 * v[k + 4] - v[k + 8];
         if (!same[k + 12]) v[k + 12] = 2.0 * v[k + 8] - v[k + 4];
     }
-    float pixelsPerTexel = frameSize.y / float(size.y);
+    float pixelsPerTexel = frameSize.y * TableScale / float(size.y);
     float natural = pixelsPerTexel * pixelAngle();
     float step = max(max(max(length(v[5] - v[6]), length(v[5] - v[9])), max(length(v[10] - v[6]), length(v[10] - v[9]))), natural);
     if (secondDifference(v) >= 8.0 / pixelsPerTexel * TABLE_TOLERANCE * step) return false;

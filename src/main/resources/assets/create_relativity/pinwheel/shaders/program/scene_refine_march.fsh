@@ -7,6 +7,6 @@ in vec2 texCoord;
 out vec4 Table; // value (SceneHit), outcome
 
 void main() {
-    SceneHit hit = marchScene(viewRay(texCoord), 1e30);
+    SceneHit hit = marchScene(tableRay(texCoord), 1e30);
     Table = vec4(hit.value, float(hit.outcome));
 }

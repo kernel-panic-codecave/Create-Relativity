@@ -16,15 +16,17 @@ layout(location = 0) out vec4 Table0; // deflection (exit direction minus the vi
 layout(location = 1) out vec4 Table1; // exit position (camera-relative), disk crossing's distance (0: none)
 layout(location = 2) out vec4 Table2; // disk crossing's radius, frequency shift, cos and sin of its azimuth
 
-vec3 viewRay(vec2 uv) {
-    vec4 view = VeilCamera.IProjMat * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
-    return normalize((VeilCamera.IViewMat * vec4(view.xyz / view.w, 0.0)).xyz);
+uniform mat4 TableToWorld; // see lens_scene.glsl: the tables' own view
+
+vec3 tableRay(vec2 uv) {
+    vec4 d = TableToWorld * vec4(uv * 2.0 - 1.0, 1.0, 1.0);
+    return normalize(d.xyz / d.w);
 }
 
 void main() {
     KerrRay ray;
     ray.status = 2;
-    vec3 dir = viewRay(texCoord);
+    vec3 dir = tableRay(texCoord);
     // Only where the lens pass reads it (black_hole_lens.fsh's kerrNearest: near the hole), with a texel to spare.
     bool near = true;
     if (HoleCount > 0) {

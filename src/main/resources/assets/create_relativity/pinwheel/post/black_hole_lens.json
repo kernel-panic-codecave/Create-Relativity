@@ -32,6 +32,12 @@
       "format": "RGBA32F",
       "depth": true
     },
+    "lens_out": {
+      "width": "q.screen_width",
+      "height": "q.screen_height",
+      "format": "RGBA8",
+      "depth": false
+    },
     "sky_probe": {
       "width": "256",
       "height": "128",
@@ -100,7 +106,13 @@
     {
       "type": "veil:blit",
       "shader": "create_relativity:black_hole_lens",
-      "in": "minecraft:main"
+      "in": "minecraft:main",
+      "out": "lens_out"
+    },
+    {
+      "type": "veil:blit",
+      "shader": "create_relativity:lens_aa",
+      "in": "lens_out"
     }
   ]
 }
