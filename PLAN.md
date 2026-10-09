@@ -320,6 +320,8 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
   Degenerate Matter as the end gateway, Exotic Matter the same with the colours inverted. They're made in a **particle
   accelerator** (below), or at a lower rate in a **Casimir Cavity** for Exotic Matter (stacked plates, high RPM, a
   coolant fluid). For a wormhole, the Exotic Matter supplied sets the throat radius `b0` and how stable it is.
+- **Matter recycler**: breaks any item (garbage included) down into **matter plasma**, at an efficiency per item like
+  IC2's UU-matter recycler; the plasma is what the accelerator's injector takes in, and its collisions yield both fuels.
 - **Particle accelerator**: a ring the player builds. The tube is glass walls threaded through **electromagnet rings**,
   each powered on its own (rotational power per ring), and it must hold a **vacuum**: the **injector** multiblock pumps
   the ring down using rotational energy, then injects matter. The ring's **size sets its efficiency** (a bigger ring,
@@ -599,6 +601,33 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
 - JEI/EMI recipes, advancements, and a Create-style tooltip summary.
 
 ---
+
+## 10b. Space and the galaxy (long term)
+
+Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it into a corner.
+
+- **Several client levels at once, as little invasive as possible**: chunk loading (the server's player ticket) carries
+  through wormhole mouths into the other dimension, and the client holds that level too, to draw through the mouth and
+  cross without a loading screen. Vanilla holds one client level; Immersive Portals does this deeply and breaks much.
+  Aim: a second, read-only client level kept for drawing what's seen through a mouth or across a boundary, the
+  fewest mixins that allow it, and a fallback (the mouth's captured view, §9.4) when another mod conflicts.
+- **Seamless space**: each star's system is a space dimension; planets (the planetoid worlds, §9b) appear in it as
+  space objects orbiting the star (N-body, §9b), and flying down to one or up from it is a level transition with no
+  break (the multi-level support above).
+- **A procedural galaxy** from the world seed: stars (type, mass, planets) generated on demand, each with its own space
+  dimension, stitched by seamless transitions. Natural wormholes link some systems.
+- **Ships**: Create + Sable ships for space and between stars. *Shuttles* small enough to land on planets; *motherships*
+  too big to, that stay in space and carry shuttles (the Enterprise and its shuttles, a Star Wars frigate and the Falcon).
+  Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
+- **Galaxy view and autopilot**: plot a course on a galaxy map; the ship flies itself, routing through natural and
+  built wormholes or across empty space by warp, and the map shows the fuel it will burn (Degenerate / Exotic Matter).
+- **Cockpits**: hologram monitors (the galaxy map, the ship's blueprint with its fields, instruments), levers and buttons
+  as Create-style controls.
+- **Warp drive feel**: sound design and animations for spin-up, engage, cruise and drop-out (the bubble forming, the
+  view stretching), alongside the physical visuals (§8a).
+- **Space stations**: Sable structures in orbit round a star or planet (the orbit integrator, §9b).
+- **Endgame megastructures**: Dyson swarms and spheres (energy from a star), ring worlds; **planet cracking**: an
+  orbital mining rig that strips a whole planet for its resources (Dead Space style).
 
 ## 11. Milestones
 
