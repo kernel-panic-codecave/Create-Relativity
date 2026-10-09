@@ -25,7 +25,15 @@ void main() {
     KerrRay ray;
     ray.status = 2;
     vec3 dir = viewRay(texCoord);
-    if (HoleCount > 0 && KerrTableEnabled != 0 && LensMode != 5) {
+    // Only where the lens pass reads it (black_hole_lens.fsh's kerrNearest: near the hole), with a texel to spare.
+    bool near = true;
+    if (HoleCount > 0) {
+        float rc = length(Holes[0].xyz);
+        float reach = 3.0 * Holes[0].w;
+        if (Disk.x > 0.0) reach = max(reach, 1.5 * Disk.z);
+        near = rc <= reach || dot(dir, Holes[0].xyz / rc) >= cos(asin(reach / rc) + 0.15);
+    }
+    if (near && HoleCount > 0 && KerrTableEnabled != 0 && LensMode != 5) {
         vec2 diskRadii = vec2(0.0);
         if (Disk.x > 0.0) diskRadii = Disk.yz;
         ray = kerrMarch(Holes[0].xyz, Holes[0].w, HoleSpins[0].x, dir, diskRadii);

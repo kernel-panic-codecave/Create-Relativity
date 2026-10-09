@@ -677,13 +677,15 @@ SceneHit marchScene(vec3 dir, float sceneDist) {
             spacetimeBackward(gx + dl * k3x, gp + dl * k3p, k4x, k4p);
             gx += dl / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
             gp += dl / 6.0 * (k1p + 2.0 * k2p + 2.0 * k3p + k4p);
+            // Captured: inside the horizon (spheroidal r, as kerrProfile's, without the rest of the profile).
             for (int i = 0; i < HoleCount; i += 1) {
                 float m = 0.5 * Holes[i].w;
                 float a = HoleSpins[i].x * m;
-                float h;
-                vec3 l;
-                float horizon = m + sqrt(max(m * m - a * a, 0.0));
-                if (kerrProfile(toLocal(gx.xyz - Holes[i].xyz), m, a, h, l) < 1.02 * horizon) return sceneHit(SCENE_FELL_IN, vec3(0.0));
+                float horizon = 1.02 * (m + sqrt(max(m * m - a * a, 0.0)));
+                vec3 d = gx.xyz - Holes[i].xyz; // (game axes: the spin axis is y)
+                float w = dot(d, d) - a * a;
+                float r2 = 0.5 * w + sqrt(0.25 * w * w + a * a * d.y * d.y);
+                if (r2 < horizon * horizon) return sceneHit(SCENE_FELL_IN, vec3(0.0));
             }
             xNext = gx.xyz;
             vNext = normalize(k4x.xyz);

@@ -118,6 +118,12 @@ KerrRay kerrNearest(vec3 dir, vec2 uv) {
     KerrRay ray;
     ray.status = 2;
     if (HoleCount == 0 || abs(HoleSpins[0].x) < MIN_KERR_SPIN) return ray;
+    // Only near the hole can a pixel be in its shadow or show its disk: further out (past three r_s's apparent size,
+    // or the disk's lensed extent, with room to spare) there's nothing for the table to say.
+    float rc = length(Holes[0].xyz);
+    float reach = 3.0 * Holes[0].w;
+    if (Disk.x > 0.0) reach = max(reach, 1.5 * Disk.z);
+    if (rc > reach && dot(dir, Holes[0].xyz / rc) < cos(asin(reach / rc) + 0.1)) return ray;
     ivec2 size = textureSize(KerrTable0, 0);
     vec2 pos = uv * vec2(size) - 0.5;
     ivec2 base = clamp(ivec2(floor(pos)), ivec2(1), size - 3);

@@ -31,7 +31,8 @@ float kerrProfile(vec3 x, float m, float a, out float h, out vec3 l) {
 
 // Hamilton's equations, with dp = grad[h (l.p - p_t)^2] / 2 in closed form through r's implicit gradient
 // grad r = (r^2 x + a^2 z e_z) / (r (2 r^2 - (|x|^2 - a^2))). Returns r.
-float kerrDerivative(vec3 x, vec3 p, float pt, float m, float a, out vec3 dx, out vec3 dp) {
+// (hLp: h (l.p - p_t), the time component's share: dt/dlambda gains it.)
+float kerrDerivativeFull(vec3 x, vec3 p, float pt, float m, float a, out vec3 dx, out vec3 dp, out float hLp) {
     float a2 = a * a;
     float w = dot(x, x) - a2;
     float s = sqrt(0.25 * w * w + a2 * x.z * x.z);
@@ -51,7 +52,13 @@ float kerrDerivative(vec3 x, vec3 p, float pt, float m, float a, out vec3 dx, ou
     vec3 gradF = vec3((r * p.x - a * p.y) / d, (r * p.y + a * p.x) / d, p.z / r) + gradR * dfdr;
     dx = p - h * lp * l;
     dp = 0.5 * lp * lp * gradH + h * lp * gradF;
+    hLp = h * lp;
     return r;
+}
+
+float kerrDerivative(vec3 x, vec3 p, float pt, float m, float a, out vec3 dx, out vec3 dp) {
+    float hLp;
+    return kerrDerivativeFull(x, p, pt, m, a, dx, dp, hLp);
 }
 
 // The same, with the affine parameter running backwards: following light back in time from where it's seen.
@@ -131,13 +138,11 @@ void spacetimeDerivative(vec4 x4, vec4 p4, out vec4 dx4, out vec4 dp4) {
             vec3 local = toLocal(x - s0.xyz);
             vec3 kdx;
             vec3 kdp;
-            kerrDerivative(local, toLocal(p), pt, s1.x, s1.y, kdx, kdp);
+            float hLp;
+            kerrDerivativeFull(local, toLocal(p), pt, s1.x, s1.y, kdx, kdp, hLp);
             dx += toGame(kdx) - p; // kerrDerivative's dx includes flat's p
             dp += toGame(kdp);
-            float h;
-            vec3 l;
-            kerrProfile(local, s1.x, s1.y, h, l);
-            dt += h * (dot(l, toLocal(p)) - pt);
+            dt += hLp;
         } else if (s0.w == SOURCE_MASS) {
             // dH = phi (p_t^2 + |p|^2), phi = -m / sqrt(r^2 + eps^2).
             vec3 d = x - s0.xyz;
