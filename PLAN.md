@@ -23,7 +23,8 @@ Solving the Einstein field equations live (numerical relativity) won't fit in a 
 
 ### Units (the most important design decision)
 1 block = 1 m, but the real c would make every effect invisible. **c is a per-dimension config value: 64 blocks/s by
-default, 512 in planetoid space.** Horizon-scale effects (redshift, tidal forces, lensing, horizons) depend on r_s/r and not
+default, 512 in planetoid space.** (64 suits testing, where effects should be strong; for play the default should be
+higher, the value to be chosen; tests keep 64.) Horizon-scale effects (redshift, tidal forces, lensing, horizons) depend on r_s/r and not
 on c. c sets how reachable special relativity is, how fast things orbit near a hole (c/2 at the ISCO), and how far a hole of
 a given size pulls (its mass scales with c²). Wormholes between dimensions keep β, not the raw velocity.
 
@@ -96,6 +97,10 @@ Integrators:
 
 SR kinematics:
 - Velocities are stored as **rapidity / 4-velocity**, not 3-velocity, so thrust can never push anything past c.
+- **Relativistic mass** is how that shows in play, as in real physics: momentum is `γ m v` and force changes momentum,
+  so a body's resistance to speeding up grows with γ (γ³ m along its motion, γ m across it): a thruster's push buys
+  less and less speed toward c. Kinetic energy is `(γ − 1) m c²`, so a fast ship hits (and is hit) much harder than
+  Newton says; ramming damage and anything that eats matter count it.
 - `boost(β)`, velocity addition, aberration, Doppler factor `D = 1/(γ(1 − β·n))`.
 
 ### Tests (these define correctness)
@@ -313,10 +318,14 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
   pulling, artificial gravity. *Exotic Matter* (negative energy density) drives negative gravity: wormhole throats,
   warp bubble walls, repulsors. Both are consumed as they're used. They render like the end gateway's starfield:
   Degenerate Matter as the end gateway, Exotic Matter the same with the colours inverted. They're made in a **particle
-  accelerator** multiblock (a ring of Create machinery, driven by rotational power; what it collides and how fast
-  decides which fluid and how much), or at a lower rate in a **Casimir Cavity** for Exotic Matter (stacked plates,
-  high RPM, a coolant fluid). For a wormhole, the Exotic Matter supplied sets the throat radius `b0` and how stable it
-  is.
+  accelerator** (below), or at a lower rate in a **Casimir Cavity** for Exotic Matter (stacked plates, high RPM, a
+  coolant fluid). For a wormhole, the Exotic Matter supplied sets the throat radius `b0` and how stable it is.
+- **Particle accelerator**: a ring the player builds. The tube is glass walls threaded through **electromagnet rings**,
+  each powered on its own (rotational power per ring), and it must hold a **vacuum**: the **injector** multiblock pumps
+  the ring down using rotational energy, then injects matter. The ring's **size sets its efficiency** (a bigger ring,
+  gentler bends, more energy per pass). Beams meet in a **collision cavity** multiblock, which collects the products:
+  the two fluids, by what was injected and the collision energy. A leak (a broken wall, an unpowered magnet) loses the
+  vacuum and the beam.
 - **Wormhole Mouths**: two linked anchor multiblocks. They can go in different dimensions. The throat geometry is
   Morris–Thorne, so geodesics near a mouth *curve into* the throat instead of teleporting at a plane.
 - **Traversal**: an entity whose proper radial coordinate `l` crosses 0 gets moved to the other mouth with its velocity
@@ -354,6 +363,8 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   is consumed by bubble size, wall thinness and speed, and the generator spins up and down over seconds.
 - The ship moves **kinematically**: its Sable pose is advanced with the bubble, not pushed by forces. Crew and loose
   entities inside ride along untouched, and anything straddling the wall gets torn by the tidal shear.
+- **Bubble extent**: a generator on a train extends its bubble to encompass the whole train, one on a ship (Sable)
+  to encompass the whole ship, and a static one has a configurable extent.
 - **Warp trains**: a Warp Field Generator on a Create train carriage. The train runs its track at superluminal speed,
   the bubble carried along the rails; the route is the course set before engaging, which suits the no-steering rule
   below. Stations make the stop points, and the arrival hazard (below) makes station design matter: arriving
@@ -365,6 +376,8 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   with trip length and speed.
 
 ### Visuals
+- **In the ship blueprint view**: warp bubbles and gravity fields shown on the ship's blueprint (extent, wall,
+  strength), so a builder sees what a generator covers before engaging it.
 - From inside, starlight piles up ahead and is strongly blueshifted, the view behind goes dark and red, and the
   bubble wall shimmers. That's the lensing post pass driven by the Alcubierre metric (ray-marched, like Kerr in M9).
 - From outside, the ship appears and vanishes abruptly, since its light reaches observers in a burst.
