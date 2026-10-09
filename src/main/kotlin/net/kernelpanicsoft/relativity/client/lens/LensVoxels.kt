@@ -45,6 +45,9 @@ object LensVoxels {
 	const val BRICK = 8
 	const val BRICKS = SIZE / BRICK
 	const val SMALL_BRICK = 2
+
+	/** Coarser brick levels stored as the brick texture's mips (lens_scene.glsl's gridHit skips them first). */
+	const val BRICK_LEVELS = 2
 	const val SMALL_BRICKS = SIZE / SMALL_BRICK
 	const val TEXTURE_SLOTS = 8
 	const val QUAD_TEXELS = 6
@@ -415,6 +418,27 @@ object LensVoxels {
 				unpackDefaults()
 				GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 1)
 				GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, 0, size, size, size, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, data)
+				if (texture == grid.bricks) {
+					// The coarser levels: occupied if any brick under them is.
+					var below = IntArray(size * size * size) { if (counts[it] > 0) 1 else 0 }
+					var belowSize = size
+					for (level in 1..BRICK_LEVELS) {
+						val levelSize = belowSize / 2
+						val occupied = IntArray(levelSize * levelSize * levelSize)
+						for (z in 0 until belowSize) for (y in 0 until belowSize) for (x in 0 until belowSize) {
+							if (below[(z * belowSize + y) * belowSize + x] != 0) occupied[((z / 2) * levelSize + y / 2) * levelSize + x / 2] = 1
+						}
+						val levelData = MemoryUtil.memAlloc(occupied.size)
+						try {
+							for (i in occupied.indices) levelData.put(i, occupied[i].toByte())
+							GL12.glTexSubImage3D(GL12.GL_TEXTURE_3D, level, 0, 0, 0, levelSize, levelSize, levelSize, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, levelData)
+						} finally {
+							MemoryUtil.memFree(levelData)
+						}
+						below = occupied
+						belowSize = levelSize
+					}
+				}
 				GlStateManager._pixelStore(GL11.GL_UNPACK_ALIGNMENT, 4)
 				GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
 			} finally {
@@ -505,6 +529,15 @@ object LensVoxels {
 			grid.light = texture3d(GL30.GL_RG8, GL30.GL_RG, GL11.GL_UNSIGNED_BYTE, GL11.GL_LINEAR)
 			grid.tint = texture3d(GL30.GL_RG32UI, GL30.GL_RG_INTEGER, GL11.GL_UNSIGNED_INT)
 			grid.bricks = texture3d(GL30.GL_R8UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, size = BRICKS)
+			// Two coarser levels as its mips (2x2x2 and 4x4x4 bricks: 16 and 32 blocks), for skipping big empty space.
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, grid.bricks)
+			for (level in 1..BRICK_LEVELS) {
+				val size = BRICKS shr level
+				GL12.glTexImage3D(GL12.GL_TEXTURE_3D, level, GL30.GL_R8UI, size, size, size, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, null as java.nio.ByteBuffer?)
+			}
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_MAX_LEVEL, BRICK_LEVELS)
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST_MIPMAP_NEAREST)
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
 			grid.smallBricks = texture3d(GL30.GL_R8UI, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_BYTE, size = SMALL_BRICKS)
 		}
 		quadBuffer = GL15.glGenBuffers()

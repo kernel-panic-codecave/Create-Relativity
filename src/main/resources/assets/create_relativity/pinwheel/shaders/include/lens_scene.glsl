@@ -395,9 +395,12 @@ bool gridHit(usampler3D cells, usampler3D bricks, usampler3D smallBricks, vec3 o
     vec3 inv = vec3(w.stepDir) * w.delta;
     float nudge = 1e-4 / max(length(d), 1e-6); // a ten-thousandth of a block, in t
     for (int n = 0; n < VOXEL_STEPS; n += 1) {
-        // An empty brick (large, else small): on to where the segment leaves it.
+        // An empty region (32 or 16 blocks: the brick texture's coarser levels, LensVoxels.BRICK_LEVELS; else a brick,
+        // else a small brick): on to where the segment leaves it.
         int skip = 0;
-        if (texelFetch(bricks, w.cell / VOXEL_BRICK, 0).r == 0u) skip = VOXEL_BRICK;
+        if (texelFetch(bricks, w.cell / (VOXEL_BRICK * 4), 2).r == 0u) skip = VOXEL_BRICK * 4;
+        else if (texelFetch(bricks, w.cell / (VOXEL_BRICK * 2), 1).r == 0u) skip = VOXEL_BRICK * 2;
+        else if (texelFetch(bricks, w.cell / VOXEL_BRICK, 0).r == 0u) skip = VOXEL_BRICK;
         else if (texelFetch(smallBricks, w.cell / VOXEL_SMALL_BRICK, 0).r == 0u) skip = VOXEL_SMALL_BRICK;
         if (skip > 0) {
             vec3 low = vec3(w.cell / skip * skip);
