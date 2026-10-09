@@ -326,6 +326,36 @@ object BlackHoleLens {
 		uniform("ViewChunks") { setInt(minecraft.options.effectiveRenderDistance) }
 		uniform("CameraInChunk") { setVector((camera.x - 16.0 * kotlin.math.floor(camera.x / 16.0)).toFloat(), (camera.z - 16.0 * kotlin.math.floor(camera.z / 16.0)).toFloat()) }
 
+		// Whether the tables can be last frame's (TableCache): everything they read, as a key.
+		run {
+			val rotation = minecraft.gameRenderer.mainCamera.rotation()
+			val key = ArrayList<Float>(200)
+			fun add(v: Double) {
+				val high = v.toFloat()
+				key += high
+				key += (v - high).toFloat() // (a double's low part: positions far from the origin)
+			}
+			add(camera.x); add(camera.y); add(camera.z)
+			key += rotation.x; key += rotation.y; key += rotation.z; key += rotation.w
+			val projection = FloatArray(16).also { VertexLens.lastProjection.get(it) }
+			for (v in projection) key += v
+			for (v in holeUniforms) { key += v.x; key += v.y; key += v.z; key += v.w }
+			for (v in spinUniforms) key += v.x
+			key += holes.size.toFloat()
+			key += sourceCount.toFloat()
+			for (v in sourceUniforms) { key += v.x; key += v.y; key += v.z; key += v.w }
+			val disk = holes.firstOrNull()?.takeIf { it.accretionRate > 0.0 }?.let { it.equatorialExtent(it.isco(prograde = true)) } ?: 0.0
+			key += disk.toFloat()
+			key += fogStart; key += fogEnd; key += fogShape.toFloat()
+			key += minecraft.gameRenderer.renderDistance
+			key += (LensVoxels.version and 0xFFFFFF).toFloat(); key += (LensVoxels.version shr 24).toFloat()
+			key += minecraft.window.width.toFloat(); key += minecraft.window.height.toFloat()
+			key += profileFlags.toFloat(); key += kerrMode.ordinal.toFloat()
+			key += (if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0).toFloat()
+			key += unseen.ordinal.toFloat()
+			TableCache.update(key.toFloatArray())
+		}
+
 		// Every sampler gets a real texture, whatever the mode: Veil binds missing ones to a placeholder on unit 0 and
 		// renumbers the rest, and a mismatch there (the voxels' integer 3D sampler) makes the whole draw invalid.
 		LensVoxels.ensureTextures()

@@ -2,6 +2,7 @@
   "renderStage": "after_level",
   "framebuffers": {
     "kerr_table": {
+      "autoClear": false,
       "width": "q.screen_width / 4",
       "height": "q.screen_height / 4",
       "color_buffers": [
@@ -18,12 +19,14 @@
       "depth": false
     },
     "scene_table": {
+      "autoClear": false,
       "width": "q.screen_width / 4",
       "height": "q.screen_height / 4",
       "format": "RGBA32F",
       "depth": false
     },
     "scene_refine": {
+      "autoClear": false,
       "width": "q.screen_width / 2",
       "height": "q.screen_height / 2",
       "format": "RGBA32F",
@@ -77,12 +80,12 @@
       "out": "sky_probe"
     },
     {
-      "type": "veil:blit",
+      "type": "create_relativity:cached_blit",
       "shader": "create_relativity:kerr_table",
       "out": "kerr_table"
     },
     {
-      "type": "veil:blit",
+      "type": "create_relativity:cached_blit",
       "shader": "create_relativity:scene_table",
       "in": "minecraft:main",
       "out": "scene_table"

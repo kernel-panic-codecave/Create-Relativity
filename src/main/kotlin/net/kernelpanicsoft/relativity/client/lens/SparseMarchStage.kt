@@ -32,6 +32,7 @@ class SparseMarchStage(
 	override fun getType(): PostPipelineStageRegistry.PipelineType<out PostPipeline> = RelativityPostStages.SPARSE_MARCH.get()
 
 	override fun apply(context: PostPipeline.Context) {
+		if (TableCache.reuse) return
 		val shaders = VeilRenderSystem.renderer().shaderManager
 		val markShader = shaders.getShader(mark) ?: return
 		val marchShader = shaders.getShader(march) ?: return
@@ -90,6 +91,67 @@ class SparseMarchStage(
 }
 
 /**
+ * A table pass that's skipped while its last result still holds ([TableCache]): `create_relativity:cached_blit` in a
+ * pipeline, like Veil's blit (the shader drawn over [out], [input]'s buffers as samplers), but clearing [out] first (its
+ * framebuffer keeps its contents between frames, so a skipped frame still has last frame's table).
+ */
+class CachedBlitStage(
+	private val shader: ResourceLocation,
+	private val input: ResourceLocation?,
+	private val out: ResourceLocation,
+) : PostPipeline {
+	override fun getType(): PostPipelineStageRegistry.PipelineType<out PostPipeline> = RelativityPostStages.CACHED_BLIT.get()
+
+	override fun apply(context: PostPipeline.Context) {
+		if (TableCache.reuse) return
+		val program = VeilRenderSystem.renderer().shaderManager.getShader(shader) ?: return
+		val inFbo = input?.let { context.getFramebuffer(it) }
+		val outFbo = context.getFramebufferOrDraw(out)
+		program.bind()
+		context.applySamplers(program)
+		if (inFbo != null) program.setFramebufferSamplers(inFbo)
+		outFbo.bind(true)
+		outFbo.clear()
+		program.getUniform("OutSize")?.setVector(outFbo.width.toFloat(), outFbo.height.toFloat())
+		program.setDefaultUniforms(VertexFormat.Mode.TRIANGLE_STRIP)
+		program.bindSamplers(context, 0)
+		VeilRenderSystem.drawScreenQuad()
+		context.clearSamplers(program)
+	}
+
+	companion object {
+		val CODEC: MapCodec<CachedBlitStage> = RecordCodecBuilder.mapCodec { instance ->
+			instance.group(
+				ResourceLocation.CODEC.fieldOf("shader").forGetter { it.shader },
+				FramebufferManager.FRAMEBUFFER_CODEC.optionalFieldOf("in").forGetter { Optional.ofNullable(it.input) },
+				FramebufferManager.FRAMEBUFFER_CODEC.fieldOf("out").forGetter { it.out },
+			).apply(instance) { shader, input, out -> CachedBlitStage(shader, input.orElse(null), out) }
+		}
+	}
+}
+
+/**
+ * Whether this frame's lens tables can be last frame's: nothing they depend on has changed (camera pose and
+ * projection, the holes and sources, the traced geometry, fog and render distance, the debug modes). Set by
+ * [BlackHoleLens] before the pipeline runs; a still camera then costs the lens pass alone.
+ */
+object TableCache {
+	@Volatile
+	var reuse = false
+		private set
+	private var last = FloatArray(0)
+
+	/** Debug (GameTests): never reuse. */
+	@JvmField
+	var disabled = false
+
+	fun update(key: FloatArray) {
+		reuse = !disabled && key contentEquals last
+		last = key
+	}
+}
+
+/**
  * Our Veil post pipeline stage types (client only: Veil's post pipelines are).
  *
  * A plain NeoForge [DeferredRegister], which waits for the registry event: Veil makes this registry only then, so
@@ -101,6 +163,8 @@ object RelativityPostStages {
 
 	val SPARSE_MARCH: DeferredHolder<PostPipelineStageRegistry.PipelineType<*>, PostPipelineStageRegistry.PipelineType<SparseMarchStage>> =
 		REGISTER.register("sparse_march") { -> PostPipelineStageRegistry.PipelineType(SparseMarchStage.CODEC) }
+	val CACHED_BLIT: DeferredHolder<PostPipelineStageRegistry.PipelineType<*>, PostPipelineStageRegistry.PipelineType<CachedBlitStage>> =
+		REGISTER.register("cached_blit") { -> PostPipelineStageRegistry.PipelineType(CachedBlitStage.CODEC) }
 
 	fun init() {
 		REGISTER.register(MOD_BUS)

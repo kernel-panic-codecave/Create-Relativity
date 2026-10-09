@@ -217,6 +217,7 @@ object LensVoxels {
 			entityCursor = null
 		}
 		grid.origin = corner
+		version += 1
 		grid.filled = 0
 		grid.dirty.clear()
 		grid.occupied.clear()
@@ -225,8 +226,14 @@ object LensVoxels {
 		grid.bricksDirty = true
 	}
 
+	/** Counts every change to what the grids hold (a slice read, quads uploaded, a grid moved): the post pass's tables are reused while it stands. */
+	@Volatile
+	var version = 0L
+		private set
+
 	/** Reads [grid]'s slice [z]: each cell's run (a block entity's slab where it draws), from the chunk sections. */
 	private fun readSlice(grid: Grid, level: ClientLevel, z: Int) {
+		version += 1
 		val corner = grid.origin ?: return
 		val worldZ = corner.z + z
 		for (i in 0 until SIZE * SIZE) gridSlice.put(i, 0)
@@ -465,6 +472,7 @@ object LensVoxels {
 
 	private fun uploadQuads() {
 		if (dirtyTo < dirtyFrom) return
+		version += 1
 		val floats = (dirtyTo - dirtyFrom + 1) * QUAD_TEXELS * 4
 		val data = MemoryUtil.memAllocFloat(floats)
 		try {
