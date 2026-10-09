@@ -7,6 +7,7 @@ import net.kernelpanicsoft.archie.gametest.TestSingleplayerContext
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.LensResolution
+import net.kernelpanicsoft.relativity.client.lens.StageTimers
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
 import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
 import net.kernelpanicsoft.relativity.client.lens.KerrSlots
@@ -1204,6 +1205,62 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * The vertex lens round a spinning hole while the camera bobs up and down (as the performance test moves it), the post
+	 * pass off for the sky: screenshots a few frames apart, with whether the live map was a blend of baked slots.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.kerrVertexBobbing() {
+		if (!ClientTestInput.selected("kerrVertexBobbing")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(12)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val random = java.util.Random(11)
+				val colours = listOf(Blocks.WHITE_CONCRETE, Blocks.BLUE_CONCRETE, Blocks.RED_CONCRETE)
+				for (x in -48..48) for (z in -48..48) for (y in -60..-30) {
+					if ((x * x + (y + 54) * (y + 54) + z * z) < 400 || random.nextFloat() > 0.03f) continue
+					level.setBlock(BlockPos(x, y, z), colours[random.nextInt(3)].defaultBlockState(), 2)
+				}
+			}
+			command("tick freeze")
+			command("relativity bh clear")
+			command("relativity bh create 0.5 -54 0.5 2.0 0.9")
+			command("tp @a -14.5 -54 0.5 -90 5")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			// The slots round the camera baked first, as in the performance test by the time it moves.
+			var waited = 0
+			while (waited < 600 && !computeOnClient { KerrSlots.blending }) { waitTicks(10); waited += 10 }
+			waitTicks(200)
+			runOnClient { BlackHoleLens.profileFlags = 4096 }
+			val start = computeOnClient { it.player!!.position() }
+			for (tick in 0 until 60) {
+				val offset = 0.05 * (tick % 20 - 10)
+				runOnClient { it.player!!.setPos(start.x, start.y + offset, start.z) }
+				waitTick()
+				if (tick % 6 == 0) {
+					val state = computeOnClient { "blending %s, %d baked".format(KerrSlots.blending, KerrSlots.bakedSlots) }
+					val shot = takeScreenshot("kerr_vertex_bobbing_$tick")
+					CreateRelativity.LOGGER.info("Kerr vertex bobbing, tick {} (offset {}): {} ({})", tick, "%.2f".format(offset), state, shot)
+				}
+			}
+			runOnClient { BlackHoleLens.profileFlags = 0; it.player!!.setPos(start.x, start.y, start.z) }
+		}
+	}
+
+	/**
 	 * Baked slots for a moving camera: the camera walks past a spinning hole, and the share of frames the live map is a
 	 * blend of baked slots (not the per-frame solver) is logged. (Measured: a few percent. A slot takes 1-2 s to bake and
 	 * the walk crosses dozens; baking ahead of the camera, or blending slots further apart, didn't help: those misplace
@@ -1358,6 +1415,24 @@ class LensClientGameTest {
 					runOnClient { LensResolution.override = null }
 					waitTicks(5)
 					lines += "small, moving, by lens resolution: " + byResolution.joinToString(", ") + " (100%%: %.0f)".format(fpsLensMoving)
+				}
+				// Where a moving frame's GPU time goes: the lens pipeline (its table stages, the rest being the lens pass) and
+				// the per-frame Kerr solve; the pipeline again with parts of the lens pass switched off (ProfileFlags).
+				run {
+					fun ClientGameTestContext.movingMs(): String {
+						fpsMoving()
+						return computeOnClient { "%.1f ms".format(BlackHoleLens.gpuMillis) }
+					}
+					val all = movingMs()
+					val stages = computeOnClient { StageTimers.summary() }
+					val solveMs = computeOnClient { "paths %.1f ms, map %.1f ms".format(VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis) }
+					val variants = ArrayList<String>()
+					for ((label, flags) in listOf("no disk" to 256, "sky pixels as drawn" to 4096, "drawn pixels as drawn" to 2048, "plain sky" to 128)) {
+						runOnClient { BlackHoleLens.profileFlags = flags }
+						variants += "$label ${movingMs()}"
+					}
+					runOnClient { BlackHoleLens.profileFlags = 0 }
+					lines += "%s, moving: lens pipeline %s (tables: %s); %s; Kerr solve %s".format(name, all, stages, variants.joinToString(", "), solveMs)
 				}
 				val kerrMs = computeOnClient { "last drawn: Kerr paths %.1f ms, image map %.1f ms; slots: bake %.1f ms, blend %.1f ms, %d baked, blending %s".format(
 					VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis, KerrSlots.bakeTimer.millis, KerrSlots.blendTimer.millis, KerrSlots.bakedSlots, KerrSlots.blending) }

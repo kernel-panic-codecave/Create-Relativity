@@ -44,9 +44,10 @@ class KerrSlotBaker(
 	 * point's distance from the camera (map frame), and 1 where there's an image (else all 0). */
 	fun bake(): FloatArray = pool.submit<FloatArray> { bakeHere() }.get()
 
-	/** The last bake's phases (ms: fan, rasterizing, refining) and texels refined (debug). */
+	/** The last bake's phases (ms: fan, rasterizing, refining, checking) and texels refined (debug). */
 	var timings = DoubleArray(3)
 	val refined = java.util.concurrent.atomic.AtomicInteger()
+	val dropped = java.util.concurrent.atomic.AtomicInteger()
 
 	private fun bakeHere(): FloatArray {
 		val tStart = System.nanoTime()
@@ -117,7 +118,32 @@ class KerrSlotBaker(
 				if (guesses.isNotEmpty()) { refined.incrementAndGet(); refine(map, shell, vi, column, radii[shell], guesses) }
 			}
 		}
-		timings = doubleArrayOf((tFan - tStart) / 1e6, (tRaster - tFan) / 1e6, (System.nanoTime() - tRaster) / 1e6)
+		val tRefine = System.nanoTime()
+		// Every interpolated image checked: its light followed from the camera must pass within [VERIFY] pixels of its
+		// point, else the texel is left without one (the vertex lens hides it; the post pass draws it). One wrong texel
+		// makes a slab across the screen; a missing one only a small gap.
+		IntStream.range(0, depth).parallel().forEach { shell ->
+			val landed = DoubleArray(3)
+			for (vi in 0 until height) for (column in 0 until width) {
+				val texel = (shell * height + vi) * width + column
+				if (map[texel * 4 + 3] == VERIFIED) {
+					map[texel * 4 + 3] = 1f
+					continue
+				}
+				if (map[texel * 4 + 3] < 0.5f) continue
+				val point = texelPoint(shell, vi, column, radii[shell])
+				val game = DoubleArray(3) { point[it] - camera[it] }
+				val span = norm(game)
+				val dir = normalize(DoubleArray(3) { game[it] / span + map[texel * 4 + it] * span })
+				val ok = land(dir, radii[shell], point, landed) &&
+					sqrt((landed[0] - point[0]).let { it * it } + (landed[1] - point[1]).let { it * it } + (landed[2] - point[2]).let { it * it }) / span < VERIFY * PIXEL
+				if (!ok) {
+					for (c in 0..3) map[texel * 4 + c] = 0f
+					dropped.incrementAndGet()
+				}
+			}
+		}
+		timings = doubleArrayOf((tFan - tStart) / 1e6, (tRaster - tFan) / 1e6, (tRefine - tRaster) / 1e6, (System.nanoTime() - tRefine) / 1e6)
 		return map
 	}
 
@@ -323,7 +349,7 @@ class KerrSlotBaker(
 				if (norm(miss) / span < ACCEPT * PIXEL) {
 					val texel = (shell * height + vi) * width + column
 					for (c in 0..2) map[texel * 4 + c] = ((dir[c] - straight[c]) / span).toFloat()
-					map[texel * 4 + 3] = 1f
+					map[texel * 4 + 3] = VERIFIED
 					return
 				}
 				// Two tangent directions and the landing's response to each.
@@ -555,6 +581,10 @@ class KerrSlotBaker(
 		/** A solved image is kept if it lands within this many pixels' angle of its point ([PIXEL]: a 70 degree view
 		 * 1504 pixels high). */
 		const val ACCEPT = 0.3
+		/** An interpolated image is kept if its light passes within this many pixels' angle of its point. */
+		const val VERIFY = 1.0
+		/** (Alpha marking a texel solved, so already checked, until the check.) */
+		private const val VERIFIED = 2f
 		const val PIXEL = 9.3e-4
 		private val NEIGHBOURS = listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
 

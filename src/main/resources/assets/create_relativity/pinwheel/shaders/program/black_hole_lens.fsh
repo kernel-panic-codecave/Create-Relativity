@@ -152,7 +152,7 @@ KerrRay kerrNearest(vec3 dir, vec2 uv) {
         for (int j = 0; j < 4; j += 1) {
             for (int i = 0; i < 4; i += 1) {
                 ivec2 at = base + ivec2(i - 1, j - 1);
-                deflection[j * 4 + i] = texelFetch(KerrTable0, at, 0).xyz;
+                deflection[j * 4 + i] = KerrTableEnabled == 3 ? texelFetch(KerrTable0, at, 0).xyz : vec3(0.0);
                 vec4 disk = texelFetch(KerrTable2, at, 0);
                 diskPoint[j * 4 + i] = vec3(disk.x * disk.zw, 0.0);
             }
@@ -164,7 +164,10 @@ KerrRay kerrNearest(vec3 dir, vec2 uv) {
         // change spans several pixels; so the error, in units of the change per pixel, is
         // (D2 / 8) / (step / pixelsPerTexel).
         float limit = 8.0 / (float(textureSize(DiffuseSampler0, 0).y) * TableScale / float(size.y)) * TABLE_TOLERANCE;
-        if (a0.w == 0.0) {
+        // (The exit direction isn't checked: nothing here reads it. The shadow takes the fate, the disk its hit, and the
+        // bent sky comes from the scene table; marching where only it is curved, round the photon ring, was most of
+        // the cost of a spinning hole while moving. Its accuracy shows only in the table error view.)
+        if (a0.w == 0.0 && KerrTableEnabled == 3) {
             vec3 exitA = tableRay((vec2(base) + 0.5) / vec2(size)) + a0.xyz;
             vec3 exitB = tableRay((vec2(base + ivec2(1, 0)) + 0.5) / vec2(size)) + b0.xyz;
             vec3 exitC = tableRay((vec2(base + ivec2(0, 1)) + 0.5) / vec2(size)) + c0.xyz;
@@ -531,7 +534,9 @@ void main() {
         scene = sceneColor(hit, original);
     }
     vec4 disk = kerrDisk(first, sceneDist);
-    if (first.status == 2 && (ProfileFlags & 256) == 0) disk = diskSample(dir, sceneDist);
+    // (A spinning hole's disk is the Kerr ray's, wherever it ends, falling in included: none past the table's reach.)
+    bool spinning = HoleCount > 0 && abs(HoleSpins[0].x) >= MIN_KERR_SPIN;
+    if (!spinning && (ProfileFlags & 256) == 0) disk = diskSample(dir, sceneDist);
     // Alpha marks what this pass made (lens_aa.fsh smooths and sharpens just those): 1 where the world's own pixel stands.
     bool made = disk.a > 0.0 || (sceneDist >= 1e29 && hit.outcome != SCENE_UNBENT && hit.outcome != 0) || scene != original.rgb;
     fragColor = vec4(mix(scene, disk.rgb, disk.a), made ? 0.5 : 1.0);

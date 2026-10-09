@@ -370,6 +370,13 @@ object BlackHoleLens {
 		uniform("TableToWorld") { setMatrix(TableFrame.toWorld) }
 		uniform("TableFromWorld") { setMatrix(TableFrame.fromWorld) }
 		uniform("TableScale") { setFloat(TableFrame.SCALE) }
+		// The last pass's touch-up: sharpen at full lens resolution or finer, blur below it (the tables' texels would show).
+		run {
+			val scale = LensResolution.scale()
+			uniform("AaSharpen") { setFloat(0.25f) }
+			// (Below full resolution: 4 / scale pixels, a Kerr-table texel, the coarsest whose steps show.)
+			uniform("BlurRadius") { setFloat(if (scale >= 1f) 0f else 4f / scale) }
+		}
 
 		// Whether the tables can be last frame's (TableCache): everything they read, as a key (the table frame's
 		// orientation, not the camera's: turning inside it changes nothing they hold).

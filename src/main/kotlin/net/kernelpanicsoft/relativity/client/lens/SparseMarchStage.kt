@@ -33,6 +33,16 @@ class SparseMarchStage(
 
 	override fun apply(context: PostPipeline.Context) {
 		if (TableCache.reuse) return
+		val timer = if (BlackHoleLens.timeGpu) StageTimers.of(out) else null
+		timer?.begin()
+		try {
+			march(context)
+		} finally {
+			timer?.end()
+		}
+	}
+
+	private fun march(context: PostPipeline.Context) {
 		val shaders = VeilRenderSystem.renderer().shaderManager
 		val markShader = shaders.getShader(mark) ?: return
 		val marchShader = shaders.getShader(march) ?: return
@@ -105,6 +115,8 @@ class CachedBlitStage(
 	override fun apply(context: PostPipeline.Context) {
 		if (TableCache.reuse) return
 		val program = VeilRenderSystem.renderer().shaderManager.getShader(shader) ?: return
+		val timer = if (BlackHoleLens.timeGpu) StageTimers.of(out) else null
+		timer?.begin()
 		val inFbo = input?.let { context.getFramebuffer(it) }
 		val outFbo = context.getFramebufferOrDraw(out)
 		program.bind()
@@ -117,6 +129,7 @@ class CachedBlitStage(
 		program.bindSamplers(context, 0)
 		VeilRenderSystem.drawScreenQuad()
 		context.clearSamplers(program)
+		timer?.end()
 	}
 
 	companion object {
@@ -149,6 +162,13 @@ object TableCache {
 		reuse = !disabled && key contentEquals last
 		last = key
 	}
+}
+
+/** GPU time of each table stage (by its output buffer), measured while BlackHoleLens.timeGpu is set (debug). */
+object StageTimers {
+	val timers = LinkedHashMap<ResourceLocation, GpuSpanTimer>()
+	fun of(name: ResourceLocation) = timers.getOrPut(name) { GpuSpanTimer() }
+	fun summary() = timers.entries.joinToString(", ") { (name, timer) -> "%s %.1f ms".format(name.path, timer.millis) }
 }
 
 /**

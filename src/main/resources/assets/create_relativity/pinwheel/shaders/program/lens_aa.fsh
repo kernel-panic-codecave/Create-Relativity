@@ -8,7 +8,8 @@ uniform sampler2D DiffuseSampler0; // the lens pass's output
 in vec2 texCoord;
 out vec4 fragColor;
 
-const float SHARPEN = 0.25;
+uniform float AaSharpen;  // at full lens resolution or finer: how much to sharpen
+uniform float BlurRadius; // below it (the tables' texels would show as blocks): a blur this wide (pixels), else 0
 
 float luma(vec3 c) {
     return dot(c, vec3(0.299, 0.587, 0.114));
@@ -21,6 +22,25 @@ void main() {
         return;
     }
     vec2 px = 1.0 / vec2(textureSize(DiffuseSampler0, 0));
+    if (BlurRadius > 0.0) {
+        // A disk of made pixels round this one (the world's own, alpha 1, left out: they stay sharp and don't bleed in),
+        // weighted toward the centre: about a table texel across, so its blocks melt.
+        vec3 sum = centre.rgb;
+        float weight = 1.0;
+        for (int ring = 1; ring <= 2; ring += 1) {
+            float radius = BlurRadius * float(ring) / 2.0;
+            float w = ring == 1 ? 0.8 : 0.5;
+            for (int k = 0; k < 8; k += 1) {
+                float angle = (float(k) + 0.5 * float(ring)) * 0.785398163;
+                vec4 tap = texture(DiffuseSampler0, texCoord + vec2(cos(angle), sin(angle)) * radius * px);
+                if (tap.a > 0.99) continue;
+                sum += tap.rgb * w;
+                weight += w;
+            }
+        }
+        fragColor = vec4(sum / weight, 1.0);
+        return;
+    }
     vec3 n = texture(DiffuseSampler0, texCoord + vec2(0.0, px.y)).rgb;
     vec3 s = texture(DiffuseSampler0, texCoord - vec2(0.0, px.y)).rgb;
     vec3 e = texture(DiffuseSampler0, texCoord + vec2(px.x, 0.0)).rgb;
@@ -50,7 +70,7 @@ void main() {
         if (lb < low || lb > high) colour = a; // (b strayed past the neighbourhood: across the edge)
     } else {
         // No edge: sharpen a little, within the neighbours' range (no halos).
-        vec3 sharp = colour + SHARPEN * (4.0 * colour - n - s - e - w);
+        vec3 sharp = colour + AaSharpen * (4.0 * colour - n - s - e - w);
         colour = clamp(sharp, min(min(n, s), min(e, w)), max(max(n, s), max(e, w)));
     }
     fragColor = vec4(colour, 1.0);
