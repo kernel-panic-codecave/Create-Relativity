@@ -173,6 +173,7 @@ SR kinematics:
     together stay on the general per-frame tables.
 
 ### Spacetime debug view (F3)
+- The proper-time (clock) and stretch readouts move off the regular HUD into the F3 screen, as debug lines.
 - A new F3 toggle, next to F3+G's chunk borders: a **3D grid warped by spacetime** round every source (frame dragging
   shown for spinning holes).
 - **Relative to an observer**: the player by default. Right-clicking an entity, ship or black hole while the view is on makes it
@@ -367,6 +368,8 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   entities inside ride along untouched, and anything straddling the wall gets torn by the tidal shear.
 - **Bubble extent**: a generator on a train extends its bubble to encompass the whole train, one on a ship (Sable)
   to encompass the whole ship, and a static one has a configurable extent.
+- **Falling out of a superluminal bubble** is fatal, with Star Trek flavoured death messages ("... was disassembled at
+  the subatomic level by a collapsing warp field", "... experienced a warp core breach", ...).
 - **Warp trains**: a Warp Field Generator on a Create train carriage. The train runs its track at superluminal speed,
   the bubble carried along the rails; the route is the course set before engaging, which suits the no-steering rule
   below. Stations make the stop points, and the arrival hazard (below) makes station design matter: arriving
@@ -493,6 +496,11 @@ this cubemap. Rays that land on-screen behind the BH sample the **scene color + 
 - **Kerr**: the shadow shifts and flattens on one side, and frame dragging twists the disk image. It reuses the same
   ray marcher with the Kerr–Schild Christoffels ported to GLSL.
 - Brightness drives a bloom pass and lens flare, and the HDR result is tone-mapped to match the rest of the scene.
+- **Still to come**: a truly **volumetric disk** (thickness, flaring with radius, light passing through its thin
+  parts, self-shadowing) instead of the thin slab; **real blackbody colour** throughout (the disk's spectrum per
+  temperature, shifted by g, integrated to colour, not a lookup tint); **polar jets** along the spin axis of a feeding
+  spinning hole (relativistic outflow: beamed toward a viewer looking down them, their brightness and length from the
+  accretion rate and spin), lensed like everything else.
 
 ### 9.4 Wormhole view
 - The other mouth captures a cubemap from its side (same system as 9.1).
