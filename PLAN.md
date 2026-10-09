@@ -157,6 +157,15 @@ SR kinematics:
       the baked map can only build that faster.
     - First prototype: a spinning-hole map used while the camera is outside the hole's region, timed against the current
       tables.
+    - Measured (`CellLightMap`, 2026-10-08): per-cell 4D maps are accurate only where first-order bending already is
+      (median 0.005 rad per cell at 3 r_s, 0.0001 at 24) and need ~1.6 GB for the band where they'd help: shelved.
+  - **Baked lens tables per source type (instead)**: what the vertex lens inverts depends only on the camera relative to
+    a lone source, so it's baked once per source shape and reused: Schwarzschild (the image table, done), the Ellis
+    wormhole (spherical and scale-free like it, plus which side), Kerr (per spin, baked on first use and cached on disk;
+    an image map per camera distance and height angle, interpolated between), an Alcubierre bubble (stationary in its
+    own frame: per speed and wall sharpness). Baking runs off the frame budget, so its solves can be exhaustive (no
+    images missed by a hurried search: the floor holes) and the per-frame tables and their lag go. Several sources
+    together stay on the general per-frame tables.
 
 ### Spacetime debug view (F3)
 - A new F3 toggle, next to F3+G's chunk borders: a **3D grid warped by spacetime** round every source (frame dragging
