@@ -516,6 +516,16 @@ Aberration + spectral Doppler + searchlight (§7), applied last, so lensing resu
 - Time-dilation "world fast-forward" motion blur when the tick-rate scaling is active.
 - Hawking evaporation: a hot white glow and a sparkle shell for micro-BHs right before they pop.
 
+### 9.6a Toward vertex-only lensing (shader packs for free)
+
+Goal: everything lensed is drawn as geometry through the vertex lens, so a shader pack lights, shadows and tonemaps
+it like the rest of the world; the post pass shrinks to a fallback.
+1. Primary images placed right everywhere (no slabs: the slot blend hides points its slots disagree on, 2026-10-09).
+2. Second-image pass: geometry drawn again at its secondary image (the Einstein ring's), #23.
+3. The sky as a dense dome mesh through the same vertex lens (packs that draw their own sky: per-pack testing).
+4. The shadow and the accretion disk as meshes (a black disk; the disk's own mesh), bent the same way.
+What stays per-pixel: whatever has no geometry and isn't the sky (nothing, ideally).
+
 ### 9.7 Compatibility
 - Iris/shaderpacks own the pipeline. Detect Iris and either (a) inject through its post hooks if possible, or (b) fall
   back to a forward-rendered "billboard sphere" BH with a screen-space distortion pass. Needs testing early.
