@@ -78,6 +78,10 @@ object KerrSlots {
 	@JvmField
 	var bakeNew = true
 
+	/** How far apart (radians) the four slots' images of a point may be before it's left hidden (kerr_map_blend.fsh). */
+	@JvmField
+	var spreadLimit = 0.01
+
 	/** Turns slot baking off (debug; GameTests: comparison with the per-frame solver). */
 	@JvmField
 	var enabled = true
@@ -245,6 +249,7 @@ object KerrSlots {
 			val a = hole.spin * m
 			val inner = 1.05 * (m + sqrt(maxOf(m * m - a * a, 0.0)))
 			GL20.glUniform2f(GL20.glGetUniformLocation(program, "Radii"), inner.toFloat(), outer(hole).toFloat())
+			GL20.glUniform1f(GL20.glGetUniformLocation(program, "SpreadLimit"), spreadLimit.toFloat())
 			GL30.glBindVertexArray(vao)
 			val layerUniform = GL20.glGetUniformLocation(program, "Layer")
 			for (layer in 0 until ImageMapSolver.DEPTH) {

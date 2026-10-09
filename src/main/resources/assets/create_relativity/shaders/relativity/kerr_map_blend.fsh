@@ -9,6 +9,7 @@ uniform sampler3D Slot2;
 uniform sampler3D Slot3;
 uniform vec4 Weights;      // the four slots' blend weights
 uniform float Azimuth;     // the camera's azimuth round the spin axis: atan(z, x) of camera minus hole
+uniform float SpreadLimit; // radians: slots disagreeing by more (plus half the shift) leave the point hidden
 uniform vec2 Radii;        // the map's inner and outer radius (blocks): the same grid as the slots'
 uniform vec3 SlotCamera[4]; // each slot's camera from the hole (blocks, the slots' frame: azimuth 0)
 uniform vec3 Camera;        // the camera from the hole (blocks, the slots' frame: turned back by Azimuth)
@@ -86,8 +87,25 @@ void main() {
         return;
     }
     // Blended as hole-angle shifts (each slot's from its own camera), then put back for this camera.
-    vec2 shift = Weights.x * slotShift(a, SlotCamera[0], inSlot) + Weights.y * slotShift(b, SlotCamera[1], inSlot)
-        + Weights.z * slotShift(c, SlotCamera[2], inSlot) + Weights.w * slotShift(e, SlotCamera[3], inSlot);
+    vec2 sa = slotShift(a, SlotCamera[0], inSlot);
+    vec2 sb = slotShift(b, SlotCamera[1], inSlot);
+    vec2 sc = slotShift(c, SlotCamera[2], inSlot);
+    vec2 se = slotShift(e, SlotCamera[3], inSlot);
+    vec2 shift = Weights.x * sa + Weights.y * sb + Weights.z * sc + Weights.w * se;
+    // Slots that disagree (an image on another branch in one of them, past a fold, or their maps' texels mixing two):
+    // no average of them is right, so none (hidden: the post pass draws it). Near the hole neighbouring slots' shifts
+    // differ a lot anyway; another branch differs by about the shift itself. (Polar angle; the azimuth's error scales
+    // with its sine.)
+    float spread = 0.0;
+    float sinPolar = sin(holeAngles(normalize(inSlot - Camera), normalize(-Camera)).x);
+    if (Weights.x > 1e-4) spread = max(spread, length((sa - shift) * vec2(1.0, sinPolar)));
+    if (Weights.y > 1e-4) spread = max(spread, length((sb - shift) * vec2(1.0, sinPolar)));
+    if (Weights.z > 1e-4) spread = max(spread, length((sc - shift) * vec2(1.0, sinPolar)));
+    if (Weights.w > 1e-4) spread = max(spread, length((se - shift) * vec2(1.0, sinPolar)));
+    if (spread > SpreadLimit + 0.5 * length(shift * vec2(1.0, sinPolar))) {
+        Result = vec4(0.0);
+        return;
+    }
     vec3 game = inSlot - Camera;
     float span = length(game);
     vec3 straight = game / span;
