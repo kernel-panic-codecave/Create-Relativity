@@ -942,9 +942,13 @@ class LensClientGameTest {
 				settle()
 				// A spinning hole: until the baked camera slots round the camera take over (KerrSlots).
 				if (s[4] != 0.0) {
+					runOnClient { KerrSlots.measureBakes = true; KerrSlots.bakeCosts.clear() }
 					var waited = 0
 					while (waited < 600 && !computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.blending }) { waitTicks(10); waited += 10 }
 					CreateRelativity.LOGGER.info("Vertex accuracy, {}: blending baked slots: {} after {} ticks ({} baked)", label, computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.blending }, waited, computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.bakedSlots })
+					val costs = computeOnClient { KerrSlots.bakeCosts.entries.joinToString("; ") { (phase, list) -> "%s: %d calls, median %.1f ms, max %.1f ms".format(phase, list.size, list.sorted()[list.size / 2], list.max()) } }
+					runOnClient { KerrSlots.measureBakes = false }
+					CreateRelativity.LOGGER.info("Vertex accuracy, {}: bake calls: {}", label, costs)
 					waitTicks(10)
 				}
 				val shotName = "vertex_accuracy_${label.replace(Regex("[^a-z0-9]+"), "_")}"

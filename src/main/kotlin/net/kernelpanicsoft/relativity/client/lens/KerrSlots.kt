@@ -69,6 +69,11 @@ object KerrSlots {
 	val bakeTimer = GpuTimer()
 	val blendTimer = GpuTimer()
 
+	/** Debug (GameTests: timing): each bake call's wall time with the GPU finished before and after (ms), by phase. */
+	@JvmField
+	var measureBakes = false
+	val bakeCosts = HashMap<String, ArrayList<Double>>()
+
 	/** Debug (GameTests: timing): false bakes no further slots (blends what's baked). */
 	@JvmField
 	var bakeNew = true
@@ -104,7 +109,16 @@ object KerrSlots {
 		val i0 = floor(u).toInt().coerceIn(0, R_SLOTS - 2)
 		val j0 = floor(v).toInt().coerceIn(0, THETA_SLOTS - 2)
 		if (BlackHoleLens.timeGpu) bakeTimer.begin()
-		if ((baking >= 0 || bakeNew) && frame % BAKE_EVERY == 0L) bake(hole, i0, j0)
+		if ((baking >= 0 || bakeNew) && frame % BAKE_EVERY == 0L) {
+			if (measureBakes) GL11.glFinish()
+			val start = System.nanoTime()
+			val phase = if (baking >= 0 && !mapStarted) "paths" else "map"
+			bake(hole, i0, j0)
+			if (measureBakes) {
+				GL11.glFinish()
+				bakeCosts.getOrPut(phase) { ArrayList() } += (System.nanoTime() - start) / 1e6
+			}
+		}
 		if (BlackHoleLens.timeGpu) bakeTimer.end()
 		val needed = listOf(key(i0, j0), key(i0 + 1, j0), key(i0, j0 + 1), key(i0 + 1, j0 + 1))
 		if (needed.any { it !in slots }) return false
@@ -161,6 +175,8 @@ object KerrSlots {
 		if (paths.changed) return
 		if (!mapStarted) {
 			map.restart()
+			// (The first slot searches everything; the next start from it and keep its hidden texels hidden.)
+			map.retryHidden = slots.isEmpty()
 			mapStarted = true
 		}
 		map.ensureTexture()

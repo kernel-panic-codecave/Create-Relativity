@@ -149,18 +149,9 @@ void main() {
             break;
         }
     }
-    // Then, if none found it, the scan down the table column at p's azimuth (relativityScanGuess), the costliest.
     float v = 99.0;
-    for (int k = 0; k <= count; k += 1) {
-        vec3 seed;
-        float seedV;
-        if (k < count) {
-            seed = seeds[k];
-            seedV = warmV[k];
-        } else if (DebugMode == 2 || !relativityScanGuess(p, seed, seedV)) {
-            break;
-        }
-        found = relativityKerrImage(p, seed, seedV, kerr, v);
+    for (int k = 0; k < count; k += 1) {
+        found = relativityKerrImage(p, seeds[k], warmV[k], kerr, v);
         // From the neighbour's image: only an image whose turn (per block) is close to the neighbour's is the same
         // branch continued (within a quarter of the turn, or a hundredth of a radian over the point's distance).
         if (found == 1 && fromNeighbour && k == count - 1) {

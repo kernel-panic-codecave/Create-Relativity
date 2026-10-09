@@ -325,40 +325,6 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
     return outbound ? 14.0 : 0.0;
 }
 
-// A last-resort first guess for p's image (view space): round a lone hole the image lies in the plane of the camera, the
-// hole and p (spin bends it only a little out of it), so in the table column at p's own azimuth round the camera-hole
-// line; scanning that column's rows for the path that passes nearest p (where each meets p's distance from the centre)
-// finds images the other guesses miss (strongly lensed, near the ring). False if no row comes near.
-bool relativityScanGuess(vec3 p, out vec3 guess, out float guessV) {
-    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
-    vec3 hole = RelativityLensData[6].xyz;
-    vec3 d = viewToGame * p - hole;
-    float rP = length(d);
-    vec3 n = d / rP;
-    vec2 size = RelativityLensData[7].zw;
-    float rs = RelativityLensData[7].x;
-    vec2 at = relativityTableAt(normalize(viewToGame * p), size, hole, rs);
-    int column = int(at.x) - int(size.x) * int(floor(at.x / size.x));
-    float best = 1e30;
-    guess = normalize(p);
-    guessV = 99.0;
-    int rows = int(size.y) + relativityRuntimeZero();
-    for (int y = 1; y < rows - 1; y += 4) {
-        ivec2 t = ivec2(column, y);
-        for (int side = 0; side < 2 + relativityRuntimeZero(); side += 1) {
-            float v = relativityPathPosition(t, rP, side == 1);
-            bool ok;
-            vec3 miss = relativityPathMiss(t, n, rP, v, ok);
-            float m = dot(miss.xy, miss.xy) + miss.z * miss.z;
-            if (ok && m < best) {
-                best = m;
-                guess = transpose(viewToGame) * relativityTableDir(vec2(t) + 0.5, size, hole, rs);
-                guessV = v;
-            }
-        }
-    }
-    return best < 0.05;
-}
 
 
 // The view direction of p's image under a spinning hole ([6]), by Newton's method on the table and along its paths,

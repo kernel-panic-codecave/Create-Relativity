@@ -138,7 +138,7 @@ open class ImageMapSolver {
 			GL20.glUniform1i(uniform("PreviousValid"), if (previousValid) 1 else 0)
 			GL20.glUniform1i(uniform("Frame"), frame++)
 			// Searches that failed against a table still catching up are tried again against the settled one.
-			GL20.glUniform1i(uniform("RetryAll"), if (changed && !whole && !repair) 0 else 1)
+			GL20.glUniform1i(uniform("RetryAll"), if ((changed && !whole && !repair) || !retryHidden) 0 else 1)
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
 			GL20.glUniform1i(uniform("SourceCount"), if (sources == null) 0 else sourceCount)
 			if (sources != null) {
@@ -215,6 +215,14 @@ open class ImageMapSolver {
 		drawnSinceChange = 0
 		repairPending = repairs
 	}
+
+	/**
+	 * Whether texels found hidden last time are searched again on a whole redraw (otherwise one in 8 a frame, staggered):
+	 * the slot baker turns it off for a slot next to the last, whose hidden region is nearly the same and whose failed
+	 * searches (every guess tried) are the costliest.
+	 */
+	@JvmField
+	var retryHidden = true
 
 	/** Whether a map that has caught up gets the repair pass (every failure searched again); the slot baker skips it. */
 	@JvmField
