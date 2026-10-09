@@ -5,6 +5,7 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "client.LevelRendererMixin",
+    "client.LevelRendererSecondImagesMixin",
     "client.BlockEntityRenderDispatcherMixin",
     "client.create.AnimationTickHolderMixin",
     "client.create.RotatingInstanceMixin",
