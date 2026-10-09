@@ -11,6 +11,7 @@
     "client.create.RotatingInstanceMixin",
     "client.flywheel.AbstractBlockEntityVisualAccessor",
     "client.flywheel.StorageMixin",
+    "client.flywheel.EngineImplMixin",
     "client.LevelRendererTicksAccessor",
     "client.PlayerFrameRenderMixin",
     "client.LevelRendererPlayerMixin",

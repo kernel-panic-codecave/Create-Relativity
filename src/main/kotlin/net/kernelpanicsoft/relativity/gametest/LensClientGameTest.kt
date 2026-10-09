@@ -1237,6 +1237,19 @@ class LensClientGameTest {
 					level.setBlock(BlockPos(x, y, z), colours[random.nextInt(3)].defaultBlockState(), 2)
 				}
 			}
+			// Create's cogwheels and shafts round the hole (Flywheel draws them, instanced): their secondary images too.
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val cog = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:large_cogwheel"))
+				val shaft = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:shaft"))
+				for (k in 0 until 12) {
+					val angle = k * Math.PI / 6
+					val x = kotlin.math.round(10 * kotlin.math.cos(angle)).toInt()
+					val z = kotlin.math.round(10 * kotlin.math.sin(angle)).toInt()
+					level.setBlock(BlockPos(x, -57, z), cog.defaultBlockState(), 2)
+					for (y in -60..-58) level.setBlock(BlockPos(x, y, z), shaft.defaultBlockState(), 2)
+				}
+			}
 			command("tick freeze")
 			for (spin in listOf(0.0, 0.9)) {
 			command("relativity bh clear")
