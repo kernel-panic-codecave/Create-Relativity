@@ -309,8 +309,14 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
 
 ## 8. Wormholes
 
-- **Exotic Matter**: negative energy density, made in a **Casimir Cavity** multiblock (stacked plates, high RPM, liquid
-  helium-ish coolant from a new fluid). The amount sets the throat radius `b0` and how stable it is.
+- **The fuels: two fluids.** *Degenerate Matter* (positive energy density) drives positive gravity: gravity generators
+  pulling, artificial gravity. *Exotic Matter* (negative energy density) drives negative gravity: wormhole throats,
+  warp bubble walls, repulsors. Both are consumed as they're used. They render like the end gateway's starfield:
+  Degenerate Matter as the end gateway, Exotic Matter the same with the colours inverted. They're made in a **particle
+  accelerator** multiblock (a ring of Create machinery, driven by rotational power; what it collides and how fast
+  decides which fluid and how much), or at a lower rate in a **Casimir Cavity** for Exotic Matter (stacked plates,
+  high RPM, a coolant fluid). For a wormhole, the Exotic Matter supplied sets the throat radius `b0` and how stable it
+  is.
 - **Wormhole Mouths**: two linked anchor multiblocks. They can go in different dimensions. The throat geometry is
   Morris–Thorne, so geodesics near a mouth *curve into* the throat instead of teleporting at a plane.
 - **Traversal**: an entity whose proper radial coordinate `l` crosses 0 gets moved to the other mouth with its velocity
@@ -348,6 +354,10 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   is consumed by bubble size, wall thinness and speed, and the generator spins up and down over seconds.
 - The ship moves **kinematically**: its Sable pose is advanced with the bubble, not pushed by forces. Crew and loose
   entities inside ride along untouched, and anything straddling the wall gets torn by the tidal shear.
+- **Warp trains**: a Warp Field Generator on a Create train carriage. The train runs its track at superluminal speed,
+  the bubble carried along the rails; the route is the course set before engaging, which suits the no-steering rule
+  below. Stations make the stop points, and the arrival hazard (below) makes station design matter: arriving
+  nose-first into a platform blasts it.
 - **No steering from inside at superluminal speed**: the front wall is causally cut off from the crew (a horizon).
   Course and stop point are set before engaging. That's real physics, and it's a good gameplay constraint.
 - **The arrival hazard** (McMonigal, Lewis & O'Byrne 2012): particles swept up at the front wall pile up as
@@ -565,7 +575,9 @@ a simpler rocket thruster added here). Launch windows and Hohmann transfers fall
   - *Tidal Gauge*: redstone output proportional to tidal acceleration.
   - *Lorentz Drive*: an Aeronautics thruster that burns exotic matter/Neutronium to reach high β.
   - *Gravitic Press*, *Casimir Cavity*, *Containment Field Projector*, *Wormhole Anchor*.
-  - *Gravity Generator*: turns energy (Create rotational power: speed sets strength, stress pays for it) into gravity.
+  - *Particle Accelerator*: the multiblock making the two fuels, Degenerate and Exotic Matter (§8).
+  - *Gravity Generator*: turns energy (Create rotational power: speed sets strength, stress pays for it) and fuel
+    (Degenerate Matter for positive gravity, Exotic Matter for negative) into gravity.
     It warps spacetime in selectable shapes (a point mass, a flat artificial-gravity field, ...) through the sampled metric
     field (§3). It **collapses into a black hole** when the escape velocity at the edge of its warp reaches c, i.e. its
     Schwarzschild radius 2GM/c² outgrows the generator. At that point it really is a black hole, so an ordinary one replaces it.
