@@ -96,6 +96,11 @@ object VertexLens {
 	private const val RELAX_RADIUS = 60.0
 
 	private var table: CompletableFuture<FloatArray>? = null
+	/** The secondary-image table (SchwarzschildImages.buildSecondaryTable), and its texture once built. */
+	private var secondTable: CompletableFuture<FloatArray>? = null
+	var secondTexture = 0
+		private set
+	private const val SECOND_SAMPLER = "RelativitySecondImages"
 	/** The Schwarzschild image table (GL_TEXTURE_3D); 0 until built. */
 	var texture = 0
 		private set
@@ -118,6 +123,9 @@ object VertexLens {
 	fun init() {
 		table = CompletableFuture.supplyAsync {
 			SchwarzschildImages.forFiltering(SchwarzschildImages.buildTable(TABLE_U0, TABLE_UP, TABLE_PHI), TABLE_U0, TABLE_UP, TABLE_PHI)
+		}
+		secondTable = CompletableFuture.supplyAsync {
+			SchwarzschildImages.forFiltering(SchwarzschildImages.buildSecondaryTable(TABLE_U0, TABLE_UP, TABLE_PHI), TABLE_U0, TABLE_UP, TABLE_PHI)
 		}
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, ::onRenderStage)
 	}
@@ -246,7 +254,55 @@ object VertexLens {
 		}
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 2)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrImageMap.texture)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
 		GlStateManager._activeTexture(previous)
+		secondsWanted = !perspective && centre?.hole != null && !kerr && secondTexture != 0 && secondImages
+	}
+
+	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
+	@JvmField
+	var secondImages = true
+
+
+	/** Whether this frame's level draws its secondary images ([drawSecondImages]): a non-spinning hole (for now). */
+	private var secondsWanted = false
+
+	/** True while a draw places vertices at their secondary images. */
+	@JvmStatic
+	var drawingSecondImages = false
+		private set
+
+	/**
+	 * Runs [draw] again with the vertices placed at their secondary images (vertex_lens_core.glsl's second-image mode):
+	 * the block's [11].y gets its bit 2 for the draw, then loses it. Nothing if this frame has none to draw.
+	 */
+	@JvmStatic
+	fun drawSecondImages(draw: Runnable) {
+		if (!secondsWanted || drawingSecondImages) return
+		drawingSecondImages = true
+		try {
+			setModeFlags(true)
+			// A secondary image is the mirror image (the light comes round the other side), so every triangle's winding
+			// is reversed: culling the front faces keeps the ones facing the camera along that light.
+			GL11.glCullFace(GL11.GL_FRONT)
+			draw.run()
+		} finally {
+			GL11.glCullFace(GL11.GL_BACK)
+			setModeFlags(false)
+			drawingSecondImages = false
+		}
+	}
+
+	/** Rewrites the block's [11].y: bit 1 the pixel check off (debug), bit 2 the secondary images. */
+	private fun setModeFlags(second: Boolean) {
+		val value = (if (pixelCheck) 0f else 1f) + (if (second) 2f else 0f)
+		MemoryStack.stackPush().use { stack ->
+			val data = stack.mallocFloat(1).put(0, value)
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
+			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 11L * 16 + 4, data)
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
+		}
 	}
 
 	/** The angle one screen pixel covers through [projection] (radians, vertically). */
@@ -346,6 +402,10 @@ object VertexLens {
 			table = null
 			CreateRelativity.LOGGER.info("Vertex lens image table ready ({}x{}x{})", TABLE_U0, TABLE_UP, TABLE_PHI)
 		}
+		if (secondTexture == 0) secondTable?.getNow(null)?.let {
+			secondTexture = uploadTable(it)
+			secondTable = null
+		}
 		return true
 	}
 
@@ -391,7 +451,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {

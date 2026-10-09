@@ -1205,6 +1205,81 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * Secondary images drawn as geometry (VertexLens.drawSecondImages) round a non-spinning hole: screenshots of the vertex
+	 * lens alone and of the whole lens with them on and off, how much of the picture they change (the post pass traced
+	 * the same images per pixel before, so the whole lens should barely change), and the frame rate either way.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.secondImages() {
+		if (!ClientTestInput.selected("secondImages")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(12)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.enableVsync().set(false)
+			minecraft.window.updateVsync(false)
+			minecraft.options.framerateLimit().set(260)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val random = java.util.Random(11)
+				val colours = listOf(Blocks.WHITE_CONCRETE, Blocks.BLUE_CONCRETE, Blocks.RED_CONCRETE)
+				for (x in -48..48) for (z in -48..48) for (y in -60..-30) {
+					if ((x * x + (y + 54) * (y + 54) + z * z) < 400 || random.nextFloat() > 0.03f) continue
+					level.setBlock(BlockPos(x, y, z), colours[random.nextInt(3)].defaultBlockState(), 2)
+				}
+			}
+			command("tick freeze")
+			command("relativity bh clear")
+			command("relativity bh create 0.5 -54 0.5 2.0 0")
+			command("tp @a -14.5 -54 0.5 -90 5")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			fun ClientGameTestContext.fps(): Double {
+				waitTicks(30)
+				return (0 until 3).map { waitTicks(20); computeOnClient { it.fps }.toDouble() }.average()
+			}
+			val shots = HashMap<String, java.nio.file.Path>()
+			val rates = HashMap<Boolean, Double>()
+			for (on in listOf(false, true)) {
+				runOnClient { VertexLens.secondImages = on; BlackHoleLens.profileFlags = 4096 }
+				waitTicks(5)
+				shots["vertex_$on"] = takeScreenshot("second_images_vertex_$on")
+				runOnClient { BlackHoleLens.profileFlags = 0 }
+				waitTicks(5)
+				shots["lens_$on"] = takeScreenshot("second_images_lens_$on")
+				rates[on] = fps()
+			}
+			runOnClient { VertexLens.secondImages = true }
+			fun changed(a: java.nio.file.Path, b: java.nio.file.Path): Double = Files.newInputStream(a).use { NativeImage.read(it) }.use { x ->
+				Files.newInputStream(b).use { NativeImage.read(it) }.use { y ->
+					var differ = 0L
+					for (j in 0 until x.height) for (i in 0 until x.width) {
+						val p = x.getPixelRGBA(i, j)
+						val q = y.getPixelRGBA(i, j)
+						var d = 0
+						for (c in 0..2) d = maxOf(d, kotlin.math.abs(((p shr (8 * c)) and 255) - ((q shr (8 * c)) and 255)))
+						if (d > 48) differ += 1
+					}
+					differ.toDouble() / (x.width.toLong() * x.height)
+				}
+			}
+			CreateRelativity.LOGGER.info("Second images: they change {}% of the vertex lens's picture and {}% of the whole lens's; {} fps with them, {} without",
+				"%.2f".format(100 * changed(shots["vertex_false"]!!, shots["vertex_true"]!!)), "%.2f".format(100 * changed(shots["lens_false"]!!, shots["lens_true"]!!)),
+				"%.0f".format(rates[true]), "%.0f".format(rates[false]))
+		}
+	}
+
+	/**
 	 * The vertex lens round a spinning hole while the camera bobs up and down (as the performance test moves it), the post
 	 * pass off for the sky: screenshots a few frames apart, with whether the live map was a blend of baked slots.
 	 */

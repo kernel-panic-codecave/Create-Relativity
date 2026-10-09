@@ -11,14 +11,17 @@
 // [6] spinning hole (Kerr; [1].z = 1): xyz centre relative to the camera in game axes, w spin a / M
 // [7] the Kerr path table (KerrPaths): zw its size in texels (azimuth, angle from the hole; see relativityTableDir)
 // [8..10] view to game axes (a rotation), by column
-// [11] x: the angle one screen pixel covers (radians; the pixel check); y: 1 turns the pixel check off (debug); z, w: the image map's inner and
-//      outer radius (blocks)
+// [11] x: the angle one screen pixel covers (radians; the pixel check); y: bit 1 turns the pixel check off (debug), bit 2
+//      places vertices at their secondary images (VertexLens.drawSecondImages); z, w: the image map's inner and outer
+//      radius (blocks)
 layout(std140) uniform RelativityLens {
     vec4 RelativityLensData[12];
 };
 uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sqrt u0, sqrt uP, phi / pi): r the
                                     // launch-angle correction, g whether there's an image (interpolated)
 
+uniform sampler3D RelativitySecondImages; // SchwarzschildImages.buildSecondaryTable, as RelativityImages: r ln(psi - psi_c)
+                                          // of the secondary image (the long way round), g whether there's one
 uniform sampler2DArray RelativityKerrPaths; // KerrPaths' table (kerr_paths.fsh): per texel, a view ray's path past a
                                             // spinning hole, as seen from the hole
 uniform sampler3D RelativityKerrMap; // KerrImageMap (kerr_image_map.fsh): per point round a spinning hole, how its image
@@ -33,6 +36,13 @@ const vec3 RELATIVITY_MAP_SIZE = vec3(128.0, 64.0, 48.0); // KerrImageMap.WIDTH,
 // Loop counts read from the block (kerrDebug, never negative, so this is 0), not constants: a constant-count loop gets
 // unrolled, and with the light steps and solves inlined into it the driver took tens of seconds to compile the programs
 // using them (35 s for the image map's).
+// Whether this draw places vertices at their secondary images ([11].y bit 2).
+bool relativitySecond() { return RelativityLensData[11].y > 1.5; }
+
+// The secondary images are drawn for points within this many r_s of the hole: further out their images are slivers on the
+// photon ring, which the post pass draws.
+const float RELATIVITY_SECOND_REACH = 24.0;
+
 int relativityRuntimeZero() { return int(min(RelativityLensData[1].w, 0.0)); }
 
 const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's diagonal
@@ -410,6 +420,20 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
 
     vec3 size = vec3(64.0, 64.0, 128.0);
     vec3 axes = vec3(sqrt(u0), sqrt(uP), phi / 3.14159265);
+    if (relativitySecond()) {
+        // The secondary image: launched just outside the critical angle, toward the far side from p's, sweeping
+        // 2 pi - phi. Near the camera-hole line on either side its images run all round the ring, as the primary's
+        // do behind the hole.
+        nearAxis = rp * sideLength < RELATIVITY_AXIS_CUT;
+        if (u0 >= 2.0 / 3.0) return -1; // inside the photon sphere: none tabled
+        vec2 second = texture(RelativitySecondImages, (axes * (size - 1.0) + 0.5) / size).rg;
+        if (second.g < 0.999) return -1;
+        float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+        float launch = critical + exp(second.r);
+        float psi2 = atan(sin(launch), cos(launch) * sqrt(1.0 - u0));
+        seen = -cos(psi2) * e1 - sin(psi2) * e2;
+        return 1;
+    }
     vec2 image = texture(RelativityImages, (axes * (size - 1.0) + 0.5) / size).rg;
     nearAxis = cosPhi < 0.0 && rp * sideLength < RELATIVITY_AXIS_CUT;
     if (image.g < 0.5) return -1;
@@ -587,6 +611,13 @@ int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     // The Schwarzschild image: alone for non-spinning holes; for anything else a hole's first guess and its axis cut.
     // Round another source (a mass, a bubble) the map alone places points; outside it they stand where they are.
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
+    if (relativitySecond()) {
+        // (Secondary images only round a non-spinning hole, for now: VertexLens draws them only then.)
+        if (RelativityLensData[1].z > 0.5) return -1;
+        image = relativitySchwarzschildImage(p, seen, nearAxis);
+        if (image == 2 || nearAxis) return -1;
+        return image;
+    }
     if (holeCentre) {
         image = relativitySchwarzschildImage(p, seen, nearAxis);
         if (image == 2) return 2;
@@ -636,6 +667,18 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     float d = length(p);
     vec3 hole = RelativityLensData[0].xyz;
     float rc = length(hole);
+    if (relativitySecond()) {
+        // The secondary image at the length of the light's way round (at least the way via the hole), so the primary
+        // image of whatever is in front along the same ray wins the depth test. Far from the hole, none (hidden).
+        float rp = length(p - hole);
+        vec3 seen;
+        if (rp > RELATIVITY_SECOND_REACH * RelativityLensData[0].w || relativityFarImage(p, seen, false) != 1) {
+            vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
+            hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
+            return hidden;
+        }
+        return proj * vec4(seen * (rc + rp), 1.0);
+    }
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
     float nearness = holeCentre ? smoothstep(RELATIVITY_NEAR * rc, RELATIVITY_NEAR_BLEND * rc, d) : 1.0;
     vec3 seen;
@@ -684,7 +727,7 @@ bool relativityLensed(mat4 proj) {
 
 // For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
-    if (RelativityLensData[11].y > 0.5) return false;
+    if (mod(RelativityLensData[11].y, 2.0) > 0.5) return false;
     float d = length(unbent);
     vec3 hole = RelativityLensData[0].xyz;
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;

@@ -10,6 +10,7 @@ class SchwarzschildImagesTest {
 	private val n0 = 64
 	private val nP = 64
 	private val nPhi = 128
+	private val secondary by lazy { SchwarzschildImages.buildSecondaryTable(n0, nP, nPhi) }
 	private val table by lazy { SchwarzschildImages.buildTable(n0, nP, nPhi) }
 
 	/** The angle at which the ray launched at [psi] from u0 first reaches uP (by the same crossing order the table uses). */
@@ -77,6 +78,36 @@ class SchwarzschildImagesTest {
 		println("round trip: ${errors.size} images, $missing without; median ${errors[errors.size / 2]}, p95 $p95, worst $worst")
 		assertTrue(p95 < 0.02, "95th percentile round-trip error $p95 rad")
 		assertTrue(missing < 40, "$missing of 400 random points had no image")
+	}
+
+	@Test
+	fun `secondary images round-trip through traced rays`() {
+		// The secondary image: sweeping 2π − Φ (launched toward the other side). Its error that shows
+		// is in the launch angle: the round trip's error in Φ times how fast ψ changes with it (images near the photon
+		// ring are squeezed, so a sizeable Φ error is a tiny one on screen).
+		val random = java.util.Random(11)
+		val errors = ArrayList<Double>()
+		var missing = 0
+		repeat(400) {
+			val rc = 3.0 + random.nextDouble() * 60.0
+			val rp = 1.6 + random.nextDouble() * 60.0
+			val phi = random.nextDouble() * PI
+			val psi = SchwarzschildImages.sampleSecondary(secondary, n0, nP, nPhi, 1.0 / rc, 1.0 / rp, phi)
+			if (psi.isNaN()) {
+				missing++
+				return@repeat
+			}
+			val step = 1e-3
+			val rate = abs(SchwarzschildImages.sampleSecondary(secondary, n0, nP, nPhi, 1.0 / rc, 1.0 / rp, phi + step) - psi) / step
+			val sweep = 2.0 * PI - phi
+			val off = abs(reached(1.0 / rc, 1.0 / rp, psi, sweep) - sweep)
+			errors += if (off.isNaN()) 1.0 else off * rate
+		}
+		errors.sort()
+		val p95 = errors[(errors.size * 0.95).toInt()]
+		println("secondary round trip: ${errors.size} images, $missing without; launch angle error median ${errors[errors.size / 2]}, p95 $p95, worst ${errors.last()}")
+		assertTrue(p95 < 2e-3, "95th percentile launch angle error $p95 rad")
+		assertTrue(missing < 40, "$missing of 400 random points had no secondary image")
 	}
 
 	@Test

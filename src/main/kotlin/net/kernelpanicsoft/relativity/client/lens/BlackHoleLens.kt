@@ -423,6 +423,9 @@ object BlackHoleLens {
 			it.setTexture("RelativityKerrPaths", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
 			KerrImageMap.ensureTexture()
 			it.setTexture("RelativityKerrMap", GL12.GL_TEXTURE_3D, KerrImageMap.texture)
+			// (Every 3D sampler it declares needs a 3D texture, even unread: one left on unit 0, with the block atlas
+			// there, invalidates the draw, and the frame shows the atlas.)
+			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: LensVoxels.main.light)
 		}
 		val atlas = minecraft.textureManager.getTexture(net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS).id
 		for (shader in listOfNotNull(lens) + tables) {

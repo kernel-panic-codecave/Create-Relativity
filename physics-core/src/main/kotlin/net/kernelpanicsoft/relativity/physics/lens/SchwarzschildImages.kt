@@ -1,8 +1,10 @@
 package net.kernelpanicsoft.relativity.physics.lens
 
 import kotlin.math.PI
+import kotlin.math.asin
 import kotlin.math.cos
 import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.sqrt
 
 /**
@@ -11,9 +13,10 @@ import kotlin.math.sqrt
  * By symmetry the light from a point P to the camera stays in the plane through the hole, the camera and P. In it, put
  * the camera at polar angle 0 and distance r_c, and P at distance r_P and polar angle Φ ∈ [0, π]. The light P sends to
  * the camera's **primary image** leaves the camera (traced backwards) at angle ψ from the inward radial, toward P's
- * side; [launchAngle] finds that ψ. Secondary images (the long way round) aren't covered; the lens pass draws those.
+ * side, sweeping Φ round the hole; [buildTable]. Its **secondary image** goes the long way round, the other side: it
+ * sweeps 2π − Φ, leaving toward the side away from P, just outside the critical angle; [buildSecondaryTable].
  *
- * Rays from the camera are followed with the orbit equation u'' = −u + (3/2)u² (u = r_s/r) until they've swept π.
+ * Rays from the camera are followed with the orbit equation u'' = −u + (3/2)u² (u = r_s/r) until they've swept 2π.
  * A target radius farther out than the camera (u_P ≤ u₀) is crossed once, on the way out; one closer in is crossed
  * on the way in and, by rays that turn around before reaching the hole, again on the way out. Along that sequence of
  * crossings the swept angle grows monotonically, so it can be inverted.
@@ -24,6 +27,9 @@ object SchwarzschildImages {
 	/** Nearest the table goes to infinity: 10⁴ r_s, where light is effectively straight. At u = 0 nothing is ever crossed. */
 	const val MIN_U = 1e-4
 
+	/** How far rays are followed round the hole: a full turn (the secondary images sweep up to it). */
+	const val SWEEP = 2.0 * PI
+
 	/** Table axes, shared with the shader: x = √u₀, y = √u_P, z = Φ/π, each sampled at texel centres over [0, 1]. */
 	fun u0At(x: Double) = (x * x).coerceIn(MIN_U, 0.999)
 
@@ -33,7 +39,7 @@ object SchwarzschildImages {
 
 	/**
 	 * Swept angle at each crossing of each target u in [targets] (ascending), by the ray leaving u₀ at angle [psi],
-	 * up to angle π + margin. Result[i] holds the crossings of targets[i] in order (at most two).
+	 * up to angle [SWEEP] + margin. Result[i] holds the crossings of targets[i] in order (at most two).
 	 */
 	fun crossings(u0: Double, psi: Double, targets: DoubleArray): Array<DoubleArray> {
 		val found = Array(targets.size) { DoubleArray(2) { Double.NaN } }
@@ -51,7 +57,7 @@ object SchwarzschildImages {
 		var u = u0
 		var du = sqrt(maxOf(invB2 - u0 * u0 + u0 * u0 * u0, 0.0)) * if (cos(psi) > 0) 1.0 else -1.0
 		var phi = 0.0
-		val limit = PI + 0.05
+		val limit = SWEEP + 0.05
 		while (phi < limit) {
 			val h = STEP
 			val k1u = du
@@ -110,8 +116,8 @@ object SchwarzschildImages {
 		val targets = DoubleArray(nP) { uPAt(it / (nP - 1.0)) }
 		java.util.stream.IntStream.range(0, n0).parallel().forEach { i ->
 			val u0 = u0At(i / (n0 - 1.0))
-			val psis = DoubleArray(rays) { PI * (it + 0.5) / rays }
-			val hits = Array(rays) { crossings(u0, psis[it], targets) }
+			val psis = launchAngles(u0, rays)
+			val hits = Array(psis.size) { crossings(u0, psis[it], targets) }
 			for (j in 0 until nP) {
 				val curve = curve(u0, targets[j], psis, hits, j)
 				// On the hole-camera line the light runs radially (straight in or straight out): no correction. The
@@ -125,6 +131,68 @@ object SchwarzschildImages {
 			}
 		}
 		return data
+	}
+
+	/** The critical launch angle at camera u₀ (from the inward radial: light launched closer to it falls in), or NaN
+	 * inside the photon sphere. sin ψc = (3√3/2) u₀ √(1 − u₀): the critical impact parameter (3√3/2) r_s. */
+	fun criticalAngle(u0: Double): Double {
+		if (u0 >= 2.0 / 3.0) return Double.NaN
+		return asin((1.5 * sqrt(3.0) * u0 * sqrt(1.0 - u0)).coerceAtMost(1.0))
+	}
+
+	/**
+	 * Builds the secondary-image table, laid out as [buildTable]'s (x √u₀, y √u_P, z Φ/π: the point's own angle): each
+	 * entry ln(ψ − ψc), the secondary image's launch angle (sweeping 2π − Φ, toward the side away from P) past the
+	 * critical angle [criticalAngle], which shrinks by about a constant factor per angle swept, so its log interpolates
+	 * almost linearly; or [NONE] (the camera inside the photon sphere, P inside it, or no such image).
+	 */
+	fun buildSecondaryTable(n0: Int, nP: Int, nPhi: Int, rays: Int = 1024): FloatArray {
+		val data = FloatArray(n0 * nP * nPhi) { NONE }
+		val targets = DoubleArray(nP) { uPAt(it / (nP - 1.0)) }
+		java.util.stream.IntStream.range(0, n0).parallel().forEach { i ->
+			val u0 = u0At(i / (n0 - 1.0))
+			val critical = criticalAngle(u0)
+			if (critical.isNaN()) return@forEach
+			val psis = launchAngles(u0, rays)
+			val hits = Array(psis.size) { crossings(u0, psis[it], targets) }
+			for (j in 0 until nP) {
+				val curve = curve(u0, targets[j], psis, hits, j)
+				for (k in 0 until nPhi) {
+					val psi = invert(curve, 2.0 * PI - phiAt(k / (nPhi - 1.0)))
+					if (!psi.isNaN() && psi > critical) data[(k * nP + j) * n0 + i] = ln(psi - critical).toFloat()
+				}
+			}
+		}
+		return data
+	}
+
+	/** The secondary image's launch angle from a [buildSecondaryTable] table, as the shader reads it; NaN where none. */
+	fun sampleSecondary(table: FloatArray, n0: Int, nP: Int, nPhi: Int, u0: Double, uP: Double, phi: Double): Double {
+		val critical = criticalAngle(u0)
+		if (critical.isNaN()) return Double.NaN
+		val logOffset = trilinear(table, n0, nP, nPhi, u0, uP, phi) ?: return Double.NaN
+		return critical + kotlin.math.exp(logOffset)
+	}
+
+	/**
+	 * The launch angles the table's rays leave at: [rays] evenly over 0 .. π, and as many again packed round the critical
+	 * angle (the photon sphere's: light leaving just outside it winds round the hole, so the swept angle grows without
+	 * bound there and the secondary images all come from a sliver of launch angles), geometrically closer to it on both
+	 * sides. Ascending.
+	 */
+	fun launchAngles(u0: Double, rays: Int): DoubleArray {
+		val even = DoubleArray(rays) { PI * (it + 0.5) / rays }
+		// Critical impact parameter (3√3/2) r_s: sin ψc = (3√3/2) u₀ √(1 − u₀), from the inward radial.
+		val sinCritical = 1.5 * sqrt(3.0) * u0 * sqrt(1.0 - u0)
+		if (sinCritical >= 1.0) return even
+		val critical = asin(sinCritical)
+		val half = rays / 2
+		val packed = DoubleArray(2 * half) { n ->
+			val k = n % half
+			val offset = 1e-7 * Math.pow(0.3 / 1e-7, k / (half - 1.0))
+			if (n < half) critical - offset else critical + offset
+		}
+		return (even + packed).filter { it > 0.0 && it < PI }.sorted().toDoubleArray()
 	}
 
 	/** The crossings of target j as (swept angle, ψ) points in the order along which the angle grows. */
@@ -189,22 +257,26 @@ object SchwarzschildImages {
 
 	/** Launch angle from a [buildTable] table by trilinear lookup of the correction, as the shader does; NaN where any corner has no image. */
 	fun sample(table: FloatArray, n0: Int, nP: Int, nPhi: Int, u0: Double, uP: Double, phi: Double): Double {
-		if (uP >= 1.0 || u0 >= 1.0) return Double.NaN // inside the horizon
+		val sum = trilinear(table, n0, nP, nPhi, u0, uP, phi) ?: return Double.NaN
+		return flatAngle(u0.coerceAtLeast(MIN_U), uP.coerceAtLeast(MIN_U), phi) + sum
+	}
+
+	/** [table] (either kind) at (u₀, u_P, Φ) by trilinear interpolation, as the shader does; null where any corner is [NONE]. */
+	private fun trilinear(table: FloatArray, n0: Int, nP: Int, nPhi: Int, u0: Double, uP: Double, phi: Double): Double? {
+		if (uP >= 1.0 || u0 >= 1.0) return null // inside the horizon
 		val fx = (sqrt(u0) * (n0 - 1)).coerceIn(0.0, n0 - 1.0)
 		val fy = (sqrt(uP) * (nP - 1)).coerceIn(0.0, nP - 1.0)
 		val fz = (phi / PI * (nPhi - 1)).coerceIn(0.0, nPhi - 1.0)
 		val x0 = floor(fx).toInt().coerceAtMost(n0 - 2)
 		val y0 = floor(fy).toInt().coerceAtMost(nP - 2)
 		val z0 = floor(fz).toInt().coerceAtMost(nPhi - 2)
-		val u0c = u0.coerceAtLeast(MIN_U)
-		val uPc = uP.coerceAtLeast(MIN_U)
 		var sum = 0.0
 		for (dz in 0..1) for (dy in 0..1) for (dx in 0..1) {
 			val v = table[((z0 + dz) * nP + (y0 + dy)) * n0 + (x0 + dx)]
-			if (v <= NONE) return Double.NaN
+			if (v <= NONE) return null
 			val w = (if (dx == 0) 1 - (fx - x0) else fx - x0) * (if (dy == 0) 1 - (fy - y0) else fy - y0) * (if (dz == 0) 1 - (fz - z0) else fz - z0)
 			sum += w * v
 		}
-		return flatAngle(u0c, uPc, phi) + sum
+		return sum
 	}
 }
