@@ -6,6 +6,7 @@
   "client": [
     "client.LevelRendererMixin",
     "client.LevelRendererSecondImagesMixin",
+    "client.BufferUploaderMixin",
     "client.BlockEntityRenderDispatcherMixin",
     "client.create.AnimationTickHolderMixin",
     "client.create.RotatingInstanceMixin",

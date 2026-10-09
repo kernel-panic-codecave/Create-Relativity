@@ -163,6 +163,18 @@ object SchwarzschildImages {
 				}
 			}
 		}
+		// Cameras inside the photon sphere have none; their rows take the last row outside it, so a camera just outside
+		// interpolates there instead of finding no image (sampleSecondary still answers none inside).
+		val lastOutside = (0 until n0).last { i -> u0At(i / (n0 - 1.0)) < 2.0 / 3.0 }
+		for (i in lastOutside + 1 until n0) for (k in 0 until nPhi) for (j in 0 until nP) {
+			data[(k * nP + j) * n0 + i] = data[(k * nP + j) * n0 + lastOutside]
+		}
+		// The same for points inside it (tabled only from outside: their light leaves steeply, on the captured side of the
+		// critical angle), so a point just inside, the camera's own body by the photon sphere, still has one.
+		val lastPointOutside = (0 until nP).last { j -> uPAt(j / (nP - 1.0)) < 2.0 / 3.0 }
+		for (j in lastPointOutside + 1 until nP) for (k in 0 until nPhi) for (i in 0 until n0) {
+			data[(k * nP + j) * n0 + i] = data[(k * nP + lastPointOutside) * n0 + i]
+		}
 		return data
 	}
 

@@ -1205,6 +1205,59 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * The back of your own head: the camera just outside a hole's photon sphere, looking along the circular orbit, sees
+	 * light that left its own body and went round the hole (the player's secondary image, VertexLens.drawSelfSecondImage).
+	 * Screenshots with it and without; how much of the picture it changes.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.selfImage() {
+		if (!ClientTestInput.selected("selfImage")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(8)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode creative @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false", "tick freeze",
+			)) command(command)
+			command("relativity bh clear")
+			// A big hole (r_s 32, at y = 40): the tides at the photon sphere go as 1 / r_s^2, and round a small one they tear
+			// the player apart. The eye just outside the photon sphere (1.502 r_s: further out the image is a sub-pixel line) on its -x
+			// side, looking along +z (the orbit).
+			command("relativity bh create 0.5 40 0.5 32.0 0")
+			val eyeHeight = computeOnClient { it.player!!.eyeHeight.toDouble() }
+			command("tp @a ${0.5 - 1.502 * 32} ${40.0 - eyeHeight} 0.5 0 0")
+			runOnClient { it.player!!.abilities.flying = true; it.player!!.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			val shots = HashMap<Boolean, java.nio.file.Path>()
+			for ((label, yaw) in listOf("along the orbit" to 0f, "toward the hole" to -90f)) {
+				runOnClient { it.player!!.yRot = yaw; it.player!!.yRotO = yaw; it.player!!.xRot = 0f; it.player!!.xRotO = 0f }
+				for (on in listOf(false, true)) {
+					runOnClient { VertexLens.selfImage = on }
+					waitTicks(5)
+					shots[on] = takeScreenshot("self_image_${label.replace(' ', '_')}_$on")
+				}
+				val changed = Files.newInputStream(shots[false]!!).use { NativeImage.read(it) }.use { x ->
+					Files.newInputStream(shots[true]!!).use { NativeImage.read(it) }.use { y ->
+						var differ = 0L
+						for (j in 0 until x.height) for (i in 0 until x.width) if (x.getPixelRGBA(i, j) != y.getPixelRGBA(i, j)) differ += 1
+						differ.toDouble() / (x.width.toLong() * x.height)
+					}
+				}
+				CreateRelativity.LOGGER.info("Self image, looking {}: the player's secondary image changes {}% of the picture (body stretch {})", label, "%.2f".format(100 * changed),
+					computeOnClient { net.kernelpanicsoft.relativity.spacetime.SpacetimeAttachments.bodyStretch.get(it.player!!) })
+			}
+			runOnClient { VertexLens.selfImage = false }
+		}
+	}
+
+	/**
 	 * Secondary images drawn as geometry (VertexLens.drawSecondImages) round a non-spinning hole: screenshots of the vertex
 	 * lens alone and of the whole lens with them on and off, how much of the picture they change (the post pass traced
 	 * the same images per pixel before, so the whole lens should barely change), and the frame rate either way.
@@ -1248,6 +1301,19 @@ class LensClientGameTest {
 					val z = kotlin.math.round(10 * kotlin.math.sin(angle)).toInt()
 					level.setBlock(BlockPos(x, -57, z), cog.defaultBlockState(), 2)
 					for (y in -60..-58) level.setBlock(BlockPos(x, y, z), shaft.defaultBlockState(), 2)
+				}
+				// And entities (vanilla draws them batched, BufferUploader): armour stands in coloured armour, some sheep.
+				for (k in 0 until 8) {
+					val angle = k * Math.PI / 4 + 0.2
+					val stand = net.minecraft.world.entity.EntityType.ARMOR_STAND.create(level) ?: continue
+					stand.moveTo(0.5 + 6 * kotlin.math.cos(angle), -60.0, 0.5 + 6 * kotlin.math.sin(angle), 0f, 0f)
+					stand.setItemSlot(net.minecraft.world.entity.EquipmentSlot.HEAD, net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.GOLDEN_HELMET))
+					stand.setItemSlot(net.minecraft.world.entity.EquipmentSlot.CHEST, net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND_CHESTPLATE))
+					level.addFreshEntity(stand)
+					val sheep = net.minecraft.world.entity.EntityType.SHEEP.create(level) ?: continue
+					sheep.moveTo(0.5 + 13 * kotlin.math.cos(angle + 0.4), -60.0, 0.5 + 13 * kotlin.math.sin(angle + 0.4), 0f, 0f)
+					sheep.setNoAi(true)
+					level.addFreshEntity(sheep)
 				}
 			}
 			command("tick freeze")

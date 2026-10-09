@@ -41,6 +41,8 @@ const vec3 RELATIVITY_MAP_SIZE = vec3(128.0, 64.0, 48.0); // KerrImageMap.WIDTH,
 // Whether this draw places vertices at their secondary images ([11].y bit 2).
 bool relativitySecond() { return RelativityLensData[11].y > 1.5; }
 
+
+
 int relativityRuntimeZero() { return int(min(RelativityLensData[1].w, 0.0)); }
 
 const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's diagonal
@@ -735,7 +737,9 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     float d = length(unbent);
     vec3 hole = RelativityLensData[0].xyz;
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
-    if (holeCentre && d < RELATIVITY_NEAR_BLEND * length(hole)) return false;
+    // (Close to the camera the primary images are placed by the near march, not checked; the secondary ones always are:
+    // the player's own body, round the camera, is all triangles across the ring.)
+    if (holeCentre && d < RELATIVITY_NEAR_BLEND * length(hole) && !relativitySecond()) return false;
     vec3 seen;
     int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;

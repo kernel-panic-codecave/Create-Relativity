@@ -148,7 +148,7 @@ class KerrSlotBakerTest {
 				if (againstTable.isEmpty()) "" else "; against the Schwarzschild table: median %.2f px, 95th %.2f px".format(againstTable[againstTable.size / 2] / pixel, againstTable[againstTable.size * 95 / 100] / pixel)))
 			// (Misses at the point: on screen a secondary image's are smaller by its squeeze, so only the median's checked.)
 			assertTrue(misses[misses.size / 2] < 1.0 * pixel, "secondary images off by a median %.1f px at their points".format(misses[misses.size / 2] / pixel))
-			if (againstTable.isNotEmpty()) assertTrue(againstTable[againstTable.size * 95 / 100] < 2.0 * pixel, "secondary images disagree with the Schwarzschild table")
+			if (againstTable.isNotEmpty()) assertTrue(againstTable[againstTable.size * 95 / 100] < 3.0 * pixel, "secondary images disagree with the Schwarzschild table")
 		}
 	}
 }

@@ -164,7 +164,11 @@ object VertexLens {
 	private fun onRenderStage(event: RenderLevelStageEvent) {
 		when (event.stage) {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
-			RenderLevelStageEvent.Stage.AFTER_LEVEL -> setEnabled(false)
+			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
+			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
+				setEnabled(false)
+				secondsWanted = false
+			}
 			else -> Unit
 		}
 	}
@@ -270,6 +274,50 @@ object VertexLens {
 
 	/** Whether this frame's level draws its secondary images ([drawSecondImages]): a non-spinning hole (for now). */
 	private var secondsWanted = false
+
+	/**
+	 * Whether an immediate draw (vanilla's batched entities, block entities, particles: BufferUploader) made with
+	 * [projection] should be drawn again at its secondary images: while the level is drawn with them, and only for the
+	 * level's own projection (not the hand, GUI items, other views; those would be drawn twice on top of themselves).
+	 */
+	@JvmStatic
+	fun wantsImmediateSecondImages(projection: Matrix4f): Boolean =
+		secondsWanted && !drawingSecondImages && projection.equals(lastProjection, 1e-6f)
+
+	/** The player's own body drawn for its secondary image (its own buffers: flushed in that mode only). */
+	private val selfBuffers by lazy { net.minecraft.client.renderer.MultiBufferSource.immediate(com.mojang.blaze3d.vertex.ByteBufferBuilder(1 shl 16)) }
+
+	/**
+	 * In first person the game doesn't draw the player at all: here it's drawn for its secondary image alone, the light
+	 * that leaves it and comes round the hole back to the eye (by the photon sphere, looking along the orbit: the back of
+	 * your own head). Its primary image (inside the camera) isn't drawn.
+	 */
+	private fun drawSelfSecondImage(partialTick: Float) {
+		if (!secondsWanted || !selfImage) return
+		val minecraft = Minecraft.getInstance()
+		val camera = minecraft.gameRenderer.mainCamera
+		val player = minecraft.player ?: return
+		if (camera.isDetached || camera.entity !== player || player.isSpectator) return
+		val dispatcher = minecraft.entityRenderDispatcher
+		val x = net.minecraft.util.Mth.lerp(partialTick.toDouble(), player.xOld, player.x) - camera.position.x
+		val y = net.minecraft.util.Mth.lerp(partialTick.toDouble(), player.yOld, player.y) - camera.position.y
+		val z = net.minecraft.util.Mth.lerp(partialTick.toDouble(), player.zOld, player.z) - camera.position.z
+		val yaw = net.minecraft.util.Mth.lerp(partialTick, player.yRotO, player.yRot)
+		val light = dispatcher.getPackedLightCoords(player, partialTick)
+		// (All of it in that mode: a batch is drawn as soon as the model moves on to another render type, mid-render.)
+		drawSecondImages {
+			dispatcher.render(player, x, y, z, yaw, partialTick, com.mojang.blaze3d.vertex.PoseStack(), selfBuffers, light)
+			selfBuffers.endBatch()
+		}
+	}
+
+	/**
+	 * Draws the player's own secondary image in first person ([drawSelfSecondImage]). Off: it's the famous "back of your
+	 * own head" by the photon sphere, but light that loops a full turn is squeezed about e^(2 pi) times, so a head's
+	 * image is a ring round the shadow a hundredth of a pixel thick, wherever the camera is (measured, selfImage test).
+	 */
+	@JvmField
+	var selfImage = false
 
 	/** True while a draw places vertices at their secondary images. */
 	@JvmStatic
