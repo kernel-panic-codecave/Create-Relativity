@@ -19,14 +19,13 @@ import org.lwjgl.system.MemoryStack
  * hole) changes. Its own GL program and framebuffer: it runs in the middle of the level render, so it leaves all state
  * as it found it.
  */
-object KerrPaths {
-	/** Two groups of 8 (the most one draw writes), each drawn by its own pass (kerr_paths.fsh's Group). */
-	const val LAYERS = 16
+object KerrPaths : PathTableSolver()
 
-	/** The table's size: azimuth columns, angle rows. */
-	const val WIDTH = 384
-	const val HEIGHT = 512
-
+/**
+ * A path table and its drawing state ([KerrPaths] is the live one; the slot baker runs its own for cameras elsewhere).
+ * The GL program is shared.
+ */
+open class PathTableSolver {
 	/** True if the last [draw] redrew any of the table (it stops once caught up with an unchanged camera and hole). */
 	var changed = false
 		private set
@@ -46,15 +45,11 @@ object KerrPaths {
 	var height = 0
 		private set
 
-	private var program = 0
 	private var framebuffer = 0
 	private var framebuffer2 = 0
-	private var vao = 0
 	private var headCopy = 0
 	private var headWidth = 0
 	private var headHeight = 0
-	private var failed = false
-	private val uniforms = HashMap<String, Int>()
 
 	/**
 	 * Draws the table round the lens centre [holeGame] (camera-relative, game axes; the dominant source) of size [rs]
@@ -80,7 +75,7 @@ object KerrPaths {
 		lastKey = key
 		ensureTarget(width, height)
 		// (A whole redraw is spread over two frames: all of it at once can stall the GPU.)
-		val rows = if (fresh || whole) height / 2 else rowsPerFrame.coerceIn(1, height)
+		val rows = if ((fresh || whole) && rowsPerFrame >= height / 4) height / 2 else rowsPerFrame.coerceIn(1, height)
 		lastDraw = floatArrayOf(holeGame.x, holeGame.y, holeGame.z, rs, pathRadius)
 		val previousFramebuffer = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING)
 		val previousProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
@@ -188,7 +183,6 @@ object KerrPaths {
 		if (texture == 0) ensureTarget(16, 16)
 	}
 
-	private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
 
 	private fun ensureTarget(width: Int, height: Int) {
 		if (texture != 0 && width == this.width && height == this.height) return
@@ -229,65 +223,81 @@ object KerrPaths {
 		}
 	}
 
-	/**
-	 * Compiles and links the program now (at startup: the driver takes a while over it, and the first frame with a hole
-	 * in view shouldn't).
-	 */
-	fun warmUp() {
-		ensureProgram()
-	}
+	companion object {
+		/** Two groups of 8 (the most one draw writes), each drawn by its own pass (kerr_paths.fsh's Group). */
+		const val LAYERS = 16
 
-	private fun ensureProgram(): Boolean {
-		if (program != 0) return true
-		if (failed) return false
-		val resources = Minecraft.getInstance().resourceManager
-		fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
-			.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
-		val kerr = text("pinwheel/shaders/include/kerr.glsl")
-		val core = text("pinwheel/shaders/include/vertex_lens_core.glsl") // the table's directions
-		val body = text("shaders/relativity/kerr_paths.fsh")
-		if (kerr == null || core == null || body == null) {
-			failed = true
-			return false
+		/** The table's size: azimuth columns, angle rows. */
+		const val WIDTH = 384
+		const val HEIGHT = 512
+
+		private var program = 0
+		private var vao = 0
+		private var failed = false
+		private val uniforms = HashMap<String, Int>()
+
+		private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
+
+		/**
+		 * Compiles and links the program now (at startup: the driver takes a while over it, and the first frame with a hole
+		 * in view shouldn't).
+		 */
+		fun warmUp() {
+			ensureProgram()
 		}
-		val vertexSource = """
-			#version 330 core
-			out vec2 texCoord;
-			void main() {
-			    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-			    texCoord = p;
-			    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+
+		private fun ensureProgram(): Boolean {
+			if (program != 0) return true
+			if (failed) return false
+			val resources = Minecraft.getInstance().resourceManager
+			fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
+				.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
+			val kerr = text("pinwheel/shaders/include/kerr.glsl")
+			val core = text("pinwheel/shaders/include/vertex_lens_core.glsl") // the table's directions
+			val body = text("shaders/relativity/kerr_paths.fsh")
+			if (kerr == null || core == null || body == null) {
+				failed = true
+				return false
 			}
-		""".trimIndent()
-		val fragmentSource = "#version 330 core\n#define RELATIVITY_PATHS\n$kerr\n$core\n$body"
-		val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, fragmentSource) ?: return false.also { failed = true }
-		val id = GL20.glCreateProgram()
-		GL20.glAttachShader(id, vertex)
-		GL20.glAttachShader(id, fragment)
-		GL20.glLinkProgram(id)
-		GL20.glDeleteShader(vertex)
-		GL20.glDeleteShader(fragment)
-		if (GL20.glGetProgrami(id, GL20.GL_LINK_STATUS) != GL11.GL_TRUE) {
-			CreateRelativity.LOGGER.error("Kerr path table program didn't link: {}", GL20.glGetProgramInfoLog(id))
-			GL20.glDeleteProgram(id)
-			failed = true
-			return false
+			val vertexSource = """
+				#version 330 core
+				out vec2 texCoord;
+				void main() {
+				    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+				    texCoord = p;
+				    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+				}
+			""".trimIndent()
+			val fragmentSource = "#version 330 core\n#define RELATIVITY_PATHS\n$kerr\n$core\n$body"
+			val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
+			val fragment = compile(GL20.GL_FRAGMENT_SHADER, fragmentSource) ?: return false.also { failed = true }
+			val id = GL20.glCreateProgram()
+			GL20.glAttachShader(id, vertex)
+			GL20.glAttachShader(id, fragment)
+			GL20.glLinkProgram(id)
+			GL20.glDeleteShader(vertex)
+			GL20.glDeleteShader(fragment)
+			if (GL20.glGetProgrami(id, GL20.GL_LINK_STATUS) != GL11.GL_TRUE) {
+				CreateRelativity.LOGGER.error("Kerr path table program didn't link: {}", GL20.glGetProgramInfoLog(id))
+				GL20.glDeleteProgram(id)
+				failed = true
+				return false
+			}
+			program = id
+			vao = GL30.glGenVertexArrays()
+			return true
 		}
-		program = id
-		vao = GL30.glGenVertexArrays()
-		return true
-	}
 
-	private fun compile(type: Int, source: String): Int? {
-		val shader = GL20.glCreateShader(type)
-		GL20.glShaderSource(shader, source)
-		GL20.glCompileShader(shader)
-		if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) {
-			CreateRelativity.LOGGER.error("Kerr path table shader didn't compile: {}", GL20.glGetShaderInfoLog(shader))
-			GL20.glDeleteShader(shader)
-			return null
+		private fun compile(type: Int, source: String): Int? {
+			val shader = GL20.glCreateShader(type)
+			GL20.glShaderSource(shader, source)
+			GL20.glCompileShader(shader)
+			if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) {
+				CreateRelativity.LOGGER.error("Kerr path table shader didn't compile: {}", GL20.glGetShaderInfoLog(shader))
+				GL20.glDeleteShader(shader)
+				return null
+			}
+			return shader
 		}
-		return shader
 	}
 }

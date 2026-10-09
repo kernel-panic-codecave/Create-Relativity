@@ -8,6 +8,7 @@ import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
 import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
+import net.kernelpanicsoft.relativity.client.lens.KerrSlots
 import net.kernelpanicsoft.relativity.client.lens.LensVoxels
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos
@@ -909,6 +910,8 @@ class LensClientGameTest {
 		// (hole x y z, r_s, spin; camera x y z, yaw, pitch)
 		val scenes = listOf(
 			"spinning, from 7 r_s" to doubleArrayOf(0.5, -54.0, 0.5, 2.0, 0.9, -13.5, -54.0, 0.5, -90.0, 10.0),
+			// Exactly on a baked slot (distance 1.5 x 1.09^18 r_s, height angle 1.5 rad): the blend is that slot alone.
+			"spinning, on a slot" to doubleArrayOf(0.5, -54.0, 0.5, 2.0, 0.9, -13.615911902353254, -54.61897230525466, 0.5, -90.0, 10.0),
 			"spinning, from 4 r_s" to doubleArrayOf(0.5, -48.0, 0.5, 6.0, 0.9, -23.5, -48.0, 0.5, -90.0, 15.0),
 			"still, from 3 r_s" to doubleArrayOf(0.5, -50.0, 0.5, 4.0, 0.0, -11.5, -50.0, 0.5, -90.0, 20.0),
 			// The performance test's large spinning hole among floating blocks (where giant slabs showed).
@@ -937,6 +940,13 @@ class LensClientGameTest {
 				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO; KerrImageMap.invalidate() }
 				waitTicks(40)
 				settle()
+				// A spinning hole: until the baked camera slots round the camera take over (KerrSlots).
+				if (s[4] != 0.0) {
+					var waited = 0
+					while (waited < 600 && !computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.blending }) { waitTicks(10); waited += 10 }
+					CreateRelativity.LOGGER.info("Vertex accuracy, {}: blending baked slots: {} after {} ticks ({} baked)", label, computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.blending }, waited, computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.bakedSlots })
+					waitTicks(10)
+				}
 				val shotName = "vertex_accuracy_${label.replace(Regex("[^a-z0-9]+"), "_")}"
 				takeScreenshot(shotName)
 				// The vertex lens alone (no post pass), with and without the pixel check: what it removes.
@@ -1050,6 +1060,88 @@ class LensClientGameTest {
 						real.getOrElse((real.size * 0.99).toInt().coerceAtMost(real.size - 1)) { 0.0 }, real.lastOrNull() ?: 0.0)
 				} + "\n  worst: " + worst.take(6).joinToString("; ") { "%.0f px %s at (%.1f, %.1f, %.1f)".format(it.first, it.second, it.third.x, it.third.y, it.third.z) }
 				CreateRelativity.LOGGER.info("Vertex accuracy, {} (camera at {}):\n{}\n  hidden with an image, why:\n    {}", label, eye, report, reasons.entries.joinToString("\n    ") { "${it.key} (${it.value})" })
+			}
+		}
+	}
+
+	/**
+	 * Whether baked camera slots (the image map for a few camera positions, blended) can stand in for solving every
+	 * frame: the image map read with the camera at two neighbouring slot positions (same direction from the hole, one
+	 * slot step apart in distance, or in height angle), blended for the camera between them, against the map solved
+	 * there; error in pixels, and images the blend loses.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.slotBlend() {
+		if (!ClientTestInput.selected("slotBlend")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(4)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false", "tick freeze",
+			)) command(command)
+			val hole = net.minecraft.world.phys.Vec3(0.5, -20.0, 0.5)
+			val rs = 2.0
+			command("relativity bh create ${hole.x} ${hole.y} ${hole.z} $rs 0.9")
+			val pixel = 2.0 * kotlin.math.tan(Math.toRadians(70.0) / 2.0) / 1504.0
+			// The settled map with the camera at distance r (r_s) and height angle theta (from up) from the hole.
+			fun mapAt(r: Double, theta: Double): Pair<FloatArray, net.minecraft.world.phys.Vec3> {
+				val eye = hole.add(-r * rs * kotlin.math.sin(theta), r * rs * kotlin.math.cos(theta), 0.0)
+				command("tp @a ${eye.x} ${eye.y - 1.62} ${eye.z} -90 0")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO; KerrImageMap.invalidate() }
+				waitTicks(80)
+				val camera = computeOnClient { it.gameRenderer.mainCamera.position }
+				return computeOnClient { KerrImageMap.readBack() } to camera
+			}
+			val rIn = run { val m = rs / 2; val a = 0.9 * m; 1.05 * (m + kotlin.math.sqrt(m * m - a * a)) }
+			val rOut = 80.0 * rs
+			for ((label, steps) in listOf(
+				"7 r_s, distance step 1.19x" to listOf(7.0 to 1.4, 7.0 * 1.19 to 1.4),
+				"7 r_s, distance step 1.09x" to listOf(7.0 to 1.4, 7.0 * 1.09 to 1.4),
+				"3 r_s, distance step 1.09x" to listOf(3.0 to 1.4, 3.0 * 1.09 to 1.4),
+				"7 r_s, height step 0.2 rad" to listOf(7.0 to 1.3, 7.0 to 1.5),
+				"7 r_s, height step 0.1 rad" to listOf(7.0 to 1.35, 7.0 to 1.45),
+			)) {
+				val (a, eyeA) = mapAt(steps[0].first, steps[0].second)
+				val (b, eyeB) = mapAt(steps[1].first, steps[1].second)
+				val (m, eyeM) = mapAt(kotlin.math.sqrt(steps[0].first * steps[1].first), (steps[0].second + steps[1].second) / 2)
+				val errors = ArrayList<Double>()
+				var lost = 0
+				var compared = 0
+				for (k in 0 until KerrImageMap.DEPTH) for (j in 0 until KerrImageMap.HEIGHT) for (i in 0 until KerrImageMap.WIDTH) {
+					val index = ((k * KerrImageMap.HEIGHT + j) * KerrImageMap.WIDTH + i) * 4
+					if (m[index + 3] < 0.5f) continue
+					compared += 1
+					if (a[index + 3] < 0.5f || b[index + 3] < 0.5f) { lost += 1; continue }
+					// The texel's point, and each camera's view of it.
+					val azimuth = ((i + 0.5) / KerrImageMap.WIDTH - 0.5) * 2 * Math.PI
+					val cosine = j.toDouble() / (KerrImageMap.HEIGHT - 1) * 2 - 1
+					val sine = kotlin.math.sqrt(maxOf(1 - cosine * cosine, 0.0))
+					val radius = rIn * Math.pow(rOut / rIn, k.toDouble() / (KerrImageMap.DEPTH - 1))
+					val point = hole.add(radius * sine * kotlin.math.cos(azimuth), radius * cosine, radius * sine * kotlin.math.sin(azimuth))
+					val game = point.subtract(eyeM)
+					val span = game.length()
+					// (Near the camera the vertex lens follows the light itself, not the map.)
+					if (span < 0.35 * eyeM.distanceTo(hole)) { compared -= 1; continue }
+					val straight = game.normalize()
+					val wa = 0.5
+					val blended = net.minecraft.world.phys.Vec3(
+						(a[index] * wa + b[index] * (1 - wa)).toDouble(), (a[index + 1] * wa + b[index + 1] * (1 - wa)).toDouble(), (a[index + 2] * wa + b[index + 2] * (1 - wa)).toDouble())
+					val truth = net.minecraft.world.phys.Vec3(m[index].toDouble(), m[index + 1].toDouble(), m[index + 2].toDouble())
+					val seenBlend = straight.add(blended.scale(span)).normalize()
+					val seenTrue = straight.add(truth.scale(span)).normalize()
+					errors += kotlin.math.acos(seenBlend.dot(seenTrue).coerceIn(-1.0, 1.0)) / pixel
+				}
+				errors.sort()
+				CreateRelativity.LOGGER.info("Slot blend, {}: {} texels with an image; the blend loses {} ({}%); error median {} px, 95% {} px, 99% {} px",
+					label, compared, lost, "%.1f".format(100.0 * lost / compared), "%.2f".format(errors[errors.size / 2]),
+					"%.1f".format(errors[(errors.size * 0.95).toInt()]), "%.1f".format(errors[(errors.size * 0.99).toInt()]))
 			}
 		}
 	}
@@ -1192,9 +1284,18 @@ class LensClientGameTest {
 				runOnClient { BlackHoleLens.timeGpu = true }
 				val fpsLens = fps()
 				val fpsLensMoving = fpsMoving()
-				val kerrMs = computeOnClient { "last drawn: Kerr paths %.1f ms, image map %.1f ms".format(VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis) }
+				val kerrMs = computeOnClient { "last drawn: Kerr paths %.1f ms, image map %.1f ms; slots: bake %.1f ms, blend %.1f ms, %d baked, blending %s".format(
+					VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis, KerrSlots.bakeTimer.millis, KerrSlots.blendTimer.millis, KerrSlots.bakedSlots, KerrSlots.blending) }
 				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }
 				val fpsVertex = fps()
+				runOnClient { VertexLens.pixelCheck = false }
+				val fpsNoCheck = fps()
+				runOnClient { KerrSlots.bakeNew = false }
+				val fpsNoBaking = fps()
+				runOnClient { KerrSlots.enabled = false }
+				val fpsNoSlots = fps()
+				runOnClient { VertexLens.pixelCheck = true; KerrSlots.enabled = true; KerrSlots.bakeNew = true }
+				lines += "%s, post pass cut: pixel check off %.0f fps; and no baking %.0f fps (blending %s); and slots off %.0f fps".format(name, fpsNoCheck, fpsNoBaking, computeOnClient { KerrSlots.blending }, fpsNoSlots)
 				runOnClient { VertexLens.kerrSolveOff = true }
 				val fpsPaths = fps()
 				runOnClient { VertexLens.kerrSolveOff = false; VertexLens.kerrOff = true }

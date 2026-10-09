@@ -176,6 +176,9 @@ object VertexLens {
 	private val sources = Array(3 * BlackHoleLens.MAX_SOURCES) { org.joml.Vector4f() }
 	private var jump = false
 
+	private var lastSlotted = false
+	private var virtualBuffer = 0
+
 	/** The hole the Kerr image map was last drawn for (a new one starts it over). */
 	private var mapHole: Any? = null
 
@@ -202,8 +205,12 @@ object VertexLens {
 		// A spinning hole or anything but holes: this frame's path table through every source, which the image map
 		// inverts. (Non-spinning holes alone keep the Schwarzschild image table.)
 		val (count, general) = BlackHoleLens.packSources(holes, others, camera, sources)
+		// A lone spinning hole: the live map from baked camera slots when they're ready (KerrSlots), no solving.
+		val lone = centre?.hole
+		val slotted = !perspective && lone != null && holes.size == 1 && others.isEmpty() && abs(lone.spin) >= MIN_KERR_SPIN &&
+			!kerrOff && !kerrSolveOff && KerrSlots.update(lone, camera)
 		var kerr = false
-		if (centre != null && general && !(kerrOff && others.isEmpty())) {
+		if (centre != null && general && !slotted && !(kerrOff && others.isEmpty())) {
 			val holeGame = Vector3f((centre.x - camera.x).toFloat(), (centre.y - camera.y).toFloat(), (centre.z - camera.z).toFloat())
 			// A jump (a teleport, a fast flight) redraws the tables whole; walking catches them up a slice a frame.
 			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
@@ -215,7 +222,8 @@ object VertexLens {
 			)
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
-		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null, kerr && !kerrSolveOff)
+		if (slotted) kerr = true
+		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null, kerr && !kerrSolveOff, if (slotted) KerrSlots.outer(lone!!) else null)
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)
@@ -226,9 +234,11 @@ object VertexLens {
 		// The image map the vertices read, solved on the path table (the block and the table bound for it).
 		KerrImageMap.ensureTexture()
 		if (!perspective) {
-			if (!kerr || centre?.key != mapHole) KerrImageMap.invalidate()
+			// (Switching between the blend and solving: the blend's grid reaches further, so the solver starts over.)
+			if (!kerr || centre?.key != mapHole || slotted != lastSlotted) KerrImageMap.invalidate()
 			mapHole = centre?.key
-			if (kerr && !kerrSolveOff) {
+			lastSlotted = slotted
+			if (kerr && !kerrSolveOff && !slotted) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
 				KerrImageMap.draw(KerrPaths.changed, jump, sources, count)
 				if (BlackHoleLens.timeGpu) mapTimer.end()
@@ -243,6 +253,31 @@ object VertexLens {
 	private fun pixelAngle(projection: Matrix4f): Float =
 		(2.0 / (projection.m11() * Minecraft.getInstance().window.height)).toFloat()
 
+	/**
+	 * The block for a virtual camera at [cameraRel] from [hole] (game axes, blocks), looking along no particular way (the
+	 * tables don't depend on it): for the slot baker ([KerrSlots]), with the image map reaching [mapOuter]. The live
+	 * block is uploaded again after, by the frame's own [beginLevel].
+	 */
+	internal fun uploadVirtual(hole: BlackHole, cameraRel: org.joml.Vector3dc, mapOuter: Double) {
+		val centre = centreOf(hole, emptyList(), hole.center) ?: return
+		// Its own buffer: rewriting the live one while the GPU may still read it would stall.
+		if (virtualBuffer == 0) {
+			virtualBuffer = GL15.glGenBuffers()
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, virtualBuffer)
+			GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, BLOCK_BYTES.toLong(), GL15.GL_DYNAMIC_DRAW)
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
+		}
+		upload(centre, hole.x + cameraRel.x(), hole.y + cameraRel.y(), hole.z + cameraRel.z(), Quaternionf(), lastProjection, false, true, mapOuter, virtualBuffer)
+	}
+
+	/** Binds [texture] as the path table the image map program reads (the slot baker's own, while it bakes). */
+	internal fun bindPathTable(texture: Int) {
+		val previous = GlStateManager._getActiveTexture()
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, texture)
+		GlStateManager._activeTexture(previous)
+	}
+
 	/** Switches lensing in the shaders on or off without changing the hole (e.g. around gizmos drawn after the lens). */
 	fun setEnabled(enabled: Boolean) {
 		if (buffer == 0) return
@@ -255,7 +290,7 @@ object VertexLens {
 		}
 	}
 
-	private fun upload(centre: Centre?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, kerr: Boolean) {
+	private fun upload(centre: Centre?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, kerr: Boolean, mapOuter: Double? = null, target: Int = buffer) {
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(BLOCK_BYTES / 4)
 			if (centre != null) {
@@ -280,7 +315,7 @@ object VertexLens {
 					data.put(c.x).put(c.y).put(c.z).put(0f)
 				}
 				val camR = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
-				val reach = pathRadius(centre.scale, camR)
+				val reach = mapOuter ?: pathRadius(centre.scale, camR)
 				// The pixel check's pixel angle; the image map: from just outside the horizon (or the centre's own inner
 				// radius) out to the paths' end.
 				data.put(pixelAngle(projection)).put(if (pixelCheck) 0f else 1f).put(centre.inner.toFloat()).put(reach.toFloat())
@@ -289,11 +324,11 @@ object VertexLens {
 				data.put(pixelAngle(projection)).put(if (pixelCheck) 0f else 1f).put(0f).put(0f)
 			}
 			data.position(0).limit(BLOCK_BYTES / 4)
-			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, target)
 			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0L, data)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
 		}
-		GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, binding, buffer)
+		GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, binding, target)
 	}
 
 	/** Creates the buffer and, once the table is built, its texture. False until both exist. */

@@ -612,7 +612,9 @@ const float RELATIVITY_NEAR_BLEND = 0.35;
 
 // The table's image of view-space point p: 1 placed (seen its direction), 2 nothing to bend, -1 hidden (behind the hole,
 // near its axis, or at a fold).
-int relativityFarImage(vec3 p, out vec3 seen) {
+// probe: also hide p where its image moves far faster than it (the stretch cut, three more map lookups: per vertex; the
+// pixel check, per pixel, leaves it out).
+int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     seen = normalize(p);
     bool nearAxis = false;
     int image = 1;
@@ -628,6 +630,10 @@ int relativityFarImage(vec3 p, out vec3 seen) {
         vec3 kerr;
         int found = relativityKerrMapImage(p, kerr);
         relativityLastFound = found;
+        if (found == 1 && !probe) {
+            seen = kerr;
+            return 1;
+        }
         if (found == 1) {
             // Where the image moves far more than the point does round p (a seam between texels on different branches
             // of the image, either side of the Einstein ring, or a stretch so steep straight edges can't follow it), a
@@ -669,7 +675,7 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     vec3 seen;
     int image = 1;
     if (nearness > 0.0) {
-        image = relativityFarImage(p, seen);
+        image = relativityFarImage(p, seen, true);
         if (image == 2 && nearness >= 1.0) return clip;
         if (image == 2) seen = normalize(p);
     }
@@ -718,7 +724,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
     if (holeCentre && d < RELATIVITY_NEAR_BLEND * length(hole)) return false;
     vec3 seen;
-    int image = relativityFarImage(unbent, seen);
+    int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;
     if (image < 0) return true;
     float angle = acos(clamp(dot(seen, normalize(bent)), -1.0, 1.0));

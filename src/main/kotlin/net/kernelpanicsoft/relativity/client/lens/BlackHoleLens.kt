@@ -155,8 +155,8 @@ object BlackHoleLens {
 		if (!warmedUp && minecraft.overlay == null) {
 			warmedUp = true
 			val start = System.nanoTime()
-			KerrPaths.warmUp()
-			KerrImageMap.warmUp()
+			PathTableSolver.warmUp()
+			ImageMapSolver.warmUp()
 			CreateRelativity.LOGGER.info("Lens programs compiled in {} ms", (System.nanoTime() - start) / 1_000_000)
 		}
 		if (!textureReady) {

@@ -19,24 +19,24 @@ import org.lwjgl.system.MemoryStack
  * solve), then copied back; while the camera moves only [layersPerFrame] layers a frame are, in turn.
  * Its own GL program and framebuffer; leaves all state as it found it.
  */
-object KerrImageMap {
-	const val WIDTH = 128 // azimuth (RELATIVITY_MAP_SIZE in vertex_lens_core.glsl)
-	const val HEIGHT = 64 // cos of the polar angle
-	const val DEPTH = 48  // radius
+object KerrImageMap : ImageMapSolver() {
+	const val WIDTH = ImageMapSolver.WIDTH
+	const val HEIGHT = ImageMapSolver.HEIGHT
+	const val DEPTH = ImageMapSolver.DEPTH
+}
 
+/**
+ * An image map and its solver state ([KerrImageMap] is the live one the world reads; the slot baker runs its own for
+ * cameras elsewhere). The GL program is shared.
+ */
+open class ImageMapSolver {
 	/** The live map ([LIVE]) and a scratch one each layer is solved into before being copied back. */
 	private val textures = IntArray(2)
 
 	/** Per texel, where along its path each image was (R32F; 99 none): the next solve starts there. Live and scratch. */
 	private val paths = IntArray(2)
-	private const val LIVE = 0
-	private const val SCRATCH = 1
 	private var previousValid = false
-	private var program = 0
 	private var framebuffer = 0
-	private var vao = 0
-	private var failed = false
-	private val uniforms = HashMap<String, Int>()
 
 	/** Layers solved per frame while the map catches up with the camera; the rest keep their last answer. */
 	@JvmField
@@ -61,14 +61,7 @@ object KerrImageMap {
 			GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, GL30.GL_R32F, WIDTH, HEIGHT, DEPTH, 0, GL11.GL_RED, GL11.GL_FLOAT, null as java.nio.ByteBuffer?)
 			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
 			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
-			textures[i] = GL11.glGenTextures()
-			GL11.glBindTexture(GL12.GL_TEXTURE_3D, textures[i])
-			GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, GL30.GL_RGBA32F, WIDTH, HEIGHT, DEPTH, 0, GL11.GL_RGBA, GL11.GL_FLOAT, null as java.nio.ByteBuffer?)
-			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR)
-			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
-			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT) // azimuth wraps round
-			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
-			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE)
+			textures[i] = newMapTexture()
 		}
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
 	}
@@ -80,10 +73,11 @@ object KerrImageMap {
 
 	/** Layers drawn since the path table last [changed][draw]: once all are, the map stands until it changes again. */
 	private var drawnSinceChange = 0
-
-	/** The most layers drawn in one frame, even for a whole redraw. */
-	private const val MAX_LAYERS_PER_FRAME = 8
 	private var repairPending = false
+
+	/** The most layers drawn in one frame, even for a whole redraw (the slot baker keeps it low: it's background work). */
+	@JvmField
+	var maxLayersPerFrame = 8
 	private var repairLeft = 0
 
 	/**
@@ -95,7 +89,7 @@ object KerrImageMap {
 		if (failed || !ensureProgram()) return false
 		if (changed || !previousValid) {
 			drawnSinceChange = 0
-			repairPending = true
+			repairPending = repairs
 		}
 		// Caught up: once more, every layer (a few a frame), with every earlier failure searched again against the
 		// finished path table; then the map stands.
@@ -104,7 +98,7 @@ object KerrImageMap {
 			if (!repairPending) return true
 			if (repairLeft <= 0) repairLeft = DEPTH
 			repair = true
-			repairLeft -= MAX_LAYERS_PER_FRAME
+			repairLeft -= maxLayersPerFrame
 			if (repairLeft <= 0) repairPending = false
 		}
 		ensureTexture()
@@ -157,7 +151,7 @@ object KerrImageMap {
 			// This frame's layers, in turn: each solved into the scratch textures, then copied into the live ones. Outermost
 			// first: each layer starts its search from the one just outside it (kerr_image_map.fsh), already this frame's.
 			// (Whole redraws too are spread over frames: all 48 layers at once can stall the GPU for seconds.)
-			val redraw = if (previousValid && !whole && !repair) layersPerFrame.coerceIn(1, DEPTH) else MAX_LAYERS_PER_FRAME
+			val redraw = if (previousValid && !whole && !repair) layersPerFrame.coerceIn(1, DEPTH) else maxLayersPerFrame
 			for (layer in DEPTH - 1 downTo 0) {
 				if (((layer - nextLayer) % DEPTH + DEPTH) % DEPTH >= redraw) continue
 				GL30.glFramebufferTextureLayer(GL30.GL_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[SCRATCH], 0, layer)
@@ -191,6 +185,41 @@ object KerrImageMap {
 		return true
 	}
 
+	/** Whether the map is whole for the path table it was last drawn against (caught up, repaired). */
+	val settled: Boolean
+		get() = previousValid && drawnSinceChange >= DEPTH && !repairPending
+
+	/**
+	 * A copy of the live map (a baked slot keeps it); this solver keeps its own, so the next bake (a neighbouring camera,
+	 * whose images are close) starts from these answers instead of from scratch.
+	 */
+	fun copyTexture(): Int {
+		ensureTexture()
+		val copy = newMapTexture()
+		if (framebuffer == 0) framebuffer = GL30.glGenFramebuffers()
+		val previousRead = GL11.glGetInteger(GL30.GL_READ_FRAMEBUFFER_BINDING)
+		GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, framebuffer)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, copy)
+		for (layer in 0 until DEPTH) {
+			GL30.glFramebufferTextureLayer(GL30.GL_READ_FRAMEBUFFER, GL30.GL_COLOR_ATTACHMENT0, textures[LIVE], 0, layer)
+			GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0)
+			GL12.glCopyTexSubImage3D(GL12.GL_TEXTURE_3D, 0, 0, 0, layer, 0, 0, WIDTH, HEIGHT)
+		}
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
+		GL30.glBindFramebuffer(GL30.GL_READ_FRAMEBUFFER, previousRead)
+		return copy
+	}
+
+	/** Solves every layer again from its current answers (a new path table drawn whole: the slot baker's next slot). */
+	fun restart() {
+		drawnSinceChange = 0
+		repairPending = repairs
+	}
+
+	/** Whether a map that has caught up gets the repair pass (every failure searched again); the slot baker skips it. */
+	@JvmField
+	var repairs = true
+
 	/** The live map's texels (x fastest, then y, then layer; RGBA), read back from the GPU (debug; GameTests). */
 	fun readBack(): FloatArray {
 		val data = FloatArray(WIDTH * HEIGHT * DEPTH * 4)
@@ -209,65 +238,92 @@ object KerrImageMap {
 		return data
 	}
 
-	private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
+	companion object {
+		const val WIDTH = 128 // azimuth (RELATIVITY_MAP_SIZE in vertex_lens_core.glsl)
+		const val HEIGHT = 64 // cos of the polar angle
+		const val DEPTH = 48  // radius
+		private const val LIVE = 0
+		private const val SCRATCH = 1
 
-	/**
-	 * Compiles and links the program now (at startup: the driver takes a while over it, and the first frame with a hole
-	 * in view shouldn't).
-	 */
-	fun warmUp() {
-		ensureProgram()
-	}
 
-	private fun ensureProgram(): Boolean {
-		if (program != 0) return true
-		if (failed) return false
-		val resources = Minecraft.getInstance().resourceManager
-		fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
-			.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
-		val kerr = text("pinwheel/shaders/include/kerr.glsl") // the sources, for the first guess
-		val core = text("pinwheel/shaders/include/vertex_lens_core.glsl")
-		val body = text("shaders/relativity/kerr_image_map.fsh")
-		if (kerr == null || core == null || body == null) {
-			failed = true
-			return false
+		private var program = 0
+		private var vao = 0
+		private var failed = false
+		private val uniforms = HashMap<String, Int>()
+
+		/** An empty map texture (RGBA32F, filtered, azimuth wrapping round). */
+		fun newMapTexture(): Int {
+			val id = GL11.glGenTextures()
+			GL11.glBindTexture(GL12.GL_TEXTURE_3D, id)
+			GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, GL30.GL_RGBA32F, WIDTH, HEIGHT, DEPTH, 0, GL11.GL_RGBA, GL11.GL_FLOAT, null as java.nio.ByteBuffer?)
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR)
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_S, GL11.GL_REPEAT) // azimuth wraps round
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
+			GL11.glTexParameteri(GL12.GL_TEXTURE_3D, GL12.GL_TEXTURE_WRAP_R, GL12.GL_CLAMP_TO_EDGE)
+			return id
 		}
-		val vertexSource = """
-			#version 330 core
-			void main() {
-			    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-			    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+
+		private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
+
+		/**
+		 * Compiles and links the program now (at startup: the driver takes a while over it, and the first frame with a hole
+		 * in view shouldn't).
+		 */
+		fun warmUp() {
+			ensureProgram()
+		}
+
+		private fun ensureProgram(): Boolean {
+			if (program != 0) return true
+			if (failed) return false
+			val resources = Minecraft.getInstance().resourceManager
+			fun text(path: String): String? = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path))
+				.orElse(null)?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
+			val kerr = text("pinwheel/shaders/include/kerr.glsl") // the sources, for the first guess
+			val core = text("pinwheel/shaders/include/vertex_lens_core.glsl")
+			val body = text("shaders/relativity/kerr_image_map.fsh")
+			if (kerr == null || core == null || body == null) {
+				failed = true
+				return false
 			}
-		""".trimIndent()
-		val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$kerr\n$core\n$body") ?: return false.also { failed = true }
-		val id = GL20.glCreateProgram()
-		GL20.glAttachShader(id, vertex)
-		GL20.glAttachShader(id, fragment)
-		GL20.glLinkProgram(id)
-		GL20.glDeleteShader(vertex)
-		GL20.glDeleteShader(fragment)
-		if (GL20.glGetProgrami(id, GL20.GL_LINK_STATUS) != GL11.GL_TRUE) {
-			CreateRelativity.LOGGER.error("Kerr image map program didn't link: {}", GL20.glGetProgramInfoLog(id))
-			GL20.glDeleteProgram(id)
-			failed = true
-			return false
+			val vertexSource = """
+				#version 330 core
+				void main() {
+				    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+				    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+				}
+			""".trimIndent()
+			val vertex = compile(GL20.GL_VERTEX_SHADER, vertexSource) ?: return false.also { failed = true }
+			val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$kerr\n$core\n$body") ?: return false.also { failed = true }
+			val id = GL20.glCreateProgram()
+			GL20.glAttachShader(id, vertex)
+			GL20.glAttachShader(id, fragment)
+			GL20.glLinkProgram(id)
+			GL20.glDeleteShader(vertex)
+			GL20.glDeleteShader(fragment)
+			if (GL20.glGetProgrami(id, GL20.GL_LINK_STATUS) != GL11.GL_TRUE) {
+				CreateRelativity.LOGGER.error("Kerr image map program didn't link: {}", GL20.glGetProgramInfoLog(id))
+				GL20.glDeleteProgram(id)
+				failed = true
+				return false
+			}
+			program = id
+			VertexLens.linkProgram(id)
+			vao = GL30.glGenVertexArrays()
+			return true
 		}
-		program = id
-		VertexLens.linkProgram(id)
-		vao = GL30.glGenVertexArrays()
-		return true
-	}
 
-	private fun compile(type: Int, source: String): Int? {
-		val shader = GL20.glCreateShader(type)
-		GL20.glShaderSource(shader, source)
-		GL20.glCompileShader(shader)
-		if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) {
-			CreateRelativity.LOGGER.error("Kerr image map shader didn't compile: {}", GL20.glGetShaderInfoLog(shader))
-			GL20.glDeleteShader(shader)
-			return null
+		private fun compile(type: Int, source: String): Int? {
+			val shader = GL20.glCreateShader(type)
+			GL20.glShaderSource(shader, source)
+			GL20.glCompileShader(shader)
+			if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) {
+				CreateRelativity.LOGGER.error("Kerr image map shader didn't compile: {}", GL20.glGetShaderInfoLog(shader))
+				GL20.glDeleteShader(shader)
+				return null
+			}
+			return shader
 		}
-		return shader
 	}
 }
