@@ -65,6 +65,7 @@ class KerrSlotBakerTest {
 			val median = errors[errors.size / 2] / pixel
 			val p95 = errors[errors.size * 95 / 100] / pixel
 			val over3 = errors.count { it > 3 * pixel } * 100.0 / errors.size
+			println("  phases: fan %.0f ms, raster %.0f ms, refine %.0f ms (%d texels)".format(baker.timings[0], baker.timings[1], baker.timings[2], baker.refined.get()))
 			println("Slot r=%.0f rs theta=%.2f: bake %.0f ms, %.1f%% texels with an image; error median %.2f px, 95th %.2f px, over 3 px %.1f%%"
 				.format(rc, theta, ms, filled * 100.0 / (width * height * depth), median, p95, over3))
 			assertTrue(over3 < 1.0, "too many misplaced images")

@@ -44,7 +44,12 @@ class KerrSlotBaker(
 	 * point's distance from the camera (map frame), and 1 where there's an image (else all 0). */
 	fun bake(): FloatArray = pool.submit<FloatArray> { bakeHere() }.get()
 
+	/** The last bake's phases (ms: fan, rasterizing, refining) and texels refined (debug). */
+	var timings = DoubleArray(3)
+	val refined = java.util.concurrent.atomic.AtomicInteger()
+
 	private fun bakeHere(): FloatArray {
+		val tStart = System.nanoTime()
 		// The fan: its corners (fanRows x fanAzimuths) and each cell's centre after them (one per cell: a check on the map's
 		// curvature across it, and the vertex the cell's four triangles share).
 		val corners = fanAzimuths * fanRows
@@ -68,6 +73,7 @@ class KerrSlotBaker(
 				}
 			}
 		}
+		val tFan = System.nanoTime()
 		val map = FloatArray(width * height * depth * 4)
 		val best = FloatArray(width * height * depth) { Float.MAX_VALUE }
 		val rough = FloatArray(width * height * depth * 4)
@@ -94,6 +100,7 @@ class KerrSlotBaker(
 				}
 			}
 		}
+		val tRaster = System.nanoTime()
 		// Texels left without an image but with a guess (from a curved cell, or a neighbour's image): solved directly.
 		IntStream.range(0, depth).parallel().forEach { shell ->
 			for (vi in 0 until height) for (column in 0 until width) {
@@ -107,9 +114,10 @@ class KerrSlotBaker(
 					val n = (shell * height + j) * width + Math.floorMod(column + di, width)
 					if (map[n * 4 + 3] > 0.5f && guesses.size < 3) guesses += floatArrayOf(map[n * 4], map[n * 4 + 1], map[n * 4 + 2])
 				}
-				if (guesses.isNotEmpty()) refine(map, shell, vi, column, radii[shell], guesses)
+				if (guesses.isNotEmpty()) { refined.incrementAndGet(); refine(map, shell, vi, column, radii[shell], guesses) }
 			}
 		}
+		timings = doubleArrayOf((tFan - tStart) / 1e6, (tRaster - tFan) / 1e6, (System.nanoTime() - tRaster) / 1e6)
 		return map
 	}
 
@@ -539,8 +547,8 @@ class KerrSlotBaker(
 
 		/** The fan's knee (vertex_lens_core.glsl's RELATIVITY_TABLE_KNEE). */
 		const val KNEE = 0.6
-		/** Step: this fraction of the radius (the GPU table's 0.05). */
-		const val STEP = 0.04
+		/** Step: this fraction of the radius (measured: 0.04 bakes 1.5-2x slower for a median 0.03 px instead of 0.06). */
+		var STEP = 0.08
 		const val MAX_STEPS = 3000
 		/** How far a cell's centre may land from its corners' average, over the cell's size (smooth()). */
 		var SMOOTH = 0.1

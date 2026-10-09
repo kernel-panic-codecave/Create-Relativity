@@ -945,8 +945,8 @@ class LensClientGameTest {
 				if (s[4] != 0.0) {
 					runOnClient { KerrSlots.measureBakes = true; KerrSlots.bakeCosts.clear() }
 					var waited = 0
-					while (waited < 600 && !computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.blending }) { waitTicks(10); waited += 10 }
-					CreateRelativity.LOGGER.info("Vertex accuracy, {}: blending baked slots: {} after {} ticks ({} baked)", label, computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.blending }, waited, computeOnClient { net.kernelpanicsoft.relativity.client.lens.KerrSlots.bakedSlots })
+					while (waited < 600 && !computeOnClient { KerrSlots.blending }) { waitTicks(10); waited += 10 }
+					CreateRelativity.LOGGER.info("Vertex accuracy, {}: blending baked slots: {} after {} ticks ({} baked)", label, computeOnClient { KerrSlots.blending }, waited, computeOnClient { KerrSlots.bakedSlots })
 					val costs = computeOnClient { synchronized(KerrSlots.bakeCosts) { KerrSlots.bakeCosts.entries.joinToString("; ") { (phase, list) -> "%s: %d calls, median %.1f ms, max %.1f ms".format(phase, list.size, list.sorted()[list.size / 2], list.max()) } } }
 					runOnClient { KerrSlots.measureBakes = false }
 					CreateRelativity.LOGGER.info("Vertex accuracy, {}: bake calls: {}", label, costs)
@@ -1200,6 +1200,50 @@ class LensClientGameTest {
 				it.options.hideGui = false
 				SpacetimeDebugRenderer.hidden = false
 			}
+		}
+	}
+
+	/**
+	 * Baked slots for a moving camera: the camera walks past a spinning hole, and the share of frames the live map is a
+	 * blend of baked slots (not the per-frame solver) is logged. (Measured: a few percent. A slot takes 1-2 s to bake and
+	 * the walk crosses dozens; baking ahead of the camera, or blending slots further apart, didn't help: those misplace
+	 * images by tens of pixels.)
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.slotsWalking() {
+		if (!ClientTestInput.selected("slotsWalking")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(8)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+		}
+		withTestWorld {
+			waitTicks(40)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "gamerule relativityBlackHoleGrowth false")) command(command)
+			command("tick freeze")
+			val lines = ArrayList<String>()
+			run {
+				command("relativity bh clear")
+				waitTicks(5)
+				command("relativity bh create 0.5 -54 0.5 2.0 0.9")
+				// A path past the hole: from 30 blocks out, in to 9 at its closest, at a walk (1 block a second).
+				val start = net.minecraft.world.phys.Vec3(-29.5, -50.0, -12.0)
+				val end = net.minecraft.world.phys.Vec3(30.5, -58.0, 6.0)
+				val ticks = (start.distanceTo(end) / 0.05).toInt()
+				runOnClient { it.player!!.setPos(start.x, start.y, start.z) }
+				waitTicks(100) // (the slots round the start baked)
+				var blended = 0
+				var counted = 0
+				for (tick in 0..ticks) {
+					val at = start.lerp(end, tick.toDouble() / ticks)
+					runOnClient { it.player!!.setPos(at.x, at.y, at.z); it.player!!.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES, net.minecraft.world.phys.Vec3(0.5, -54.0, 0.5)) }
+					waitTick()
+					if (computeOnClient { KerrSlots.blending }) blended += 1
+					counted += 1
+				}
+				lines += "Slots while walking: blending baked slots %.0f%% of %d ticks (%d baked)".format(blended * 100.0 / counted, counted, computeOnClient { KerrSlots.bakedSlots })
+			}
+			for (line in lines) CreateRelativity.LOGGER.info(line)
 		}
 	}
 
