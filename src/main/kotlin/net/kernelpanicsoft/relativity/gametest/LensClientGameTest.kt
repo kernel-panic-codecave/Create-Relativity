@@ -6,6 +6,7 @@ import net.kernelpanicsoft.archie.gametest.ClientGameTestContext
 import net.kernelpanicsoft.archie.gametest.TestSingleplayerContext
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
+import net.kernelpanicsoft.relativity.client.lens.LensResolution
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
 import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
 import net.kernelpanicsoft.relativity.client.lens.KerrSlots
@@ -1302,6 +1303,18 @@ class LensClientGameTest {
 				val fpsLens = fps()
 				val fpsLensMoving = fpsMoving()
 				val fpsLensTurning = fpsTurning()
+				// The lens resolution setting: moving (every frame rebuilds the tables, which it sizes).
+				if (name == "small") {
+					val byResolution = ArrayList<String>()
+					for (percent in listOf(50, 200)) {
+						runOnClient { LensResolution.override = percent }
+						waitTicks(5)
+						byResolution += "%d%%: %.0f".format(percent, fpsMoving())
+					}
+					runOnClient { LensResolution.override = null }
+					waitTicks(5)
+					lines += "small, moving, by lens resolution: " + byResolution.joinToString(", ") + " (100%%: %.0f)".format(fpsLensMoving)
+				}
 				val kerrMs = computeOnClient { "last drawn: Kerr paths %.1f ms, image map %.1f ms; slots: bake %.1f ms, blend %.1f ms, %d baked, blending %s".format(
 					VertexLens.pathsTimer.millis, VertexLens.mapTimer.millis, KerrSlots.bakeTimer.millis, KerrSlots.blendTimer.millis, KerrSlots.bakedSlots, KerrSlots.blending) }
 				runOnClient { BlackHoleLens.rawFrame = true; BlackHoleLens.skipTables = true }

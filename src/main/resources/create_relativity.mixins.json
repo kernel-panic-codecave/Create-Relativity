@@ -22,6 +22,7 @@
     "client.network.PacketEntityIdAccessors$SectionBlocks",
     "client.GameRendererPickMixin",
     "client.FrustumMixin",
+    "client.CompositePostPipelineMixin",
     "client.RenderTypeTextureAccessors$Composite",
     "client.RenderTypeTextureAccessors$State",
     "client.RenderTypeTextureAccessors$Texture",

@@ -383,6 +383,7 @@ object BlackHoleLens {
 			}
 			add(camera.x); add(camera.y); add(camera.z)
 			key += rotation.x; key += rotation.y; key += rotation.z; key += rotation.w
+			key += LensResolution.scale() // (a change rebuilds the tables at the new size, empty)
 			val projection = FloatArray(16).also { VertexLens.lastProjection.get(it) }
 			for (v in projection) key += v
 			for (v in holeUniforms) { key += v.x; key += v.y; key += v.z; key += v.w }

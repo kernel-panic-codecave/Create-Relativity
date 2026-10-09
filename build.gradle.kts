@@ -139,6 +139,7 @@ dependencies {
     modRuntimeOnly("dev.ryanhcode.sable:sable-sable_rapier-$mcVersion:${property("sable_version")}") { isTransitive = false }
     modImplementation("foundry.veil:veil-neoforge-$mcVersion:${property("veil_version")}") { isTransitive = false }
     "forgeRuntimeLibrary"("gg.moonflower:molang-compiler:${property("veil_molang_version")}")
+    compileOnly("gg.moonflower:molang-compiler:${property("veil_molang_version")}") // (the lens resolution setting reaches Veil's post pipelines as a Molang query)
     "forgeRuntimeLibrary"("io.github.ocelot:glsl-processor:${property("veil_glsl_processor_version")}")
 
     // Simulated + Aeronautics as individual jars: Loom's remap of the Modrinth "bundled" jar drops

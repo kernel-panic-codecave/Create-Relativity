@@ -110,6 +110,13 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.trace_blocks.comment"),
 				default = true,
 			)
+			val lensResolution by intSlider(
+				title = Component.translatable("config.create_relativity.render.lens_resolution"),
+				comment = Component.translatable("config.create_relativity.render.lens_resolution.comment"),
+				min = 25,
+				max = 300,
+				default = 100,
+			)
 			val lightDelay by boolean(
 				title = Component.translatable("config.create_relativity.render.light_delay"),
 				comment = Component.translatable("config.create_relativity.render.light_delay.comment"),

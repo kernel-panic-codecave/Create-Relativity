@@ -3,8 +3,8 @@
   "framebuffers": {
     "kerr_table": {
       "autoClear": false,
-      "width": "q.screen_width / 4",
-      "height": "q.screen_height / 4",
+      "width": "math.max(1, q.screen_width / 4 * q.relativity_lens_scale)",
+      "height": "math.max(1, q.screen_height / 4 * q.relativity_lens_scale)",
       "color_buffers": [
         {
           "format": "RGBA32F"
@@ -20,15 +20,15 @@
     },
     "scene_table": {
       "autoClear": false,
-      "width": "q.screen_width / 6",
-      "height": "q.screen_height / 6",
+      "width": "math.max(1, q.screen_width / 6 * q.relativity_lens_scale)",
+      "height": "math.max(1, q.screen_height / 6 * q.relativity_lens_scale)",
       "format": "RGBA32F",
       "depth": false
     },
     "scene_refine": {
       "autoClear": false,
-      "width": "q.screen_width / 3",
-      "height": "q.screen_height / 3",
+      "width": "math.max(1, q.screen_width / 3 * q.relativity_lens_scale)",
+      "height": "math.max(1, q.screen_height / 3 * q.relativity_lens_scale)",
       "format": "RGBA32F",
       "depth": true
     },
