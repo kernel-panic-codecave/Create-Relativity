@@ -1,7 +1,7 @@
 #veil:buffer veil:camera VeilCamera
 #include create_relativity:lens_scene
 
-// The half-resolution paths scene_refine.fsh couldn't interpolate, marched (SparseMarchStage runs this only there).
+// The third-resolution paths scene_refine.fsh couldn't interpolate, marched (SparseMarchStage runs this only there).
 
 in vec2 texCoord;
 out vec4 Table; // value (SceneHit), outcome

@@ -20,15 +20,15 @@
     },
     "scene_table": {
       "autoClear": false,
-      "width": "q.screen_width / 4",
-      "height": "q.screen_height / 4",
+      "width": "q.screen_width / 6",
+      "height": "q.screen_height / 6",
       "format": "RGBA32F",
       "depth": false
     },
     "scene_refine": {
       "autoClear": false,
-      "width": "q.screen_width / 2",
-      "height": "q.screen_height / 2",
+      "width": "q.screen_width / 3",
+      "height": "q.screen_height / 3",
       "format": "RGBA32F",
       "depth": true
     },
