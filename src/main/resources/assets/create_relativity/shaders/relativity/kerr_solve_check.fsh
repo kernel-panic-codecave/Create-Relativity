@@ -11,6 +11,27 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 4) {
+        // Why p is hidden: x the Schwarzschild image (1 found, -1 none, 2 nothing to bend), y 1 near the axis behind the
+        // hole, z the map (1 placed, 0 outside it, -1 hidden, 2 not asked), w the filtered map alpha round p.
+        vec3 seen;
+        bool nearAxis;
+        int image = relativitySchwarzschildImage(p, seen, nearAxis);
+        vec3 kerr;
+        int found = 2;
+        if (RelativityLensData[1].z > 0.5) found = relativityKerrMapImage(p, kerr);
+        mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+        vec3 d = viewToGame * p - RelativityLensData[6].xyz;
+        float r = length(d);
+        float rIn = RelativityLensData[11].z;
+        float rOut = RelativityLensData[11].w;
+        float sLog = log(r / rIn) / log(rOut / rIn);
+        vec3 size = RELATIVITY_MAP_SIZE;
+        vec3 at = vec3(atan(d.z, d.x) / 6.28318530718 + 0.5, ((d.y / r * 0.5 + 0.5) * (size.y - 1.0) + 0.5) / size.y,
+            (sLog * (size.z - 1.0) + 0.5) / size.z);
+        Result = vec4(float(image), nearAxis ? 1.0 : 0.0, float(found), texture(RelativityKerrMap, at).a);
+        return;
+    }
     if (Direct == 3) {
         vec3 guess = normalize(texelFetch(Guesses, ivec2(gl_FragCoord.xy), 0).xyz);
         vec3 kerr;

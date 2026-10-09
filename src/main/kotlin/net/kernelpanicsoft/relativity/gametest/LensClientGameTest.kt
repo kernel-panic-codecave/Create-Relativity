@@ -1004,14 +1004,41 @@ class LensClientGameTest {
 				// A sample of the hidden: whether they have an image after all.
 				val missing = HashMap<String, Int>()
 				val searched = HashMap<String, Int>()
+				val reasons = java.util.TreeMap<String, Int>()
 				for ((kind, list) in hidden) for (p in list.shuffled(random).take(15)) {
 					searched.merge(kind, 1, Int::plus)
 					val image = LensReference.imageDirection(sources, eye, p) ?: continue
+					// Why the lens hid it.
+					val view = rotation.transform(org.joml.Vector3f((p.x - eye.x).toFloat(), (p.y - eye.y).toFloat(), (p.z - eye.z).toFloat()))
+					val why = computeOnClient { KerrSolveCheck.run(listOf(floatArrayOf(view.x, view.y, view.z)), VertexLens.lastProjection, why = true) }.single()
+					val reason = when {
+						why[1] > 0.5f -> "near the axis behind the hole"
+						why[2] < -0.5f -> {
+							// The GPU's solve started at the CPU's image.
+							val iv = rotation.transform(org.joml.Vector3f(image.x.toFloat(), image.y.toFloat(), image.z.toFloat()))
+							val fromTruth = computeOnClient { KerrSolveCheck.run(listOf(floatArrayOf(view.x, view.y, view.z)), VertexLens.lastProjection, guesses = listOf(floatArrayOf(iv.x, iv.y, iv.z))) }.single()
+							"map: " + mapTexels(hole, s[3], s[4], eye, p) + "; solve from the true image: " + when (fromTruth[0].toInt()) {
+								1 -> "found (%.4f rad off)".format(fromTruth[1]); 5 -> "fold (magnification %.0f)".format(fromTruth[3]); 0 -> "off the table"; else -> "fails"
+							}
+						}
+						why[0] < -0.5f && why[2] > 1.5f -> "Schwarzschild table: no image"
+						why[0] < -0.5f && why[2] in -0.5f..0.5f -> "outside the map, Schwarzschild: no image"
+						else -> "other (Schwarzschild ${why[0]}, map ${why[2]})"
+					}
 					// Only if the image would be on screen.
 					val v = rotation.transform(org.joml.Vector3f(image.x.toFloat(), image.y.toFloat(), image.z.toFloat()))
 					if (v.z >= 0f) continue
 					val ndc = org.joml.Vector3f(projection.m00() * v.x / -v.z, projection.m11() * v.y / -v.z, 0f)
-					if (kotlin.math.abs(ndc.x) <= 1f && kotlin.math.abs(ndc.y) <= 1f) missing.merge(kind, 1, Int::plus)
+					if (kotlin.math.abs(ndc.x) <= 1f && kotlin.math.abs(ndc.y) <= 1f) {
+						missing.merge(kind, 1, Int::plus)
+						// Where it is: behind the hole (far side) or not, how far off the camera-hole line, how far out.
+						val toCamera = eye.subtract(hole).normalize()
+						val rel = p.subtract(hole)
+						val along = rel.dot(toCamera)
+						val off = rel.subtract(toCamera.scale(along)).length() / s[3]
+						val where = "%s, %.1f r_s off the axis, %.1f r_s out".format(if (along < 0) "far side" else "camera side", off, rel.length() / s[3])
+						reasons.merge("$where: $reason", 1, Int::plus)
+					}
 				}
 				worst.sortByDescending { it.first }
 				val report = errors.entries.joinToString("\n") { (kind, list) ->
@@ -1022,7 +1049,7 @@ class LensClientGameTest {
 						real.getOrElse(real.size / 2) { 0.0 }, real.getOrElse((real.size * 0.95).toInt().coerceAtMost(real.size - 1)) { 0.0 },
 						real.getOrElse((real.size * 0.99).toInt().coerceAtMost(real.size - 1)) { 0.0 }, real.lastOrNull() ?: 0.0)
 				} + "\n  worst: " + worst.take(6).joinToString("; ") { "%.0f px %s at (%.1f, %.1f, %.1f)".format(it.first, it.second, it.third.x, it.third.y, it.third.z) }
-				CreateRelativity.LOGGER.info("Vertex accuracy, {} (camera at {}):\n{}", label, eye, report)
+				CreateRelativity.LOGGER.info("Vertex accuracy, {} (camera at {}):\n{}\n  hidden with an image, why:\n    {}", label, eye, report, reasons.entries.joinToString("\n    ") { "${it.key} (${it.value})" })
 			}
 		}
 	}
@@ -1396,6 +1423,40 @@ class LensClientGameTest {
 	}
 
 	/** Waits (up to 30 s) until every chunk section in view is drawn and the lens's grids are in, then a second more. */
+	/**
+	 * The image map texels round world point [p] (hole at [hole], r_s [rs], spin [spin]; camera at [eye]): how many of
+	 * the 8 have an image, how many were searched and found none, how many found one at a fold.
+	 */
+	private fun ClientGameTestContext.mapTexels(hole: net.minecraft.world.phys.Vec3, rs: Double, spin: Double, eye: net.minecraft.world.phys.Vec3, p: net.minecraft.world.phys.Vec3): String =
+		computeOnClient { minecraft ->
+			val map = KerrImageMap.readBack()
+			val paths = KerrImageMap.readBackPaths()
+			val m = rs / 2
+			val a = spin * m
+			val rIn = 1.05 * (m + kotlin.math.sqrt(maxOf(m * m - a * a, 0.0)))
+			val rOut = maxOf(80.0 * rs, eye.distanceTo(hole) + 1.5 * minecraft.gameRenderer.renderDistance)
+			val d = p.subtract(hole)
+			val r = d.length()
+			val u = (kotlin.math.atan2(d.z, d.x) / (2 * Math.PI) + 0.5) * KerrImageMap.WIDTH - 0.5
+			val v = (d.y / r * 0.5 + 0.5) * (KerrImageMap.HEIGHT - 1)
+			val w = kotlin.math.ln(r / rIn) / kotlin.math.ln(rOut / rIn) * (KerrImageMap.DEPTH - 1)
+			var ok = 0; var none = 0; var fold = 0; var other = 0
+			for (corner in 0 until 8) {
+				val i = Math.floorMod(kotlin.math.floor(u).toInt() + (corner and 1), KerrImageMap.WIDTH)
+				val j = (kotlin.math.floor(v).toInt() + ((corner shr 1) and 1)).coerceIn(0, KerrImageMap.HEIGHT - 1)
+				val k = (kotlin.math.floor(w).toInt() + ((corner shr 2) and 1)).coerceIn(0, KerrImageMap.DEPTH - 1)
+				val index = (k * KerrImageMap.HEIGHT + j) * KerrImageMap.WIDTH + i
+				val code = paths[index]
+				when {
+					map[index * 4 + 3] > 0.5f -> ok += 1
+					code < -98.9f -> none += 1
+					code < -98.0f -> fold += 1
+					else -> other += 1
+				}
+			}
+			"$ok with an image, $none none found, $fold at a fold, $other other"
+		}
+
 	private fun ClientGameTestContext.settle() {
 		for (i in 0 until 600) {
 			if (computeOnClient { it.levelRenderer.hasRenderedAllSections() && LensVoxels.ready && LensVoxels.behind.ready }) break

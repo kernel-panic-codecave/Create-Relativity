@@ -325,6 +325,42 @@ float relativityPathPosition(ivec2 t, float rP, bool outbound) {
     return outbound ? 14.0 : 0.0;
 }
 
+// A last-resort first guess for p's image (view space): round a lone hole the image lies in the plane of the camera, the
+// hole and p (spin bends it only a little out of it), so in the table column at p's own azimuth round the camera-hole
+// line; scanning that column's rows for the path that passes nearest p (where each meets p's distance from the centre)
+// finds images the other guesses miss (strongly lensed, near the ring). False if no row comes near.
+bool relativityScanGuess(vec3 p, out vec3 guess, out float guessV) {
+    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+    vec3 hole = RelativityLensData[6].xyz;
+    vec3 d = viewToGame * p - hole;
+    float rP = length(d);
+    vec3 n = d / rP;
+    vec2 size = RelativityLensData[7].zw;
+    float rs = RelativityLensData[7].x;
+    vec2 at = relativityTableAt(normalize(viewToGame * p), size, hole, rs);
+    int column = int(at.x) - int(size.x) * int(floor(at.x / size.x));
+    float best = 1e30;
+    guess = normalize(p);
+    guessV = 99.0;
+    int rows = int(size.y) + relativityRuntimeZero();
+    for (int y = 1; y < rows - 1; y += 4) {
+        ivec2 t = ivec2(column, y);
+        for (int side = 0; side < 2 + relativityRuntimeZero(); side += 1) {
+            float v = relativityPathPosition(t, rP, side == 1);
+            bool ok;
+            vec3 miss = relativityPathMiss(t, n, rP, v, ok);
+            float m = dot(miss.xy, miss.xy) + miss.z * miss.z;
+            if (ok && m < best) {
+                best = m;
+                guess = transpose(viewToGame) * relativityTableDir(vec2(t) + 0.5, size, hole, rs);
+                guessV = v;
+            }
+        }
+    }
+    return best < 0.05;
+}
+
+
 // The view direction of p's image under a spinning hole ([6]), by Newton's method on the table and along its paths,
 // started at the view direction guess (the Schwarzschild image): 1 found; 0 not found but the guess is near the
 // table's edge (off screen: the caller's Schwarzschild image stands, so a triangle reaching on screen keeps its
@@ -440,7 +476,9 @@ int relativityKerrMapImage(vec3 p, out vec3 seen) {
     vec3 at = vec3(atan(d.z, d.x) / 6.28318530718 + 0.5, ((d.y / r * 0.5 + 0.5) * (size.y - 1.0) + 0.5) / size.y,
         (s * (size.z - 1.0) + 0.5) / size.z);
     vec4 m = texture(RelativityKerrMap, at);
-    if (m.a < 0.999) return -1; // a texel round it without an image
+    // (Every texel round p must have an image: averaging over those that do misplaces points by the shadow's edge,
+    // where neighbouring texels sit either side of capture.)
+    if (m.a < 0.999) return -1;
     seen = transpose(viewToGame) * normalize(normalize(game) + m.rgb * length(game)); // (stored per block of distance)
     return 1;
 }
@@ -567,6 +605,9 @@ vec3 relativityNearImage(vec3 p, vec3 hole, float rs) {
 // Points this close to the camera (a fraction of its distance from the hole) take the near image, blending into the
 // tables' over the next stretch.
 const float RELATIVITY_NEAR = 0.25;
+
+// How many times faster than the point the image may move round it before the vertex is hidden (relativityFarImage).
+const float RELATIVITY_STRETCH_CUT = 25.0;
 const float RELATIVITY_NEAR_BLEND = 0.35;
 
 // The table's image of view-space point p: 1 placed (seen its direction), 2 nothing to bend, -1 hidden (behind the hole,
@@ -588,6 +629,20 @@ int relativityFarImage(vec3 p, out vec3 seen) {
         int found = relativityKerrMapImage(p, kerr);
         relativityLastFound = found;
         if (found == 1) {
+            // Where the image moves far more than the point does round p (a seam between texels on different branches
+            // of the image, either side of the Einstein ring, or a stretch so steep straight edges can't follow it), a
+            // triangle reaching p would be a slab across the sky: hidden, and the post pass draws what's there.
+            float step = 0.01 * length(p);
+            vec3 axes[3] = vec3[](vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0));
+            for (int k = 0; k < 3; k += 1) {
+                vec3 near;
+                if (relativityKerrMapImage(p + step * axes[k], near) != 1) continue;
+                // The image's turn against the point's own (its angle seen unlensed: about step / |p|, at most).
+                if (acos(clamp(dot(near, kerr), -1.0, 1.0)) > RELATIVITY_STRETCH_CUT * 0.01) {
+                    relativityLastFound = -1;
+                    return -1;
+                }
+            }
             seen = kerr;
             return 1;
         }

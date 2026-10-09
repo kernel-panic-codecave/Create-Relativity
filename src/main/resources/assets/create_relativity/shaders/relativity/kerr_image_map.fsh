@@ -15,8 +15,8 @@ uniform int Frame;             // counts frames: texels hidden last frame search
 
 layout(location = 0) out vec4 Result;
 layout(location = 1) out float PathPosition; // where along its path the image is, to start the next solve; 99 none
-                                             // searched for, -99 a search found it hidden, 98 a search fell back to
-                                             // the Schwarzschild image
+                                             // searched for, -99 a search found no image, -98.5 one at a fold
+                                             // (hidden either way), 98 a search fell back to the Schwarzschild image
 
 // A first guess at the view direction of the image of camera-relative point game (game axes), through every source in
 // front of it (kerr.glsl's Sources) as thin lenses: the lens equation theta = beta + sum alpha_i(theta) D_ls / D_s,
@@ -73,10 +73,8 @@ void main() {
         Result = vec4((viewToGame * seen - straight) / span, 1.0);
         return;
     }
-    if (nearAxis) {
-        Result = vec4(0.0);
-        return;
-    }
+    // (Near the axis behind the hole the vertex lens hides vertices itself; the map is solved there too, or the texels
+    // left empty would hide the points round them as well.)
     if (DebugMode == 1) {
         Result = vec4((viewToGame * seen - straight) / span, 1.0);
         return;
@@ -130,9 +128,45 @@ void main() {
         warmV[count] = 99.0;
         count += 1;
     }
+    // A neighbour's image (last frame's, the same layer: azimuth and polar neighbours), for a texel whose own search
+    // failed: accepted only if continuous with it (below), not an image on another branch.
+    vec3 neighbourTurn = vec3(0.0);
+    bool fromNeighbour = false;
+    if (count < 4 && PreviousValid == 1 && previous.a < 0.5) {
+        ivec3 offsets[4] = ivec3[](ivec3(1, 0, 0), ivec3(-1, 0, 0), ivec3(0, 1, 0), ivec3(0, -1, 0));
+        for (int k = 0; k < 4; k += 1) {
+            ivec3 at = ivec3(texel, Layer) + offsets[k];
+            at.x = at.x - int(size.x) * int(floor(float(at.x) / size.x));
+            if (at.y < 0 || at.y >= int(size.y)) continue;
+            vec4 neighbour = texelFetch(PreviousMap, at, 0);
+            if (neighbour.a < 0.5) continue;
+            seeds[count] = transpose(viewToGame) * normalize(straight + neighbour.rgb * span);
+            warmV[count] = texelFetch(PreviousPath, at, 0).r;
+            if (abs(warmV[count]) > 14.0) warmV[count] = 99.0;
+            neighbourTurn = neighbour.rgb;
+            fromNeighbour = true;
+            count += 1;
+            break;
+        }
+    }
+    // Then, if none found it, the scan down the table column at p's azimuth (relativityScanGuess), the costliest.
     float v = 99.0;
-    for (int k = 0; k < count; k += 1) {
-        found = relativityKerrImage(p, seeds[k], warmV[k], kerr, v);
+    for (int k = 0; k <= count; k += 1) {
+        vec3 seed;
+        float seedV;
+        if (k < count) {
+            seed = seeds[k];
+            seedV = warmV[k];
+        } else if (DebugMode == 2 || !relativityScanGuess(p, seed, seedV)) {
+            break;
+        }
+        found = relativityKerrImage(p, seed, seedV, kerr, v);
+        // From the neighbour's image: only an image whose turn (per block) is close to the neighbour's is the same
+        // branch continued (within a quarter of the turn, or a hundredth of a radian over the point's distance).
+        if (found == 1 && fromNeighbour && k == count - 1) {
+            vec3 turn = (viewToGame * kerr - straight) / span;
+            if (length(turn - neighbourTurn) > max(0.25 * length(neighbourTurn), 0.01 / span)) found = -1;
+        }
         if (found == 1) break;
     }
     if (RelativityLensData[1].w > 3.5 && RelativityLensData[1].w < 4.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image
@@ -145,6 +179,6 @@ void main() {
         PathPosition = 98.0;
     } else {
         Result = vec4(0.0);
-        PathPosition = -99.0;
+        PathPosition = relativityLastSolve.x > 4.5 ? -98.5 : -99.0; // (-98.5: found, but at a fold)
     }
 }

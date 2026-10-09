@@ -200,6 +200,15 @@ object KerrImageMap {
 		return data
 	}
 
+	/** The live path positions (kerr_image_map.fsh's PathPosition), as [readBack] (debug; GameTests). */
+	fun readBackPaths(): FloatArray {
+		val data = FloatArray(WIDTH * HEIGHT * DEPTH)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, paths[LIVE])
+		GL11.glGetTexImage(GL12.GL_TEXTURE_3D, 0, GL11.GL_RED, GL11.GL_FLOAT, data)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
+		return data
+	}
+
 	private fun uniform(name: String) = uniforms.getOrPut(name) { GL20.glGetUniformLocation(program, name) }
 
 	/**
