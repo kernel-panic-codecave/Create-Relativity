@@ -1292,6 +1292,25 @@ class LensClientGameTest {
 					differ.toDouble() / (x.width.toLong() * x.height)
 				}
 			}
+			// What the camera should see (the CPU's traced rays against the blocks), for a look beside the screenshots.
+			if (spin == 0.0) {
+				val columns = 376
+				val rows = 250
+				val picture = IntArray(columns * rows)
+				for (first in 0 until rows step 5) {
+					val part = computeOnClient { minecraft ->
+						LensReference.picture(minecraft, SpacetimeField.blackHoles(minecraft.level!!).single(), columns, rows, 400.0, first until minOf(first + 5, rows))
+					}
+					for (row in first until minOf(first + 5, rows)) System.arraycopy(part, row * columns, picture, row * columns, columns)
+				}
+				NativeImage(columns, rows, false).use { image ->
+					for (row in 0 until rows) for (column in 0 until columns) {
+						val argb = picture[row * columns + column]
+						image.setPixelRGBA(column, row, (argb and 0xFF00FF00.toInt()) or ((argb shr 16) and 0xFF) or ((argb and 0xFF) shl 16))
+					}
+					image.writeToFile(shots["vertex_true"]!!.resolveSibling("second_images_reference_picture.png"))
+				}
+			}
 			CreateRelativity.LOGGER.info("Second images, spin {}: they change {}% of the vertex lens's picture and {}% of the whole lens's; {} fps with them, {} without", spin,
 				"%.2f".format(100 * changed(shots["vertex_false"]!!, shots["vertex_true"]!!)), "%.2f".format(100 * changed(shots["lens_false"]!!, shots["lens_true"]!!)),
 				"%.0f".format(rates[true]), "%.0f".format(rates[false]))
