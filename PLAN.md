@@ -526,6 +526,16 @@ it like the rest of the world; the post pass shrinks to a fallback.
 4. The shadow and the accretion disk as meshes (a black disk; the disk's own mesh), bent the same way.
 What stays per-pixel: whatever has no geometry and isn't the sky (nothing, ideally).
 
+Done (2026-10-09): secondary images of terrain (vanilla, Sodium, Iris), Flywheel and entities, round both kinds of
+hole, out to the render distance. Measured without the post pass's voxel trace (groundAroundHole, lens_none): side
+views as good as with it (0.1-0.5% wrong), views from above the hole not (1.4-3%): the Einstein ring of what lies
+near the camera-hole axis behind the hole. Points by the axis are imaged all round the ring; every triangle that
+straddles the axis wraps round it, the pixel check throws its chord away, and nothing is left for that band (cutting
+less near the axis made no real difference). Drawing it needs triangles small against their distance from the axis,
+and that axis moves with the camera while chunk meshes are built once: GPU tessellation (GL 4.0, not in shader packs'
+programs), re-meshing the few sections in the axis tube as the camera moves, or keeping a small post-pass trace for
+that band alone. Until one of those, the post pass's trace stays (sky pixels only).
+
 ### 9.7 Compatibility
 - Iris/shaderpacks own the pipeline. Detect Iris and either (a) inject through its post hooks if possible, or (b) fall
   back to a forward-rendered "billboard sphere" BH with a screen-space distortion pass. Needs testing early.
