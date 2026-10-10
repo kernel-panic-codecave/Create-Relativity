@@ -22,9 +22,23 @@ public abstract class EngineImplMixin {
 	@Unique
 	private static boolean create_relativity$failed;
 
+	/** Flywheel's shaders carry no pixel check: its draws take the full near-axis cut (VertexLens.uncheckedAxisCut). */
+	@Inject(method = "render", at = @At(value = "INVOKE", target = "Ldev/engine_room/flywheel/backend/engine/DrawManager;render(Ldev/engine_room/flywheel/backend/engine/LightStorage;Ldev/engine_room/flywheel/backend/engine/embed/EnvironmentStorage;)V"))
+	private void create_relativity$fullAxisCut(CallbackInfo ci) {
+		VertexLens.uncheckedAxisCut(true);
+	}
+
 	@Inject(method = "render", at = @At(value = "INVOKE", target = "Ldev/engine_room/flywheel/backend/engine/DrawManager;render(Ldev/engine_room/flywheel/backend/engine/LightStorage;Ldev/engine_room/flywheel/backend/engine/embed/EnvironmentStorage;)V", shift = At.Shift.AFTER))
 	private void create_relativity$secondImages(CallbackInfo ci) {
-		if (create_relativity$failed) return;
+		try {
+			if (!create_relativity$failed) create_relativity$drawSecond();
+		} finally {
+			VertexLens.uncheckedAxisCut(false);
+		}
+	}
+
+	@Unique
+	private void create_relativity$drawSecond() {
 		Object engine = this;
 		VertexLens.drawSecondImages(() -> {
 			try {

@@ -265,7 +265,9 @@ class LensClientGameTest {
 				}
 			}
 			CreateRelativity.LOGGER.info("Flywheel vs vanilla shafts under the vertex lens: {}% of pixels differ", "%.2f".format(differing * 100))
-			assertTrue(differing < 0.01) { "Flywheel's shafts aren't bent like vanilla's: ${differing * 100}% of pixels differ" }
+			// (Up to 1.5%: by the camera-hole axis the two differ by design. Vanilla's shaders carry the pixel check and take the
+			// fine near-axis cut; Flywheel's don't, and keep the full one.)
+			assertTrue(differing < 0.015) { "Flywheel's shafts aren't bent like vanilla's: ${differing * 100}% of pixels differ" }
 		}
 	}
 

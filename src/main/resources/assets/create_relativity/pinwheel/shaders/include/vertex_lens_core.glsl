@@ -39,13 +39,24 @@ const vec3 RELATIVITY_MAP_SIZE = vec3(128.0, 64.0, 48.0); // KerrImageMap.WIDTH,
 // unrolled, and with the light steps and solves inlined into it the driver took tens of seconds to compile the programs
 // using them (35 s for the image map's).
 // Whether this draw places vertices at their secondary images ([11].y bit 2).
-bool relativitySecond() { return RelativityLensData[11].y > 1.5; }
+bool relativitySecond() { return mod(RelativityLensData[11].y, 4.0) > 1.5; }
 
 
 
 int relativityRuntimeZero() { return int(min(RelativityLensData[1].w, 0.0)); }
 
-const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's diagonal
+const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's diagonal (draws without the pixel check)
+
+// The axis cut for this draw ([11].y above bit 2, in hundredths of a block): small where the pixel check trims what
+// wraps round the ring and terrain by the axis is cut fine (QuadSubdivision's axis tube), the full RELATIVITY_AXIS_CUT
+// where nothing trims it (Flywheel's shaders, which carry no pixel check).
+float relativityAxisCut() {
+    // (Round a spinning hole the full cut: its ring isn't centred on the straight camera-hole axis the cut and the tube
+    // are measured from, and letting its images by that axis through put 1.6% of a side view wrong instead of 0.4%.)
+    if (RelativityLensData[1].z > 0.5) return RELATIVITY_AXIS_CUT;
+    float code = floor(RelativityLensData[11].y / 4.0);
+    return code > 0.5 ? code / 100.0 : RELATIVITY_AXIS_CUT;
+}
 const float RELATIVITY_BEYOND = 1e4;   // NDC depth of hidden vertices: far past the far plane
 
 bool relativityLevelProjection(mat4 proj) {
@@ -424,7 +435,7 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
         // The secondary image: launched just outside the critical angle, toward the far side from p's, sweeping
         // 2 pi - phi. Near the camera-hole line on either side its images run all round the ring, as the primary's
         // do behind the hole.
-        nearAxis = rp * sideLength < RELATIVITY_AXIS_CUT;
+        nearAxis = rp * sideLength < relativityAxisCut();
         if (u0 >= 2.0 / 3.0) return -1; // inside the photon sphere: none tabled
         vec2 second = texture(RelativitySecondImages, (axes * (size - 1.0) + 0.5) / size).rg;
         if (second.g < 0.999) return -1;
@@ -435,7 +446,7 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
         return 1;
     }
     vec2 image = texture(RelativityImages, (axes * (size - 1.0) + 0.5) / size).rg;
-    nearAxis = cosPhi < 0.0 && rp * sideLength < RELATIVITY_AXIS_CUT;
+    nearAxis = cosPhi < 0.0 && rp * sideLength < relativityAxisCut();
     if (image.g < 0.5) return -1;
     float rcU = 1.0 / u0;
     float rpU = 1.0 / uP;

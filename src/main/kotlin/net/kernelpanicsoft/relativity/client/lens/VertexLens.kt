@@ -345,9 +345,26 @@ object VertexLens {
 		}
 	}
 
-	/** Rewrites the block's [11].y: bit 1 the pixel check off (debug), bit 2 the secondary images. */
-	private fun setModeFlags(second: Boolean) {
-		val value = (if (pixelCheck) 0f else 1f) + (if (second) 2f else 0f)
+	/** The near-axis cut (blocks) for draws whose shaders carry the pixel check (vertex_lens_core.glsl's relativityAxisCut). */
+	const val CHECKED_AXIS_CUT = 0.1
+	/** The same for draws without it (Flywheel's): vertex_lens_core.glsl's RELATIVITY_AXIS_CUT. */
+	const val UNCHECKED_AXIS_CUT = 2.0
+
+	/** The block's [11].y: bit 1 the pixel check off (debug), bit 2 the secondary images, the rest the axis cut. */
+	private fun modeFlags(second: Boolean, axisCut: Double): Float =
+		(if (pixelCheck) 0f else 1f) + (if (second) 2f else 0f) + 4f * Math.round(axisCut * 100.0).toFloat()
+
+	/** Draws without the pixel check (Flywheel's) take the full near-axis cut while [on]; then the default again. */
+	@JvmStatic
+	fun uncheckedAxisCut(on: Boolean) {
+		if (buffer == 0 || !activeThisFrame) return
+		uncheckedCut = on
+		setModeFlags(drawingSecondImages)
+	}
+	private var uncheckedCut = false
+
+	private fun setModeFlags(second: Boolean, axisCut: Double = if (uncheckedCut) UNCHECKED_AXIS_CUT else CHECKED_AXIS_CUT) {
+		val value = modeFlags(second, axisCut)
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(1).put(0, value)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
@@ -425,10 +442,10 @@ object VertexLens {
 				val reach = mapOuter ?: pathRadius(centre.scale, camR)
 				// The pixel check's pixel angle; the image map: from just outside the horizon (or the centre's own inner
 				// radius) out to the paths' end.
-				data.put(pixelAngle(projection)).put(if (pixelCheck) 0f else 1f).put(centre.inner.toFloat()).put(reach.toFloat())
+				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(centre.inner.toFloat()).put(reach.toFloat())
 			} else {
 				repeat(20) { data.put(0f) }
-				data.put(pixelAngle(projection)).put(if (pixelCheck) 0f else 1f).put(0f).put(0f)
+				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
 			}
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, target)
