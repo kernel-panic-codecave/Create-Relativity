@@ -644,7 +644,7 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
 - **A procedural galaxy** from the world seed: stars (type, mass, planets) generated on demand, each with its own space
   dimension, stitched by seamless transitions. Natural wormholes link some systems.
 - **The home system is modelled on ours.** The overworld is its Earth: a G-type star, four rocky planets (the
-  overworld third, with one large moon), an asteroid belt (the End, below), four giants with moon systems, and an icy outer belt. Types,
+  overworld third, with one large moon), an asteroid belt (to mine, below), four giants with moon systems, and an icy outer belt. Types,
   order and rough proportions follow the real Solar System. Distances and sizes are compressed to playable scales, and
   the other planets are generated levels like any other system's (§9b). Other systems are procedural and need not
   resemble it.
@@ -666,11 +666,10 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
       Nether a low-gravity layer as a feature: open.
     - Seeing across the boundary (looking down a shaft into the Nether, ships and entities crossing it, chunks loaded on
       both sides) needs the multi-level client support above.
-  - **The End is the asteroid belt.** Its islands floating in the void are the belt's asteroids: the main island, with
-    the dragon, is the largest (a Ceres), and the outer islands with their End cities are the rest. End gateways jump
-    along the belt. Reached by the End portal as now, and by ship from space once the system is seamless.
-    Open: whether the islands get their own weak gravity (they're small bodies) or keep vanilla gravity, and whether
-    they orbit as bodies or the level just stands for the belt.
+  - **The asteroid belt is real asteroids**, procedural Sable bodies to mine (below).
+  - **The End is a pocket dimension** off the system, reached through a stable natural wormhole (§8) that opens onto the
+    main End island. The End portal still leads there as well. The wormhole sits somewhere in the system for ships to
+    find, perhaps in the belt.
 - **Ships**: Create + Sable ships for space and between stars. *Shuttles* small enough to land on planets; *motherships*
   too big to, that stay in space and carry shuttles (the Enterprise and its shuttles, a Star Wars frigate and the Falcon).
   Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
@@ -681,6 +680,8 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
 - **Warp drive feel**: sound design and animations for spin-up, engage, cruise and drop-out (the bubble forming, the
   view stretching), alongside the physical visuals (§8a).
 - **Space stations**: Sable structures in orbit round a star or planet (the orbit integrator, §9b).
+- **Asteroid mining** (mid game, before planet cracking): asteroids are Sable bodies in orbit, small enough to grapple,
+  tow, drill or break up with Create machinery on a ship, and procedurally varied in what they hold.
 - **Endgame megastructures**: Dyson swarms and spheres (energy from a star), ring worlds; **planet cracking**: an
   orbital mining rig that strips a whole planet for its resources (Dead Space style).
 
