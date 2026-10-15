@@ -120,6 +120,27 @@ class KerrSlotBaker(
 				}
 			}
 			tRaster = System.nanoTime()
+			// Every interpolated image checked, before the fill below (which then solves again what this drops): its light
+			// followed from the camera must pass within [VERIFY] pixels of its point, else the texel is left without one. One
+			// wrong texel makes a slab across the screen; a missing one only a small gap.
+			IntStream.range(0, depth).parallel().forEach { shell ->
+				val landed = DoubleArray(3)
+				for (vi in 0 until height) for (column in 0 until width) {
+					val texel = (shell * height + vi) * width + column
+					if (map[texel * 4 + 3] < 0.5f) continue
+					val point = texelPoint(shell, vi, column, radii[shell])
+					val game = DoubleArray(3) { point[it] - camera[it] }
+					val span = norm(game)
+					val dir = normalize(DoubleArray(3) { game[it] / span + map[texel * 4 + it] * span })
+					val ok = land(dir, radii[shell], point, landed, if (second) FULL_TURN else WOUND) &&
+						sqrt((landed[0] - point[0]).let { it * it } + (landed[1] - point[1]).let { it * it } + (landed[2] - point[2]).let { it * it }) / span * gain[texel] < VERIFY * PIXEL
+					if (!ok) {
+						for (c in 0..3) map[texel * 4 + c] = 0f
+						dropped.incrementAndGet()
+					}
+				}
+			}
+			tRefine = System.nanoTime()
 			// Texels left without an image but with a guess (from a curved cell, or a neighbour's image): solved directly.
 			IntStream.range(0, depth).parallel().forEach { shell ->
 				for (vi in 0 until height) for (column in 0 until width) {
@@ -134,32 +155,11 @@ class KerrSlotBaker(
 						val n = (shell * height + j) * width + Math.floorMod(column + di, width)
 						if (map[n * 4 + 3] > 0.5f && guesses.size < 3) guesses += floatArrayOf(map[n * 4], map[n * 4 + 1], map[n * 4 + 2])
 					}
+					// Its own direction, a last start for light that passes the hole wide (on the camera's side the fan meets the
+					// shells edge on, and its cells there can't be interpolated). Not right by the camera, where the vertex lens
+					// follows the light itself and a small error is a large angle.
+					if (!second && straightMiss(shell, vi, column, radii[shell]) > WEAK * 2.0 * m && span(shell, vi, column, radii[shell]) > NEAR * cameraRadius) guesses += floatArrayOf(0f, 0f, 0f)
 					if (guesses.isNotEmpty() && (!second || refineSecondary)) { refined.incrementAndGet(); refine(map, gain, shell, vi, column, radii[shell], guesses, second) }
-				}
-			}
-			tRefine = System.nanoTime()
-			// Every interpolated image checked: its light followed from the camera must pass within [VERIFY] pixels of its
-			// point, else the texel is left without one (the vertex lens hides it; the post pass draws it). One wrong texel
-			// makes a slab across the screen; a missing one only a small gap.
-			IntStream.range(0, depth).parallel().forEach { shell ->
-				val landed = DoubleArray(3)
-				for (vi in 0 until height) for (column in 0 until width) {
-					val texel = (shell * height + vi) * width + column
-					if (map[texel * 4 + 3] == VERIFIED) {
-						map[texel * 4 + 3] = 1f
-						continue
-					}
-					if (map[texel * 4 + 3] < 0.5f) continue
-					val point = texelPoint(shell, vi, column, radii[shell])
-					val game = DoubleArray(3) { point[it] - camera[it] }
-					val span = norm(game)
-					val dir = normalize(DoubleArray(3) { game[it] / span + map[texel * 4 + it] * span })
-					val ok = land(dir, radii[shell], point, landed, if (second) FULL_TURN else WOUND) &&
-						sqrt((landed[0] - point[0]).let { it * it } + (landed[1] - point[1]).let { it * it } + (landed[2] - point[2]).let { it * it }) / span * gain[texel] < VERIFY * PIXEL
-					if (!ok) {
-						for (c in 0..3) map[texel * 4 + c] = 0f
-						dropped.incrementAndGet()
-					}
 				}
 			}
 			kindTimings[kind] = doubleArrayOf((tRaster - tKind) / 1e6, (tRefine - tRaster) / 1e6, (System.nanoTime() - tRefine) / 1e6)
@@ -419,6 +419,21 @@ class KerrSlotBaker(
 		}
 	}
 
+	/** How wide (blocks) the straight line of sight to texel (shell, vi, column) passes the hole. */
+	private fun straightMiss(shell: Int, vi: Int, column: Int, radius: Double): Double {
+		val point = texelPoint(shell, vi, column, radius)
+		val d = DoubleArray(3) { point[it] - camera[it] }
+		val length = norm(d)
+		val t = (-(camera[0] * d[0] + camera[1] * d[1] + camera[2] * d[2]) / (length * length)).coerceIn(0.0, 1.0)
+		return norm(DoubleArray(3) { camera[it] + t * d[it] })
+	}
+
+	/** The texel's point's distance from the camera. */
+	private fun span(shell: Int, vi: Int, column: Int, radius: Double): Double {
+		val point = texelPoint(shell, vi, column, radius)
+		return norm(DoubleArray(3) { point[it] - camera[it] })
+	}
+
 	/** The straight line of sight (unit) to the shell point at continuous texel coordinates (u, v) and [radius]. */
 	private fun straightAt(u: Double, v: Double, radius: Double): DoubleArray {
 		val azimuth = ((u + 0.5) / width - 0.5) * 2.0 * PI
@@ -443,6 +458,9 @@ class KerrSlotBaker(
 	 */
 	private fun refine(map: FloatArray, gain: FloatArray, shell: Int, vi: Int, column: Int, radius: Double, guesses: List<FloatArray>, second: Boolean) {
 		val maxSweep = if (second) FULL_TURN else WOUND
+		// Light that passes the hole wide is aimed by its nearest approach to the point (its shell crossing runs edge on
+		// there); the rest by where it crosses the point's shell, as the fan's are.
+		val weak = !second && straightMiss(shell, vi, column, radius) > WEAK * 2.0 * m
 		val point = texelPoint(shell, vi, column, radius)
 		val game = DoubleArray(3) { point[it] - camera[it] }
 		val span = norm(game)
@@ -455,7 +473,7 @@ class KerrSlotBaker(
 			var lastJ1: DoubleArray? = null
 			var lastJ2: DoubleArray? = null
 			for (iteration in 0 until 6) {
-				if (!land(dir, radius, point, landed, maxSweep)) break
+				if (!aim(dir, radius, point, landed, maxSweep, weak)) break
 				val miss = DoubleArray(3) { landed[it] - point[it] }
 				val off = norm(miss) / span
 				val magnified = when {
@@ -467,7 +485,7 @@ class KerrSlotBaker(
 					val texel = (shell * height + vi) * width + column
 					gain[texel] = sqrt(magnified).toFloat()
 					for (c in 0..2) map[texel * 4 + c] = ((dir[c] - straight[c]) / span).toFloat()
-					map[texel * 4 + 3] = VERIFIED
+					map[texel * 4 + 3] = 1f
 					return
 				}
 				// Two tangent directions and the landing's response to each.
@@ -476,9 +494,9 @@ class KerrSlotBaker(
 				val h = 1e-4
 				val j1 = DoubleArray(3)
 				val j2 = DoubleArray(3)
-				if (!land(normalize(DoubleArray(3) { dir[it] + h * e1[it] }), radius, point, probe, maxSweep)) break
+				if (!aim(normalize(DoubleArray(3) { dir[it] + h * e1[it] }), radius, point, probe, maxSweep, weak)) break
 				for (c in 0..2) j1[c] = (probe[c] - landed[c]) / h
-				if (!land(normalize(DoubleArray(3) { dir[it] + h * e2[it] }), radius, point, probe, maxSweep)) break
+				if (!aim(normalize(DoubleArray(3) { dir[it] + h * e2[it] }), radius, point, probe, maxSweep, weak)) break
 				for (c in 0..2) j2[c] = (probe[c] - landed[c]) / h
 				lastJ1 = j1
 				lastJ2 = j2
@@ -522,6 +540,70 @@ class KerrSlotBaker(
 		fun straight(x: DoubleArray) = normalize(DoubleArray(3) { x[it] - camera[it] })
 		val area = sphereArea(n, straight(a), straight(b))
 		return 0.5 * h * h / max(area, 1e-30)
+	}
+
+	private fun aim(dir: DoubleArray, radius: Double, point: DoubleArray, out: DoubleArray, maxSweep: Double, weak: Boolean): Boolean =
+		if (weak) nearest(dir, point, out, maxSweep) else land(dir, radius, point, out, maxSweep)
+
+	/**
+	 * Where the light seen along [dir] (map frame) passes closest to [target] (into [out], map frame), before it has gone
+	 * [maxSweep] round the hole: what refine() aims at. Unlike the crossing of the target's shell, it's well behaved where
+	 * the light meets that shell edge on (the shell's rim from the camera: near the camera's own radius, most of the
+	 * camera's side). Half the fan's step. False if it falls in before coming near.
+	 */
+	private fun nearest(dir: DoubleArray, target: DoubleArray, out: DoubleArray, maxSweep: Double): Boolean {
+		val x = local(camera)
+		val d = local(dir)
+		val p = DoubleArray(3)
+		val ptOut = DoubleArray(1)
+		nullMomentum(x, doubleArrayOf(-d[0], -d[1], -d[2]), p, ptOut)
+		val pt = ptOut[0]
+		val goal = local(target)
+		val goalRadius = norm(goal)
+		val dx = DoubleArray(3); val dp = DoubleArray(3)
+		val k2x = DoubleArray(3); val k2p = DoubleArray(3)
+		val k3x = DoubleArray(3); val k3p = DoubleArray(3)
+		val k4x = DoubleArray(3); val k4p = DoubleArray(3)
+		val tx = DoubleArray(3); val tp = DoubleArray(3)
+		val previous = DoubleArray(3)
+		var rPrevious = norm(x)
+		var swept = 0.0
+		var best = Double.MAX_VALUE
+		for (step in 0 until 2 * MAX_STEPS) {
+			val r = backward(x, p, pt, dx, dp)
+			if (r < 1.02 * horizon) return best < Double.MAX_VALUE
+			val here = norm(x)
+			if (here > 1.2 * max(goalRadius, cameraRadius) && x[0] * dx[0] + x[1] * dx[1] + x[2] * dx[2] > 0.0) break
+			val toGoal = norm(DoubleArray(3) { x[it] - goal[it] })
+			val dl = min(0.5 * STEP * max(r, 0.5 * m), 0.25 * max(toGoal, 0.05)) / max(norm(dx), 1e-9)
+			for (i in 0..2) { tx[i] = x[i] + 0.5 * dl * dx[i]; tp[i] = p[i] + 0.5 * dl * dp[i] }
+			backward(tx, tp, pt, k2x, k2p)
+			for (i in 0..2) { tx[i] = x[i] + 0.5 * dl * k2x[i]; tp[i] = p[i] + 0.5 * dl * k2p[i] }
+			backward(tx, tp, pt, k3x, k3p)
+			for (i in 0..2) { tx[i] = x[i] + dl * k3x[i]; tp[i] = p[i] + dl * k3p[i] }
+			backward(tx, tp, pt, k4x, k4p)
+			for (i in 0..2) previous[i] = x[i]
+			for (i in 0..2) {
+				x[i] += dl / 6.0 * (dx[i] + 2.0 * k2x[i] + 2.0 * k3x[i] + k4x[i])
+				p[i] += dl / 6.0 * (dp[i] + 2.0 * k2p[i] + 2.0 * k3p[i] + k4p[i])
+			}
+			val rNow = norm(x)
+			swept += acos(((previous[0] * x[0] + previous[1] * x[1] + previous[2] * x[2]) / (rPrevious * rNow)).coerceIn(-1.0, 1.0))
+			if (swept >= maxSweep) break
+			val seg = DoubleArray(3) { x[it] - previous[it] }
+			val rel = DoubleArray(3) { goal[it] - previous[it] }
+			val len2 = seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2]
+			val f = if (len2 > 0) ((rel[0] * seg[0] + rel[1] * seg[1] + rel[2] * seg[2]) / len2).coerceIn(0.0, 1.0) else 0.0
+			val at = DoubleArray(3) { previous[it] + f * seg[it] }
+			val distance = norm(DoubleArray(3) { at[it] - goal[it] })
+			if (distance < best) {
+				best = distance
+				val g = game(at)
+				for (c in 0..2) out[c] = g[c]
+			}
+			rPrevious = rNow
+		}
+		return best < Double.MAX_VALUE
 	}
 
 	/**
@@ -722,6 +804,11 @@ class KerrSlotBaker(
 		const val MAX_STEPS = 3000
 		/** How far a cell's centre may land from its corners' average, over the cell's size (smooth()). */
 		var SMOOTH = 0.1
+		/** Light whose straight line of sight passes the hole wider than this many r_s gets its own direction as a start. */
+		const val WEAK = 3.0
+		/** ...unless it's nearer the camera than this fraction of the camera's distance from the hole. */
+		const val NEAR = 0.3
+
 		/** A solved image is kept if it lands within this many pixels' angle of its point ([PIXEL]: a 70 degree view
 		 * 1504 pixels high). */
 		const val ACCEPT = 0.3
@@ -730,8 +817,6 @@ class KerrSlotBaker(
 		var MAX_MAGNIFICATION = 8.0
 		/** An interpolated image is kept if its light passes within this many pixels' angle of its point. */
 		const val VERIFY = 1.0
-		/** (Alpha marking a texel solved, so already checked, until the check.) */
-		private const val VERIFIED = 2f
 		const val PIXEL = 9.3e-4
 		private val NEIGHBOURS = listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
 
