@@ -682,6 +682,8 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
   frogports at the ports) and passengers (villagers and players in seats) between your outposts.
   - Relativity shows up: a ship that crossed at high β or waited near a hole arrives having aged less, so schedule
     times are kept on the ship's proper time and the port's clock both, and the difference is shown.
+  - Easter egg: a conductor name-tagged after a famous starship captain (Kirk, Picard, Sisko, Janeway, Archer, Pike…)
+    wears a little chest badge. Our own delta-style insignia, an homage rather than a copy of the trademarked badge.
 - **Cockpits**: hologram monitors (the galaxy map, the ship's blueprint with its fields, instruments), levers and buttons
   as Create-style controls.
 - **Warp drive feel**: sound design and animations for spin-up, engage, cruise and drop-out (the bubble forming, the
