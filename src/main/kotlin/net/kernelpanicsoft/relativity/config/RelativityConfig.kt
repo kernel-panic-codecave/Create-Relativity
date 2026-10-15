@@ -21,7 +21,7 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 			val speedOfLightOverrides by doubleMap(
 				title = Component.translatable("config.create_relativity.physics.speed_of_light_overrides"),
 				comment = Component.translatable("config.create_relativity.physics.speed_of_light_overrides.comment"),
-				default = mapOf(PLANETOID_DIMENSION to PLANETOID_C),
+				default = emptyMap(),
 			)
 			val unitRadiusMass by double(
 				title = Component.translatable("config.create_relativity.physics.unit_radius_mass"),
@@ -132,10 +132,6 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 			)
 		}
 	}
-
-	/** Planetoid space is far from Minecraft-scale c: block planets would otherwise be near-black-holes. */
-	const val PLANETOID_DIMENSION = "create_relativity:planetoid"
-	const val PLANETOID_C = 512.0
 
 	/** Speed of light in [dimension]: its override if one is set, otherwise the default. */
 	fun speedOfLight(dimension: ResourceKey<Level>): Double =

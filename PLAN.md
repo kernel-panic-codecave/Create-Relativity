@@ -23,7 +23,7 @@ Solving the Einstein field equations live (numerical relativity) won't fit in a 
 
 ### Units (the most important design decision)
 1 block = 1 m, but the real c would make every effect invisible. **c is a per-dimension config value: 64 blocks/s by
-default, 512 in planetoid space.** (64 suits testing, where effects should be strong; for play the default should be
+default, overridable per dimension** (planets need a higher one, §9b). (64 suits testing, where effects should be strong; for play the default should be
 higher, the value to be chosen; tests keep 64.) Horizon-scale effects (redshift, tidal forces, lensing, horizons) depend on r_s/r and not
 on c. c sets how reachable special relativity is, how fast things orbit near a hole (c/2 at the ISCO), and how far a hole of
 a given size pulls (its mass scales with c²). Wormholes between dimensions keep β, not the raw velocity.
@@ -545,64 +545,63 @@ that band alone. Until one of those, the post pass's trace stays (sky pixels onl
 
 ---
 
-## 9b. Planetoid world type
+## 9b. Planets: flat levels drawn curved
 
-A `create_relativity:planetoid` world preset: an empty void dimension (Sable vacuum: `base_gravity` 0, `base_pressure` 0)
-holding a star system whose planets are **Sable sub-levels in orbit**, with gravity supplied by the spacetime layer.
+(Replaces the earlier planetoid plan, a cube-sphere planet as one Sable sub-level in a void dimension. That needed a
+6-direction gravity layer, block adjacency remapped across face seams and kinematic multi-million-block bodies.)
 
-### Planets as curved cube-sphere grids
-- **One planet = one Sable sub-level** (a single plot and rigid body). A single *seamless* square grid can't wrap a sphere:
-  the sphere's Euler characteristic is 2, while an all-4-neighbor grid needs 0 (a torus). Every sphere grid has defects.
-  Lat-long puts two at the poles, where cells collapse into slivers. The **cube-sphere** spreads eight mild ones over
-  the cube corners (3 faces meet instead of 4) and keeps cells nearly uniform everywhere else. So the planet's grid is a
-  cube-sphere laid out inside its one plot, with our code joining face edges.
-- Each face region is a flat block grid in plot space, generated so its surface follows the sphere.
-- **Face seams** are where the grid bends. Block-neighbor queries across a seam (fluids, redstone, Create shafts and belts,
-  neighbor updates) are remapped to the adjacent face with the right rotation. That's the main engineering cost of the
-  single-grid design, so the M14 spike prototypes it with redstone and a shaft line across a seam.
-- Each face has its own **local down** (the face normal in plot coordinates). Physics and collision use the true voxels.
-  A **curvature vertex warp** at render time bends each face's chunks onto the sphere (gnomonic cube→sphere map), so the
-  surface looks round and the seams between faces disappear.
-- Terrain is 3D noise sampled in sphere coordinates: core/mantle/crust layers, ores, caves, ocean shells to a sea radius,
-  and biomes by latitude and altitude. Seeded from the world seed per planet.
-- Generation is chunk by chunk inside the planet's plot, lazily, so a 128-radius planet doesn't stall world creation.
+**A planet is an ordinary flat level that wraps at its world border and is drawn curved.** Physics, gravity, block
+updates, Create machinery and Sable ships all stay vanilla flat-world code. Only rendering (and a little of the
+movement code) knows the planet is round.
 
-### Orbits
-- The star and planets (and moons) are integrated as an **N-body system with the M10 integrator** (EIH 1PN). Same code as
-  binary black holes, so orbits precess correctly near massive stars or a black hole.
-- Planets are **kinematic** Sable bodies: their pose (orbit + axial spin) is set from the integrator every physics tick
-  instead of letting Rapier integrate a body of millions of blocks. Ships and entities still collide with them normally.
-- The orbital state lives in `SavedData` and advances even while a planet's plot is unloaded. Sable loading tickets
-  keep nearby planets loaded.
-- Day and night come from the planet's actual spin relative to the star. Seasons come from axial tilt.
+### The curvature warp
+- A vertex warp bends the flat level onto a sphere of radius R: a point at horizontal offset (dx, dz) from the camera
+  and height h above the surface is placed at angle |d|/R round the planet's centre, at radius R + h. Each viewer
+  sees a sphere centred under themselves (the "tiny planet" warp).
+- It goes in through the same Veil injection as the vertex lens (vanilla, Sodium, Flywheel, Iris, entities), composed
+  before the lens. The frustum is widened the same way, and the horizon then hides what's below it.
+- Circumference = world size: 2πR = L, so walking once round the planet is one wrap.
 
-### Gravity and standing on a planet
-- Each planet is a gravitating source in the spacetime layer: weak-field (Newtonian + 1PN) outside, with uniform-density
-  interior gravity below the surface.
-- **Entity "up" follows the face you stand on**: the six cube-face directions, in the planet's local frame. Sable already
-  carries entities in a sub-level's local frame, so on a face the gravity is axis-aligned there. Movement, collision,
-  camera, and rendering need a gravity-direction layer (6 directions, smoothed camera roll on face transitions).
-  This is the biggest mixin surface in the mod, so it gets its own spike first.
+### Wrapping
+- **The topology needs a decision.** A flat square that wraps on both axes is a torus, and a torus can't be laid on a sphere
+  without defects (it's the Euler characteristic problem from the cube-sphere plan, again). Two options:
+  - **East–west only (recommended).** x wraps as longitude, and z is bounded by polar regions (ice caps, a polar storm
+    or the world border). From orbit the planet maps exactly to a globe (z → latitude), with the polar regions
+    squeezed into the caps.
+  - **Both axes.** Walking north past the pole returns you from the south. Each local warp still looks right, but the
+    globe seen from orbit can't match the ground everywhere.
+- Terrain must be periodic in x. Noise is sampled on a cylinder, (R cos(x/R), R sin(x/R), z), so there's no seam.
+  Biomes likewise, and structures must not straddle the seam (or must be placed wrapped).
+- Near the seam the chunks from the far side are drawn translated by ±L. Entities and ships crossing it are moved by L.
+  Block adjacency across the seam (fluids, redstone, Create shafts and belts, neighbour updates) wraps too. This is the
+  main engineering cost, so a spike tests it first, with a redstone line and a shaft across the seam.
 
-### Star and sky
-- The star is a gravitating source rendered as an emissive sphere (limb darkening, granulation noise, corona). Sky light
-  and block light follow the star direction. Heat damage up close.
-- Starfield skybox, other planets visible as lit discs/spheres, and eclipses for free from geometry.
+### Orbit in the planet's own level
+- Low orbit happens inside the planet level: a ship moving horizontally at speed v and height h above the surface feels
+  g(h) − v²/(R + h), which is zero at orbital speed, so it falls around the planet, wrapping at the border. The curvature
+  warp makes that look like circling the globe. Stations and ships are ordinary Sable sub-levels.
+- Gravity: g(h) = g₀ (R/(R+h))², a source in the spacetime layer that always points straight down in this level.
+- The world height limit (4064 blocks at most) caps how high orbit goes. Higher orbits, moons and interplanetary
+  space live in the system's space dimension (§10b). There the planet is a globe built from LODs, and descending is a
+  level transition.
 
-### Presets
-- **Sol-like**: a star, 3–5 rocky planets, a moon or two.
-- **Gargantua**: planets orbiting a spinning black hole instead of a star. The innermost one is a Miller's planet
-  (tick-ledger time dilation from M7, disk lighting from M5/M9). This ties the whole mod together.
+### Far terrain: LODs
+- From altitude and orbit the whole planet is visible. Distant Horizons, if installed, supplies its LODs, curved by the
+  same warp. Whether DH's renderer lets us move its vertices (its API, or a mixin into its shaders, as Iris does for
+  dh_terrain) is a spike.
+- Without DH, or for chunks never generated: placeholder geometry, a coarse heightmap and colour mesh sampled straight
+  from the terrain noise (no chunk generation), replaced by real chunks or LODs as they arrive.
 
-### Physics caveat (c and compactness)
-At c = 64 a block planet with Minecraft-like surface gravity is absurdly compact: `GM/(Rc²) = gR/c²` ≈ 0.5 for
-R = 100, g = 20 b/s². That's halfway to being a black hole. The planetoid dimension therefore gets its own **c = 512** (per-dimension c),
-which gives compactness under 1%. Planets then behave like planets, while the star (or Gargantua) still shows strong-field
-effects up close. Surface gravity and c are per-world config.
+### c and compactness
+Compactness is GM/(Rc²) = gR/c². A planet with circumference L = 20,000 blocks has R ≈ 3,200, so at Minecraft's
+gravity (~32 b/s² for entities) and c = 64 it's far past being a black hole. Even at c = 512 it's about 0.4. Planet
+levels therefore get their own c through the per-dimension override, high enough that orbital speed sqrt(gR) is a small
+fraction of c (or deliberately not, for a relativistic orbit as a feature). To be chosen with R and g.
 
-### Travel
-Propellers and balloons don't work in vacuum, so interplanetary flight needs thrusters (the M11 Lorentz Drive, or
-a simpler rocket thruster added here). Launch windows and Hohmann transfers fall out of the real orbits.
+### Star, sky, presets, travel (unchanged in spirit)
+- The star and other planets drawn in the sky, day and night from the planet's spin, seasons from axial tilt.
+- Presets: Sol-like, and Gargantua (planets round a spinning black hole; a Miller's planet with time dilation).
+- Propellers and balloons don't work in vacuum, so leaving the planet needs thrusters.
 
 ## 10. Create / Aeronautics integration
 
@@ -639,8 +638,8 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
   cross without a loading screen. Vanilla holds one client level; Immersive Portals does this deeply and breaks much.
   Aim: a second, read-only client level kept for drawing what's seen through a mouth or across a boundary, the
   fewest mixins that allow it, and a fallback (the mouth's captured view, §9.4) when another mod conflicts.
-- **Seamless space**: each star's system is a space dimension; planets (the planetoid worlds, §9b) appear in it as
-  space objects orbiting the star (N-body, §9b), and flying down to one or up from it is a level transition with no
+- **Seamless space**: each star's system is a space dimension; planets (flat levels drawn curved, §9b) appear in it as
+  globes orbiting the star (N-body), and flying down to one or up from it is a level transition with no
   break (the multi-level support above).
 - **A procedural galaxy** from the world seed: stars (type, mass, planets) generated on demand, each with its own space
   dimension, stitched by seamless transitions. Natural wormholes link some systems.
@@ -675,7 +674,7 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
 | **M11** | Special relativity | Speed cap c, 4-momentum thrust, SR post pass, retarded-time rendering / Terrell rotation. |
 | **M12** | Wormholes + warp drive | Gravity Generator (§10) on the metric field, collapsing into a hole at v_esc = c. Exotic matter, Casimir cavity, mouths, traversal (entities → ships), wormhole shader. **Alcubierre warp drive** (§8a): metric + tests, Warp Field Generator, kinematic bubble travel, arrival blast, warp view shader. |
 | **M13** | Content and polish | Progression, recipes, Ponders, advancements, configs, Iris fallback, perf pass, MP testing. |
-| **M14** | **Planetoid world type** | Spike (Sable plot size limits, lazy plot generation, entity gravity direction, cross-seam block adjacency). Cube-sphere generator + curvature warp, kinematic N-body orbits, face-relative gravity, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
+| **M14** | **Planets** (§9b) | Spike (wrapped block adjacency across the seam, drawing the far side's chunks, curving DH's LODs). Periodic terrain generator, curvature warp through the vertex-lens injection, in-level orbits, LOD/placeholder globe, star + sky, Sol-like and Gargantua presets, vacuum thrusters. *Finale.* |
 | Stretch | | Wormhole time machines + chronology protection, Neutronium-star mergers, GW energy harvesting, charged BHs, space dimension with starfield. |
 
 Order rationale: the visuals (M3) come early for motivation and to catch rendering-compat problems early. The Sable
@@ -694,7 +693,7 @@ spike (M0) comes first because it's the biggest unknown.
 | World-eating BHs kill servers | Per-tick block budget, max mass, gamerule, protected tags, evaporation |
 | Float precision in shaders at large coordinates | Camera-relative uniforms, double math on CPU only |
 | Superposition of sources isn't real GR | Documented. The dominant source is exact near itself. Mergers use PN + NR fits, not a live NR solve |
-| Planetoid: arbitrary entity gravity direction is a huge mixin surface; Sable plot size/lazy generation unknown | M14 starts with a spike. Gravity is limited to 6 cube-face directions per planet, not arbitrary vectors |
+| Planets: wrapping block adjacency and rendering at the world-border seam; curving Distant Horizons' LODs | M14 starts with a spike. Gravity stays vanilla "down" (flat level), so no gravity-direction layer is needed |
 | Binary lensing cost (no spherical symmetry) | Half-res ray march, adaptive steps, LOW preset falls back to two independent LUT lenses |
 | Lens cost on integrated GPUs | Per-frame work moved into cached tables (image map, direction-indexed path table); post pass at reduced resolution; measured by the `performance` GameTest against a 60 fps target |
 | Scope | Milestones are shippable on their own: an M6 alpha (BHs + spaghetti) is already a fun mod |
@@ -707,4 +706,4 @@ spike (M0) comes first because it's the biggest unknown.
 3. **Multiplayer player dilation = LEDGER_ONLY** default (`SLOW_PLAYER` opt-in); everything else always ticks on its proper time.
 4. **SR visuals = SEEN** (Terrell-correct) default.
 5. Package `net.kernelpanicsoft.relativity`, mod id `create_relativity`.
-6. ✅ **c is per dimension**: 64 by default, 512 in planetoid space so planets aren't near-black-holes (decided).
+6. ✅ **c is per dimension**: 64 by default; planet levels get a higher one so they aren't near-black-holes (decided; the value comes with R and g, §9b).
