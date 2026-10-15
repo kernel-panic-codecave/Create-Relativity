@@ -643,6 +643,20 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
   break (the multi-level support above).
 - **A procedural galaxy** from the world seed: stars (type, mass, planets) generated on demand, each with its own space
   dimension, stitched by seamless transitions. Natural wormholes link some systems.
+- **The home system is modelled on ours.** The overworld is its Earth: a G-type star, four rocky planets (the
+  overworld third, with one large moon), an asteroid belt, four giants with moon systems, and an icy outer belt. Types,
+  order and rough proportions follow the real Solar System. Distances and sizes are compressed to playable scales, and
+  the other planets are generated levels like any other system's (§9b). Other systems are procedural and need not
+  resemble it.
+  - The overworld becomes a §9b planet. Wrapping at the vanilla border (±30 M) gives R ≈ 9.5 M blocks, close to
+    Earth's 6.4 M m at 1 block = 1 m, and nobody meets the seam. But (orbital speed / c)² = gR/c², the planet's
+    compactness: an orbit needs c² ≫ gR whatever the wrap. For R ≈ 9.5 M that's c ≫ 17,000 b/s; a smaller configurable
+    wrap lowers it (R = 3,200 needs c ≫ 320). Either way the overworld's c rises well above 64. Horizon-scale lensing
+    doesn't change, but a hole of a given size is then more massive and pulls from farther (mass ∝ c²), and special
+    relativity is harder to reach. To be decided with §9b's c and R.
+  - Existing overworlds keep vanilla generation away from the seam; the wrap only needs periodic terrain within a
+    strip near the border, blended in.
+  - Where the Nether and the End fit (the Nether as the planet's interior, the End as a body in the system?) is open.
 - **Ships**: Create + Sable ships for space and between stars. *Shuttles* small enough to land on planets; *motherships*
   too big to, that stay in space and carry shuttles (the Enterprise and its shuttles, a Star Wars frigate and the Falcon).
   Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
