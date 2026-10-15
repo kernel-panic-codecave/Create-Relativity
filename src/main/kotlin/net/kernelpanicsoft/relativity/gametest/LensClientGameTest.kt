@@ -914,6 +914,8 @@ class LensClientGameTest {
 		}
 		// (hole x y z, r_s, spin; camera x y z, yaw, pitch)
 		val scenes = listOf(
+			// groundAroundHole's side_spin0.9 (where the vertex lens alone gets a third of the picture wrong).
+			"spinning, ground side" to doubleArrayOf(0.5, -54.0, 0.5, 2.0, 0.9, -14.5, -54.0, 0.5, -90.0, 10.0),
 			"spinning, from 7 r_s" to doubleArrayOf(0.5, -54.0, 0.5, 2.0, 0.9, -13.5, -54.0, 0.5, -90.0, 10.0),
 			// Exactly on a baked slot (distance 1.5 x 1.09^18 r_s, height angle 1.5 rad): the blend is that slot alone.
 			"spinning, on a slot" to doubleArrayOf(0.5, -54.0, 0.5, 2.0, 0.9, -13.615911902353254, -54.61897230525466, 0.5, -90.0, 10.0),
@@ -1839,12 +1841,23 @@ class LensClientGameTest {
 		val traced = camera()
 		// The lens, with and without the geometry round the hole for the sky's bent paths.
 		// And the vertex lens alone (the post pass passing the frame through): what's left to do before it can go.
-		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE, "vertex_only" to BlackHoleLens.Unseen.VOXELS)
+		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE, "vertex_only" to BlackHoleLens.Unseen.VOXELS, "vertex_only_slots" to BlackHoleLens.Unseen.VOXELS)
 		for ((mode, unseen) in modes) {
 			runOnClient {
 				BlackHoleLens.unseen = unseen
 				BlackHoleLens.timeGpu = true
-				BlackHoleLens.rawFrame = mode == "vertex_only"
+				BlackHoleLens.rawFrame = mode.startsWith("vertex_only")
+			}
+			// (The last: once the baked slots blend, for a spinning hole.)
+			if (mode == "vertex_only") {
+				// (The per-frame solver alone, given time to settle.)
+				runOnClient { KerrSlots.enabled = false }
+				waitTicks(300)
+			}
+			if (mode == "vertex_only_slots") {
+				runOnClient { KerrSlots.enabled = true }
+				var waited = 0
+				while (waited < 1200 && !computeOnClient { KerrSlots.blending }) { waitTicks(10); waited += 10 }
 			}
 			// The player isn't frozen with the world, and can drift: back to the pose, motion stopped.
 			command("tp @a $at")
@@ -1864,11 +1877,11 @@ class LensClientGameTest {
 			val wrong = LensReference.compare(reference, takeScreenshot("ground_${name}_$mode"))
 			wrongBy[mode] = wrong
 			CreateRelativity.LOGGER.info(
-				"Lens vs reference, {} ({}): {}% of pixels in the wrong class; GPU lens {} ms, voxels CPU {} ms",
-				name, mode, "%.1f".format(wrong * 100), "%.2f".format(median[0]), "%.2f".format(median[1]),
+				"Lens vs reference, {} ({}): {}% of pixels in the wrong class; GPU lens {} ms, voxels CPU {} ms (slots blending {})",
+				name, mode, "%.1f".format(wrong * 100), "%.2f".format(median[0]), "%.2f".format(median[1]), computeOnClient { KerrSlots.blending },
 			)
 		}
-		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS; BlackHoleLens.rawFrame = false }
+		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS; BlackHoleLens.rawFrame = false; KerrSlots.enabled = true }
 		// Within 4%, or (where the reference's classes are rough, e.g. shaded block sides) a point of the lens without
 		// the geometry.
 		val wrong = wrongBy.getValue("lens")
