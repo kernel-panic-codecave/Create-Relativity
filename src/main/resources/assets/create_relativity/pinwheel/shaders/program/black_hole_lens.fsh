@@ -13,6 +13,7 @@ uniform sampler2D LensLookup;
 uniform vec4 Disk;      // nearest hole's accretion disk: x brightness (0 = none), y/z inner/outer radius (blocks),
                         // w spin sense (+1 counter-clockwise from above, -1 clockwise)
 uniform float DiskTime; // seconds x c (blocks of light travel), for the disk's rotating turbulence
+uniform int DiskFillOnly; // 1 while the disk is drawn as geometry (DiskMesh): here only in sky pixels, its images' holes
 
 uniform sampler2D KerrTable0; // kerr_table.fsh outputs, at reduced resolution
 uniform sampler2D KerrTable1;
@@ -537,6 +538,7 @@ void main() {
     // (A spinning hole's disk is the Kerr ray's, wherever it ends, falling in included: none past the table's reach.)
     bool spinning = HoleCount > 0 && abs(HoleSpins[0].x) >= MIN_KERR_SPIN;
     if (!spinning && (ProfileFlags & 256) == 0) disk = diskSample(dir, sceneDist);
+    if (DiskFillOnly == 1 && sceneDist < 1e29) disk = vec4(0.0);
     // Alpha marks what this pass made (lens_aa.fsh smooths and sharpens just those): 1 where the world's own pixel stands.
     bool made = disk.a > 0.0 || (sceneDist >= 1e29 && hit.outcome != SCENE_UNBENT && hit.outcome != 0) || scene != original.rgb;
     fragColor = vec4(mix(scene, disk.rgb, disk.a), made ? 0.5 : 1.0);

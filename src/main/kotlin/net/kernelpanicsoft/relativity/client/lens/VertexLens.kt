@@ -98,6 +98,19 @@ object VertexLens {
 	private var table: CompletableFuture<FloatArray>? = null
 	/** The secondary-image table (SchwarzschildImages.buildSecondaryTable), and its texture once built. */
 	private var secondTable: CompletableFuture<FloatArray>? = null
+
+	/** The image tables as built (SchwarzschildImages.sample / sampleSecondary read them), for the CPU (DiskMesh). */
+	@Volatile
+	var primaryImages: FloatArray? = null
+		private set
+	@Volatile
+	var secondaryImages: FloatArray? = null
+		private set
+
+	/** The tables' sizes (u0, uP, phi), for those lookups. */
+	const val IMAGES_U0 = TABLE_U0
+	const val IMAGES_UP = TABLE_UP
+	const val IMAGES_PHI = TABLE_PHI
 	var secondTexture = 0
 		private set
 	private const val SECOND_SAMPLER = "RelativitySecondImages"
@@ -122,10 +135,14 @@ object VertexLens {
 
 	fun init() {
 		table = CompletableFuture.supplyAsync {
-			SchwarzschildImages.forFiltering(SchwarzschildImages.buildTable(TABLE_U0, TABLE_UP, TABLE_PHI), TABLE_U0, TABLE_UP, TABLE_PHI)
+			val raw = SchwarzschildImages.buildTable(TABLE_U0, TABLE_UP, TABLE_PHI)
+			primaryImages = raw
+			SchwarzschildImages.forFiltering(raw, TABLE_U0, TABLE_UP, TABLE_PHI)
 		}
 		secondTable = CompletableFuture.supplyAsync {
-			SchwarzschildImages.forFiltering(SchwarzschildImages.buildSecondaryTable(TABLE_U0, TABLE_UP, TABLE_PHI), TABLE_U0, TABLE_UP, TABLE_PHI)
+			val raw = SchwarzschildImages.buildSecondaryTable(TABLE_U0, TABLE_UP, TABLE_PHI)
+			secondaryImages = raw
+			SchwarzschildImages.forFiltering(raw, TABLE_U0, TABLE_UP, TABLE_PHI)
 		}
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, ::onRenderStage)
 	}
@@ -165,6 +182,7 @@ object VertexLens {
 		when (event.stage) {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
+			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame) DiskMesh.draw(hole, event.modelViewMatrix)
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
 				setEnabled(false)
 				secondsWanted = false
@@ -282,7 +300,15 @@ object VertexLens {
 	 */
 	@JvmStatic
 	fun wantsImmediateSecondImages(projection: Matrix4f): Boolean =
-		secondsWanted && !drawingSecondImages && projection.equals(lastProjection, 1e-6f)
+		secondsWanted && !drawingSecondImages && !ownSecondImages && projection.equals(lastProjection, 1e-6f)
+
+	/** While set, immediate draws aren't repeated for their secondary images: the drawer does that itself (DiskMesh,
+	 * whose secondary images are coloured apart). */
+	@JvmField
+	var ownSecondImages = false
+
+	/** Whether this frame draws secondary images at all. */
+	val secondImagesThisFrame: Boolean get() = secondsWanted
 
 	/** The player's own body drawn for its secondary image (its own buffers: flushed in that mode only). */
 	private val selfBuffers by lazy { net.minecraft.client.renderer.MultiBufferSource.immediate(com.mojang.blaze3d.vertex.ByteBufferBuilder(1 shl 16)) }
@@ -352,7 +378,7 @@ object VertexLens {
 
 	/** The block's [11].y: bit 1 the pixel check off (debug), bit 2 the secondary images, the rest the axis cut. */
 	private fun modeFlags(second: Boolean, axisCut: Double): Float =
-		(if (pixelCheck) 0f else 1f) + (if (second) 2f else 0f) + 4f * Math.round(axisCut * 100.0).toFloat()
+		(if (pixelCheck) 0f else 1f) + (if (second) 2f else 0f) + 4f * (Math.round(axisCut * 100.0).toFloat() + if (fineCut) 1000f else 0f)
 
 	/** Draws without the pixel check (Flywheel's) take the full near-axis cut while [on]; then the default again. */
 	@JvmStatic
@@ -362,6 +388,15 @@ object VertexLens {
 		setModeFlags(drawingSecondImages)
 	}
 	private var uncheckedCut = false
+
+	/** Draws whose geometry is fine and carry the pixel check take the fine cut even round a spinning hole while [on]. */
+	@JvmStatic
+	fun fineAxisCut(on: Boolean) {
+		if (buffer == 0 || !activeThisFrame) return
+		fineCut = on
+		setModeFlags(drawingSecondImages)
+	}
+	private var fineCut = false
 
 	private fun setModeFlags(second: Boolean, axisCut: Double = if (uncheckedCut) UNCHECKED_AXIS_CUT else CHECKED_AXIS_CUT) {
 		val value = modeFlags(second, axisCut)

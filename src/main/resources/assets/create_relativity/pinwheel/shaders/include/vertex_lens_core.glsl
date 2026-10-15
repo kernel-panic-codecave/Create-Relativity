@@ -53,8 +53,10 @@ const float RELATIVITY_AXIS_CUT = 2.0;  // blocks: larger than a block face's di
 float relativityAxisCut() {
     // (Round a spinning hole the full cut: its ring isn't centred on the straight camera-hole axis the cut and the tube
     // are measured from, and letting its images by that axis through put 1.6% of a side view wrong instead of 0.4%.)
-    if (RelativityLensData[1].z > 0.5) return RELATIVITY_AXIS_CUT;
+    // (Codes from 1000 up: the fine cut even there, for fine geometry, DiskMesh's.)
     float code = floor(RelativityLensData[11].y / 4.0);
+    if (code >= 1000.0) return (code - 1000.0) / 100.0;
+    if (RelativityLensData[1].z > 0.5) return RELATIVITY_AXIS_CUT;
     return code > 0.5 ? code / 100.0 : RELATIVITY_AXIS_CUT;
 }
 const float RELATIVITY_BEYOND = 1e4;   // NDC depth of hidden vertices: far past the far plane

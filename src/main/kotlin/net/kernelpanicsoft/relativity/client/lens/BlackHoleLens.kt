@@ -235,6 +235,8 @@ object BlackHoleLens {
 	 * at its ISCO, outer edge four times that, which way it turns, and time for the disk's rotating turbulence.
 	 */
 	private fun uploadDisk(uniform: (String, ShaderUniformAccess.() -> Unit) -> Unit, level: Level, hole: BlackHole?, minecraft: Minecraft) {
+		// Where the disk is drawn as geometry (DiskMesh), here only in sky pixels: the holes in the mesh's images.
+		uniform("DiskFillOnly") { setInt(if (DiskMesh.drawsDisk(hole)) 1 else 0) }
 		if (hole == null || hole.accretionRate <= 0.0) {
 			uniform("Disk") { setVector(0f, 0f, 0f, 0f) }
 			return

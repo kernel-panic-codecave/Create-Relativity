@@ -6,6 +6,7 @@ import net.kernelpanicsoft.archie.gametest.ClientGameTestContext
 import net.kernelpanicsoft.archie.gametest.TestSingleplayerContext
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
+import net.kernelpanicsoft.relativity.client.lens.DiskMesh
 import net.kernelpanicsoft.relativity.client.lens.LensResolution
 import net.kernelpanicsoft.relativity.client.lens.StageTimers
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
@@ -1203,6 +1204,69 @@ class LensClientGameTest {
 				it.options.hideGui = false
 				SpacetimeDebugRenderer.hidden = false
 			}
+		}
+	}
+
+	/**
+	 * The accretion disk drawn as geometry (DiskMesh) against the post pass's: a feeding hole without spin seen from a
+	 * little above its disk (the far side arches over the shadow in the secondary images). Screenshots of both, and how
+	 * much of the picture they differ in.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.diskMesh() {
+		if (!ClientTestInput.selected("diskMesh")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(8)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set midnight", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+				"relativity bh clear", "relativity bh create 0.5 -20 0.5 3 0", "relativity bh feed 1000000",
+			)) command(command)
+			waitTicks(100) // the disk brightens as the feed's rate builds up
+			command("tick freeze")
+			val eyeHeight = computeOnClient { it.player!!.eyeHeight.toDouble() }
+			// 12 r_s out, 6 degrees above the disk's plane, looking at the hole.
+			val distance = 36.0
+			command("tp @a ${0.5 - distance * kotlin.math.cos(Math.toRadians(6.0))} ${-20.0 + distance * kotlin.math.sin(Math.toRadians(6.0)) - eyeHeight} 0.5 -90 6")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			val shots = HashMap<Boolean, java.nio.file.Path>()
+			for (mesh in listOf(false, true)) {
+				runOnClient { DiskMesh.enabled = mesh }
+				waitTicks(5)
+				shots[mesh] = takeScreenshot("disk_mesh_$mesh")
+			}
+			runOnClient { DiskMesh.secondaries = false }
+			waitTicks(5)
+			takeScreenshot("disk_mesh_primary")
+			runOnClient { VertexLens.skipTable = true }
+			waitTicks(5)
+			takeScreenshot("disk_mesh_flat")
+			runOnClient { VertexLens.skipTable = false }
+			runOnClient { DiskMesh.enabled = true; DiskMesh.secondaries = true }
+			val changed = Files.newInputStream(shots[false]!!).use { NativeImage.read(it) }.use { x ->
+				Files.newInputStream(shots[true]!!).use { NativeImage.read(it) }.use { y ->
+					var differ = 0L
+					for (j in 0 until x.height) for (i in 0 until x.width) {
+						val p = x.getPixelRGBA(i, j)
+						val q = y.getPixelRGBA(i, j)
+						var d = 0
+						for (c in 0..2) d = maxOf(d, kotlin.math.abs(((p shr (8 * c)) and 255) - ((q shr (8 * c)) and 255)))
+						if (d > 48) differ += 1
+					}
+					differ.toDouble() / (x.width.toLong() * x.height)
+				}
+			}
+			CreateRelativity.LOGGER.info("Disk mesh: differs from the post pass's disk in {}% of the picture (spin {})", "%.2f".format(100 * changed),
+				computeOnClient { net.kernelpanicsoft.relativity.spacetime.SpacetimeField.blackHoles(it.level!!).single().spin })
 		}
 	}
 
