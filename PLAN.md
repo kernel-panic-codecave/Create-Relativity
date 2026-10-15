@@ -656,7 +656,17 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
     relativity is harder to reach. To be decided with §9b's c and R.
   - Existing overworlds keep vanilla generation away from the seam; the wrap only needs periodic terrain within a
     strip near the border, blended in.
-  - Where the Nether and the End fit (the Nether as the planet's interior, the End as a body in the system?) is open.
+  - **Level stacking, as in Terraria: the Nether is below the overworld.** Digging through the overworld's floor drops
+    you into the Nether through its roof, and flying up through the roof brings you back. Bedrock floor and roof
+    become the transition layers. Portals keep working as shortcuts.
+    - The 8:1 coordinate scale is the planet's geometry: a shell at radius R/8 has 1/8 the circumference, so the
+      Nether is drawn by the same curvature warp at radius R/8, wrapping at 1/8 of the overworld's border. It sits
+      beneath the overworld point for point, at (x/8, z/8). The rock between is left out (not to scale, as in Terraria).
+    - Gravity inside a uniform planet falls with depth (g ∝ r, so g/8 at R/8). Keep vanilla gravity there, or make the
+      Nether a low-gravity layer as a feature: open.
+    - Seeing across the boundary (looking down a shaft into the Nether, ships and entities crossing it, chunks loaded on
+      both sides) needs the multi-level client support above.
+  - Where the End fits (a body in the system, perhaps the Moon) is open.
 - **Ships**: Create + Sable ships for space and between stars. *Shuttles* small enough to land on planets; *motherships*
   too big to, that stay in space and carry shuttles (the Enterprise and its shuttles, a Star Wars frigate and the Falcon).
   Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
