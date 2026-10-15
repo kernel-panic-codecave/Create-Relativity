@@ -609,6 +609,21 @@ vec3 relativityNearImage(vec3 p, vec3 hole, float rs) {
 // tables' over the next stretch.
 const float RELATIVITY_NEAR = 0.25;
 
+// Round a spinning hole, points nearer than it whose straight line of sight passes it wider than this many r_s are
+// followed directly too (relativityNearImage): their light is weakly bent, and the image map covers that stretch on
+// the camera's side poorly (its shells meet the light edge on there).
+const float RELATIVITY_WEAK_MISS = 3.0;
+
+// Whether view-space point p (camera at the origin) is such a point.
+bool relativityWeakNear(vec3 p) {
+    if (RelativityLensData[1].z < 0.5 || RelativityLensData[7].y < 1.5) return false; // (a lone hole: [7].y 2)
+    vec3 hole = RelativityLensData[0].xyz;
+    float d = length(p);
+    if (d >= length(hole)) return false;
+    float t = clamp(dot(hole, p) / (d * d), 0.0, 1.0);
+    return length(hole - t * p) > RELATIVITY_WEAK_MISS * RelativityLensData[0].w;
+}
+
 // How many times faster than the point the image may move round it before the vertex is hidden (relativityFarImage).
 const float RELATIVITY_STRETCH_CUT = 25.0;
 const float RELATIVITY_NEAR_BLEND = 0.35;
@@ -638,6 +653,10 @@ int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     }
     if (holeCentre) {
         image = relativitySchwarzschildImage(p, seen, nearAxis);
+        // (Inside r_s, for the Schwarzschild image "nothing to bend": round a spinning hole, whose horizon is smaller,
+        // such points, the horizon sphere's (HorizonMesh), are the map's, and without an image there they're hidden.)
+        bool insideRs = length(p - RelativityLensData[0].xyz) <= RelativityLensData[0].w;
+        if (image == 2 && RelativityLensData[1].z > 0.5 && insideRs) image = -1;
         if (image == 2) return 2;
     }
     // Through every source: the image from the map.
@@ -700,6 +719,7 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     }
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
     float nearness = holeCentre ? smoothstep(RELATIVITY_NEAR * rc, RELATIVITY_NEAR_BLEND * rc, d) : 1.0;
+    if (relativityWeakNear(p)) nearness = 0.0;
     vec3 seen;
     int image = 1;
     if (nearness > 0.0) {
@@ -753,6 +773,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // (Close to the camera the primary images are placed by the near march, not checked; the secondary ones always are:
     // the player's own body, round the camera, is all triangles across the ring.)
     if (holeCentre && d < RELATIVITY_NEAR_BLEND * length(hole) && !relativitySecond()) return false;
+    if (!relativitySecond() && relativityWeakNear(unbent)) return false;
     vec3 seen;
     int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;

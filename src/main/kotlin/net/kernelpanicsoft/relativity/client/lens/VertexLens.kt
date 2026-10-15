@@ -129,6 +129,11 @@ object VertexLens {
 	@Volatile private var lensCentre: Centre? = null
 	private var savedSmartCull: Boolean? = null
 
+	/** Whether this frame's lensing hole is the only source in view (HorizonMesh's outline and the shader's weak near
+	 * march follow its light alone). */
+	var loneHole = false
+		private set
+
 	/** True while vertex lensing is on for this frame's level render (the post pass then skips geometry). */
 	var activeThisFrame = false
 		private set
@@ -256,6 +261,7 @@ object VertexLens {
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
 		if (slotted) kerr = true
+		if (!perspective) loneHole = holes.size == 1 && others.isEmpty()
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null, kerr && !kerrSolveOff, if (slotted) KerrSlots.outer(lone!!) else null)
 
 		val previous = GlStateManager._getActiveTexture()
@@ -470,7 +476,9 @@ object VertexLens {
 				val dz = centre.z - camZ
 				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put((centre.hole?.spin ?: 0.0).toFloat())
 				// [7].y: 1 if the centre is a hole (the Schwarzschild image is a fair first guess and cut there).
-				data.put(centre.scale.toFloat()).put(if (centre.hole != null) 1f else 0f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+				// ([7].y 2: the hole is the only source in view: the near march, which follows its light alone, may stand in
+				// for the map further out.)
+				data.put(centre.scale.toFloat()).put(if (centre.hole == null) 0f else if (loneHole) 2f else 1f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
 					val c = viewToGame.getColumn(column, Vector3f())

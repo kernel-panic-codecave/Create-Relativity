@@ -169,6 +169,66 @@ class KerrSlotBaker(
 		return maps
 	}
 
+	/** Whether the light seen along [dir] (map frame) comes from the horizon: traced back, it falls in. */
+	fun captured(dir: DoubleArray): Boolean {
+		val x = local(camera)
+		val d = local(dir)
+		val p = DoubleArray(3)
+		val ptOut = DoubleArray(1)
+		nullMomentum(x, doubleArrayOf(-d[0], -d[1], -d[2]), p, ptOut)
+		val pt = ptOut[0]
+		val dx = DoubleArray(3); val dp = DoubleArray(3)
+		val k2x = DoubleArray(3); val k2p = DoubleArray(3)
+		val k3x = DoubleArray(3); val k3p = DoubleArray(3)
+		val k4x = DoubleArray(3); val k4p = DoubleArray(3)
+		val tx = DoubleArray(3); val tp = DoubleArray(3)
+		val escape = max(2.0 * cameraRadius, 30.0 * m)
+		for (step in 0 until 4 * MAX_STEPS) {
+			val r = backward(x, p, pt, dx, dp)
+			if (r < 1.02 * horizon) return true
+			if (norm(x) > escape && x[0] * dx[0] + x[1] * dx[1] + x[2] * dx[2] > 0.0) return false
+			val dl = 0.5 * STEP * max(r, 0.5 * m) / max(norm(dx), 1e-9)
+			for (i in 0..2) { tx[i] = x[i] + 0.5 * dl * dx[i]; tp[i] = p[i] + 0.5 * dl * dp[i] }
+			backward(tx, tp, pt, k2x, k2p)
+			for (i in 0..2) { tx[i] = x[i] + 0.5 * dl * k2x[i]; tp[i] = p[i] + 0.5 * dl * k2p[i] }
+			backward(tx, tp, pt, k3x, k3p)
+			for (i in 0..2) { tx[i] = x[i] + dl * k3x[i]; tp[i] = p[i] + dl * k3p[i] }
+			backward(tx, tp, pt, k4x, k4p)
+			for (i in 0..2) {
+				x[i] += dl / 6.0 * (dx[i] + 2.0 * k2x[i] + 2.0 * k3x[i] + k4x[i])
+				p[i] += dl / 6.0 * (dp[i] + 2.0 * k2p[i] + 2.0 * k3p[i] + k4p[i])
+			}
+		}
+		return false
+	}
+
+	/**
+	 * The shadow's outline from the camera: [count] view directions (map frame, unit) round the hole's, each where light
+	 * stops falling in, found by bisection along the great circle from the hole's direction outward. Its edge, the
+	 * photon region's image, shaped by the spin.
+	 */
+	fun shadowOutline(count: Int, iterations: Int = 24): Array<DoubleArray> {
+		val axis = DoubleArray(3) { -camera[it] / cameraRadius }
+		val up = if (abs(axis[1]) < 0.99) doubleArrayOf(0.0, 1.0, 0.0) else doubleArrayOf(1.0, 0.0, 0.0)
+		val dot = up[0] * axis[0] + up[1] * axis[1] + up[2] * axis[2]
+		val zero = normalize(doubleArrayOf(up[0] - dot * axis[0], up[1] - dot * axis[1], up[2] - dot * axis[2]))
+		val quarter = cross(axis, zero)
+		return Array(count) { k ->
+			val azimuth = 2.0 * PI * k / count
+			fun dir(alpha: Double) = DoubleArray(3) { cos(alpha) * axis[it] + sin(alpha) * (cos(azimuth) * zero[it] + sin(azimuth) * quarter[it]) }
+			// Bracket: straight at the hole falls in; past the critical angle of a Schwarzschild hole of twice the mass
+			// (a spinning hole's shadow is smaller), or a right angle, escapes.
+			var lo = 0.0
+			var hi = min(PI / 2.0, asin(min(1.0, 1.5 * sqrt(3.0) * 4.0 * m / cameraRadius)) + 0.05)
+			if (cameraRadius < 6.0 * m || captured(dir(hi))) hi = PI * 0.95
+			repeat(iterations) {
+				val mid = 0.5 * (lo + hi)
+				if (captured(dir(mid))) lo = mid else hi = mid
+			}
+			dir(0.5 * (lo + hi))
+		}
+	}
+
 	/** The fan's direction at (column, row) in fan texels: relativityTableDir (vertex_lens_core.glsl), map frame. */
 	fun fanDirection(column: Double, row: Double): DoubleArray {
 		val rc = sqrt(camera[0] * camera[0] + camera[1] * camera[1] + camera[2] * camera[2])
