@@ -668,8 +668,8 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
       both sides) needs the multi-level client support above.
   - **The asteroid belt is real asteroids**, procedural Sable bodies to mine (below).
   - **The End is a pocket dimension** off the system, reached through a stable natural wormhole (§8) that opens onto the
-    main End island. The End portal still leads there as well. The wormhole sits somewhere in the system for ships to
-    find, perhaps in the belt.
+    main End island. The End portal still leads there as well. The wormhole lies out past the outermost giant (beyond
+    Neptune's place), so reaching the End by ship is a late trip to the system's edge.
 - **Ships**: Create + Sable ships for space and between stars. *Shuttles* small enough to land on planets; *motherships*
   too big to, that stay in space and carry shuttles (the Enterprise and its shuttles, a Star Wars frigate and the Falcon).
   Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
