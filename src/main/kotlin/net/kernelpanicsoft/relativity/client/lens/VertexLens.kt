@@ -182,7 +182,10 @@ object VertexLens {
 		when (event.stage) {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
-			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame) DiskMesh.draw(hole, event.modelViewMatrix)
+			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame) {
+				HorizonMesh.draw(hole, event.modelViewMatrix)
+				DiskMesh.draw(hole, event.modelViewMatrix)
+			}
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
 				setEnabled(false)
 				secondsWanted = false

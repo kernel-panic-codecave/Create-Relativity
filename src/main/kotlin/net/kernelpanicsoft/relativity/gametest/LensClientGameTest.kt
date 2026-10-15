@@ -1838,11 +1838,13 @@ class LensClientGameTest {
 		val wrongBy = HashMap<String, Double>()
 		val traced = camera()
 		// The lens, with and without the geometry round the hole for the sky's bent paths.
-		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE)
+		// And the vertex lens alone (the post pass passing the frame through): what's left to do before it can go.
+		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE, "vertex_only" to BlackHoleLens.Unseen.VOXELS)
 		for ((mode, unseen) in modes) {
 			runOnClient {
 				BlackHoleLens.unseen = unseen
 				BlackHoleLens.timeGpu = true
+				BlackHoleLens.rawFrame = mode == "vertex_only"
 			}
 			// The player isn't frozen with the world, and can drift: back to the pose, motion stopped.
 			command("tp @a $at")
@@ -1866,7 +1868,7 @@ class LensClientGameTest {
 				name, mode, "%.1f".format(wrong * 100), "%.2f".format(median[0]), "%.2f".format(median[1]),
 			)
 		}
-		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS }
+		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS; BlackHoleLens.rawFrame = false }
 		// Within 4%, or (where the reference's classes are rough, e.g. shaded block sides) a point of the lens without
 		// the geometry.
 		val wrong = wrongBy.getValue("lens")
