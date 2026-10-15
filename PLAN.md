@@ -675,6 +675,13 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
   Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
 - **Galaxy view and autopilot**: plot a course on a galaxy map; the ship flies itself, routing through natural and
   built wormholes or across empty space by warp, and the map shows the fuel it will burn (Degenerate / Exotic Matter).
+- **Automated ship logistics**, the way Create runs trains: seat a conductor (a blaze burner, or a mob) at a ship's
+  controls and give it a Create schedule. Stops are **docking ports** (the ship's train station) on stations, colonies,
+  asteroid rigs and planets; schedule conditions work as for trains (cargo full or empty, time, redstone, idle). The
+  autopilot flies each leg (orbits, warp, wormholes). Cargo vessels ferry items and fluids (Create packages,
+  frogports at the ports) and passengers (villagers and players in seats) between your outposts.
+  - Relativity shows up: a ship that crossed at high β or waited near a hole arrives having aged less, so schedule
+    times are kept on the ship's proper time and the port's clock both, and the difference is shown.
 - **Cockpits**: hologram monitors (the galaxy map, the ship's blueprint with its fields, instruments), levers and buttons
   as Create-style controls.
 - **Warp drive feel**: sound design and animations for spin-up, engage, cruise and drop-out (the bubble forming, the
