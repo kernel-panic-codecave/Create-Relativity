@@ -79,6 +79,23 @@ object QuadSubdivision {
 		return ceil(a[7] * edge / maxOf(distance, 1e-3)).toInt().coerceIn(1, AXIS_MAX_LEVEL)
 	}
 
+	/**
+	 * The axis (camera then hole centre, world) when a face coming within [POLAR_REACH] blocks of it behind the hole is
+	 * to be split round it in polar pieces ([QuadSubdivider]); null when there's no tube.
+	 */
+	fun polarAxis(): DoubleArray? = axis
+
+	/**
+	 * Faces this close to the axis (blocks) are split round the point where it crosses their plane: [POLAR_SLICES]
+	 * slices of azimuth, rings growing geometrically from [POLAR_INNER] out. A piece by the axis is imaged as an arc of
+	 * the Einstein ring as wide as the azimuth it spans round the axis, and a square grid's pieces there span most of
+	 * a turn: their straight edges cut inside the ring and leave a thin line of it empty. A polar piece spans 2 pi / 64,
+	 * whose chord strays from the ring by R (1 - cos(pi / 64)): about a pixel for a ring of 800 px.
+	 */
+	const val POLAR_REACH = 0.75
+	const val POLAR_SLICES = 64
+	const val POLAR_INNER = 0.004
+
 	/** Distance from world point (x, y, z) to the axis behind the hole (null if not beside that stretch of it). */
 	private fun axisDistance(a: DoubleArray, x: Double, y: Double, z: Double): Double? {
 		var ux = a[3] - a[0]
@@ -301,35 +318,232 @@ class QuadSubdivider : VertexConsumer {
 	}
 
 	private fun emit() {
+		if (polar()) return
 		val cx = (position[0] + position[3] + position[6] + position[9]) / 4.0
 		val cy = (position[1] + position[4] + position[7] + position[10]) / 4.0
 		val cz = (position[2] + position[5] + position[8] + position[11]) / 4.0
-		// (The longest edge, for the axis tube's pieces.)
-		var edge = 0.0
-		for (k in 0..3) {
-			val l = (k + 1) % 4
-			val ex = (position[k * 3] - position[l * 3]).toDouble()
-			val ey = (position[k * 3 + 1] - position[l * 3 + 1]).toDouble()
-			val ez = (position[k * 3 + 2] - position[l * 3 + 2]).toDouble()
-			edge = maxOf(edge, sqrt(ex * ex + ey * ey + ez * ez))
-		}
-		val n = maxOf(QuadSubdivision.levelAt(originX + cx, originY + cy, originZ + cz), QuadSubdivision.axisLevel(originX + cx, originY + cy, originZ + cz, edge))
+		// Each edge's pieces from its own midpoint and length, which the face across it shares: both split it alike, so
+		// no vertex of one lies partway along an edge of the other (a T-junction: once bent, the edges part and leave a
+		// crack of sky). Edges in (s, t) order: s = 0 (v0-v1), t = 1 (v1-v2), s = 1 (v3-v2), t = 0 (v0-v3).
+		val edges = edgeLevels()
+		var longest = 0.0
+		for (e in 0..3) longest = maxOf(longest, edgeLength(e))
+		val n = maxOf(level(originX + cx, originY + cy, originZ + cz, longest), edges.max())
 		if (n <= 1) {
 			for (k in 0..3) put(k)
 			return
 		}
 		QuadSubdivision.split.incrementAndGet()
+		// The grid's points on the quad's edges snapped to the edge's own pieces (a few cells beside a coarser edge thin
+		// to slivers or nothing; none fold over, the snapping keeping their order).
+		fun s(i: Int, j: Int): Float = when {
+			j == n -> snap(i, n, edges[1])
+			j == 0 -> snap(i, n, edges[3])
+			else -> i.toFloat() / n
+		}
+		fun t(i: Int, j: Int): Float = when {
+			i == 0 -> snap(j, n, edges[0])
+			i == n -> snap(j, n, edges[2])
+			else -> j.toFloat() / n
+		}
 		// Bilinear over the quad: P(s, t) = (1-s)(1-t) v0 + (1-s) t v1 + s t v2 + s (1-t) v3, each sub-quad's corners in
 		// the same order, so it keeps the quad's winding.
 		for (i in 0 until n) for (j in 0 until n) {
-			val s0 = i.toFloat() / n
-			val s1 = (i + 1).toFloat() / n
-			val t0 = j.toFloat() / n
-			val t1 = (j + 1).toFloat() / n
-			put(s0, t0)
-			put(s0, t1)
-			put(s1, t1)
-			put(s1, t0)
+			put(s(i, j), t(i, j))
+			put(s(i, j + 1), t(i, j + 1))
+			put(s(i + 1, j + 1), t(i + 1, j + 1))
+			put(s(i + 1, j), t(i + 1, j))
+		}
+	}
+
+	private val ends = arrayOf(intArrayOf(0, 1), intArrayOf(1, 2), intArrayOf(3, 2), intArrayOf(0, 3))
+
+	private fun edgeLength(e: Int): Double {
+		val p = ends[e][0] * 3
+		val q = ends[e][1] * 3
+		val ex = (position[p] - position[q]).toDouble()
+		val ey = (position[p + 1] - position[q + 1]).toDouble()
+		val ez = (position[p + 2] - position[q + 2]).toDouble()
+		return sqrt(ex * ex + ey * ey + ez * ez)
+	}
+
+	/** Each edge's pieces, from its own midpoint and length (the same for the face across it). */
+	private fun edgeLevels(): IntArray = IntArray(4) { e ->
+		val p = ends[e][0] * 3
+		val q = ends[e][1] * 3
+		level(originX + (position[p] + position[q]) / 2.0, originY + (position[p + 1] + position[q + 1]) / 2.0, originZ + (position[p + 2] + position[q + 2]) / 2.0, edgeLength(e))
+	}
+
+	/** Pieces a side at world point (x, y, z) for an edge (or quad) of [length]. */
+	private fun level(x: Double, y: Double, z: Double, length: Double): Int =
+		maxOf(QuadSubdivision.levelAt(x, y, z), QuadSubdivision.axisLevel(x, y, z, length))
+
+	/** Grid point [k] of [n] along an edge of [pieces] pieces: the nearest of its points. */
+	private fun snap(k: Int, n: Int, pieces: Int): Float = Math.round(k.toDouble() * pieces / n).toFloat() / pieces
+
+	/**
+	 * Splits the quad round the point where the axis behind the hole crosses its plane, if it comes within
+	 * [QuadSubdivision.POLAR_REACH] of it ([QuadSubdivision.POLAR_SLICES]): polar cells, each clipped to the quad.
+	 * Whether it did.
+	 */
+	private fun polar(): Boolean {
+		val a = QuadSubdivision.polarAxis() ?: return false
+		var ux = a[3] - a[0]
+		var uy = a[4] - a[1]
+		var uz = a[5] - a[2]
+		val length = sqrt(ux * ux + uy * uy + uz * uz)
+		if (length < 1e-6) return false
+		ux /= length; uy /= length; uz /= length
+		// Across the axis: two directions perpendicular to it, and each corner's place in that plane (the axis at 0).
+		val (bx, by, bz) = if (kotlin.math.abs(uy) < 0.9) Triple(0.0, 1.0, 0.0) else Triple(1.0, 0.0, 0.0)
+		var ax = by * uz - bz * uy
+		var ay = bz * ux - bx * uz
+		var az = bx * uy - by * ux
+		val al = sqrt(ax * ax + ay * ay + az * az)
+		ax /= al; ay /= al; az /= al
+		val cx = uy * az - uz * ay
+		val cy = uz * ax - ux * az
+		val cz = ux * ay - uy * ax
+		val across = DoubleArray(8)
+		var behind = 0.0
+		for (k in 0..3) {
+			val dx = originX + position[k * 3] - a[3]
+			val dy = originY + position[k * 3 + 1] - a[4]
+			val dz = originZ + position[k * 3 + 2] - a[5]
+			behind += (dx * ux + dy * uy + dz * uz) / 4.0
+			across[k * 2] = dx * ax + dy * ay + dz * az
+			across[k * 2 + 1] = dx * cx + dy * cy + dz * cz
+		}
+		if (behind <= 0.0) return false
+		// (s, t) of a point across the axis: P(s, t) = v0 + s (v3 - v0) + t (v1 - v0), seen along the axis.
+		val sx = across[6] - across[0]
+		val sy = across[7] - across[1]
+		val tx = across[2] - across[0]
+		val ty = across[3] - across[1]
+		val det = sx * ty - sy * tx
+		val area = kotlin.math.abs(det)
+		// (A face nearly along the axis: its pieces wouldn't be small round it anyway.)
+		if (area < 1e-4 * (sx * sx + sy * sy + tx * tx + ty * ty)) return false
+		if (distanceToOrigin(across) > QuadSubdivision.POLAR_REACH) return false
+		// Edges whose face across (the next face in the plane) is split on a grid, not round the axis: the cells'
+		// points on them go to that grid's ([edgeLevels]), so the two meet without T-junctions. (Between two faces split
+		// round the axis the cells' points on the shared edge are the same already.)
+		val levels = edgeLevels()
+		val shifts = arrayOf(doubleArrayOf(-sx, -sy), doubleArrayOf(tx, ty), doubleArrayOf(sx, sy), doubleArrayOf(-tx, -ty))
+		for (e in 0..3) {
+			val shifted = DoubleArray(8) { across[it] + shifts[e][it % 2] }
+			snapEdges[e] = if (distanceToOrigin(shifted) > QuadSubdivision.POLAR_REACH) levels[e] else 0
+		}
+		var outer = 0.0
+		for (k in 0..3) outer = maxOf(outer, sqrt(across[k * 2] * across[k * 2] + across[k * 2 + 1] * across[k * 2 + 1]))
+		QuadSubdivision.split.incrementAndGet()
+		val slices = QuadSubdivision.POLAR_SLICES
+		val growth = 1.0 + 2.0 * Math.PI / slices
+		fun st(r: Double, angle: Double): DoubleArray {
+			val qx = r * kotlin.math.cos(angle) - across[0]
+			val qy = r * kotlin.math.sin(angle) - across[1]
+			return doubleArrayOf((qx * ty - qy * tx) / det, (sx * qy - sy * qx) / det)
+		}
+		val cell = ArrayList<DoubleArray>(4)
+		// The disc inside the first ring, then the rings.
+		cell.clear()
+		for (j in 0 until slices) cell += st(QuadSubdivision.POLAR_INNER, 2.0 * Math.PI * j / slices)
+		emitClipped(cell)
+		var r = QuadSubdivision.POLAR_INNER
+		var rings = 0
+		while (r < outer && rings < 400) {
+			val next = r * growth
+			for (j in 0 until slices) {
+				val a0 = 2.0 * Math.PI * j / slices
+				val a1 = 2.0 * Math.PI * (j + 1) / slices
+				cell.clear()
+				cell += st(r, a0); cell += st(r, a1); cell += st(next, a1); cell += st(next, a0)
+				emitClipped(cell)
+			}
+			r = next
+			rings += 1
+		}
+		return true
+	}
+
+	/** Distance from the origin to the quad with corners [across] (x, y pairs; 0 if inside it). */
+	private fun distanceToOrigin(across: DoubleArray): Double {
+		var inside = true
+		var sign = 0.0
+		var best = Double.MAX_VALUE
+		for (k in 0..3) {
+			val px = across[k * 2]
+			val py = across[k * 2 + 1]
+			val qx = across[((k + 1) % 4) * 2]
+			val qy = across[((k + 1) % 4) * 2 + 1]
+			val cross = px * qy - py * qx
+			if (sign == 0.0) sign = cross else if (cross * sign < 0.0) inside = false
+			val ex = qx - px
+			val ey = qy - py
+			val f = (-(px * ex + py * ey) / maxOf(ex * ex + ey * ey, 1e-12)).coerceIn(0.0, 1.0)
+			val dx = px + f * ex
+			val dy = py + f * ey
+			best = minOf(best, sqrt(dx * dx + dy * dy))
+		}
+		return if (inside) 0.0 else best
+	}
+
+	/** While a face is split round the axis: each edge's grid pieces to snap its points to (0: none). */
+	private val snapEdges = IntArray(4)
+
+	/** The polygon [points] ((s, t)) clipped to the quad, s and t in [0, 1], drawn as a fan of quads in its winding. */
+	private fun emitClipped(points: List<DoubleArray>) {
+		var minS = Double.MAX_VALUE; var maxS = -Double.MAX_VALUE; var minT = Double.MAX_VALUE; var maxT = -Double.MAX_VALUE
+		for (p in points) { minS = minOf(minS, p[0]); maxS = maxOf(maxS, p[0]); minT = minOf(minT, p[1]); maxT = maxOf(maxT, p[1]) }
+		if (maxS <= 0.0 || minS >= 1.0 || maxT <= 0.0 || minT >= 1.0) return
+		var poly = points
+		for (edge in 0..3) {
+			val axisIndex = edge / 2
+			val keepBelow = edge % 2 == 1
+			val bound = if (keepBelow) 1.0 else 0.0
+			fun inside(p: DoubleArray) = if (keepBelow) p[axisIndex] <= bound else p[axisIndex] >= bound
+			val out = ArrayList<DoubleArray>(poly.size + 2)
+			for (k in poly.indices) {
+				val p = poly[k]
+				val q = poly[(k + 1) % poly.size]
+				val pin = inside(p)
+				val qin = inside(q)
+				if (pin) out += p
+				if (pin != qin) {
+					val f = (bound - p[axisIndex]) / (q[axisIndex] - p[axisIndex])
+					val point = doubleArrayOf(p[0] + f * (q[0] - p[0]), p[1] + f * (q[1] - p[1]))
+					point[axisIndex] = bound
+					out += point
+				}
+			}
+			poly = out
+			if (poly.size < 3) return
+		}
+		// Points on an edge to snap, to that edge's grid.
+		poly = poly.map { p ->
+			fun snapped(x: Double, pieces: Int) = if (pieces > 0) Math.round(x * pieces).toDouble() / pieces else x
+			when {
+				p[0] == 0.0 -> doubleArrayOf(0.0, snapped(p[1], snapEdges[0]))
+				p[0] == 1.0 -> doubleArrayOf(1.0, snapped(p[1], snapEdges[2]))
+				p[1] == 1.0 -> doubleArrayOf(snapped(p[0], snapEdges[1]), 1.0)
+				p[1] == 0.0 -> doubleArrayOf(snapped(p[0], snapEdges[3]), 0.0)
+				else -> p
+			}
+		}
+		// The quad's own corners, (0, 0), (0, 1), (1, 1), (1, 0), run clockwise in (s, t): the same here.
+		var twice = 0.0
+		for (k in poly.indices) {
+			val p = poly[k]
+			val q = poly[(k + 1) % poly.size]
+			twice += p[0] * q[1] - q[0] * p[1]
+		}
+		if (kotlin.math.abs(twice) < 1e-14) return
+		val ordered = if (twice > 0.0) poly.reversed() else poly
+		for (k in 1 until ordered.size - 1) {
+			put(ordered[0][0].toFloat(), ordered[0][1].toFloat())
+			put(ordered[k][0].toFloat(), ordered[k][1].toFloat())
+			put(ordered[k + 1][0].toFloat(), ordered[k + 1][1].toFloat())
+			put(ordered[k + 1][0].toFloat(), ordered[k + 1][1].toFloat())
 		}
 	}
 

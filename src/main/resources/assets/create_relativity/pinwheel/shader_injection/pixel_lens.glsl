@@ -5,7 +5,10 @@
 in vec3 relativityUnbent;
 in vec3 relativityBent;
 flat in float relativityChecked;
+in vec3 relativityCorrection;
 
 void tail() {
+    relativityPixelStage = true;
+    relativityPixelCorrection = relativityCorrection;
     if (relativityChecked > 0.5 && relativityPixelWrong(relativityUnbent, relativityBent)) discard;
 }

@@ -1599,7 +1599,8 @@ class LensClientGameTest {
 				return (0 until 3).map { waitTicks(20); computeOnClient { it.fps }.toDouble() }.average()
 			}
 			// The same while the camera moves (a few centimetres a tick, back and forth), so what depends on where it
-			// is relative to the hole is redrawn.
+			// is relative to the hole is redrawn. (With a screenshot mid-way, to look at.)
+			var movingShots = 0
 			fun ClientGameTestContext.fpsMoving(): Double {
 				val start = computeOnClient { it.player!!.position() }
 				val samples = ArrayList<Double>()
@@ -1608,6 +1609,7 @@ class LensClientGameTest {
 					runOnClient { it.player!!.setPos(start.x, start.y + offset, start.z) }
 					waitTick()
 					if (tick >= 30 && tick % 20 == 0) samples += computeOnClient { it.fps }.toDouble()
+					if (tick == 55) takeScreenshot("performance_moving_${movingShots++}")
 				}
 				runOnClient { it.player!!.setPos(start.x, start.y, start.z) }
 				return samples.average()
@@ -1844,7 +1846,11 @@ class LensClientGameTest {
 		// The lens, with and without the geometry round the hole for the sky's bent paths.
 		// And the vertex lens alone (the post pass passing the frame through): what's left to do before it can go.
 		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE, "vertex_only" to BlackHoleLens.Unseen.VOXELS, "vertex_only_slots" to BlackHoleLens.Unseen.VOXELS)
+		// (Only the per-frame Kerr solver has anything to settle and the slots anything to blend: a non-spinning hole
+		// uses its table, an approximated spinning one solves and bakes nothing.)
+		val approximated = spin == 0.0 || computeOnClient { VertexLens.kerrApprox }
 		for ((mode, unseen) in modes) {
+			if (approximated && mode == "vertex_only_slots") continue
 			runOnClient {
 				BlackHoleLens.unseen = unseen
 				BlackHoleLens.timeGpu = true
@@ -1857,7 +1863,7 @@ class LensClientGameTest {
 				runOnClient { KerrSlots.enabled = false; KerrImageMap.invalidate(); KerrSecondImageMap.invalidate() }
 				waitTicks(20)
 				var waited = 0
-				while (waited < 1200 && !computeOnClient { !KerrPaths.changed && KerrImageMap.settled }) { waitTicks(10); waited += 10 }
+				while (!approximated && waited < 1200 && !computeOnClient { !KerrPaths.changed && KerrImageMap.settled }) { waitTicks(10); waited += 10 }
 				waitTicks(40)
 			}
 			if (mode == "vertex_only_slots") {

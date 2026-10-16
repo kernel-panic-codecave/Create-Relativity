@@ -5,6 +5,7 @@
 out vec3 relativityUnbent;
 out vec3 relativityBent;
 flat out float relativityChecked;
+out vec3 relativityCorrection; // the exact solve's correction here (relativityLastCorrection), interpolated
 
 void tail() {
     mat4 relativityInverse = inverse(ProjMat);
@@ -14,4 +15,5 @@ void tail() {
     vec4 relativityAfter = relativityInverse * gl_Position;
     relativityUnbent = relativityBefore.xyz / relativityBefore.w;
     relativityBent = relativityAfter.xyz / relativityAfter.w;
+    relativityCorrection = relativityLastCorrection;
 }

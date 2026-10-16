@@ -2,7 +2,7 @@
 // one per output texel: the Kerr solve's outcome and the bent clip position.
 uniform sampler2D Points; // view-space positions
 uniform mat4 Projection;
-uniform int Direct; // 1: the Kerr solve itself (as the image map runs it, from the Schwarzschild image), not the map;
+uniform int Direct; // 6: the closed-form exact Kerr image (see below); 1: the Kerr solve itself (as the image map runs it, from the Schwarzschild image), not the map;
                     // 3: the solve from the direction in Guesses
 uniform sampler2D Guesses; // view-space directions (Direct 3)
 
@@ -11,6 +11,17 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 6) {
+        // The closed-form exact image from the approximation's (relativityKerrExactImage): xyz the unit view direction,
+        // w 1 found, 0 not (xyz the approximation's), -1 no approximate image either.
+        vec3 seen;
+        bool nearAxis;
+        int image = relativityKerrApprox(p, seen, nearAxis);
+        vec3 exact;
+        bool found = image == 1 && relativityKerrExactImage(p, seen, exact);
+        Result = found ? vec4(exact, 1.0) : vec4(seen, image == 1 ? -relativityKerrExactWhy - 0.001 : -1.0);
+        return;
+    }
     if (Direct == 4) {
         // Why p is hidden: x the Schwarzschild image (1 found, -1 none, 2 nothing to bend), y 1 near the axis behind the
         // hole, z the map (1 placed, 0 outside it, -1 hidden, 2 not asked), w the filtered map alpha round p.

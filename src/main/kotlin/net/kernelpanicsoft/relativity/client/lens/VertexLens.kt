@@ -180,8 +180,12 @@ object VertexLens {
 	@Volatile
 	var flywheelOff = false
 
+	/** Debug (GameTests): the vertex lens stands down, so the post pass draws all geometry itself (its reference). */
+	@JvmField
+	var off = false
+
 	private val wanted: Boolean
-		get() = RelativityConfig.Client.Render.lensing
+		get() = RelativityConfig.Client.Render.lensing && !off
 
 	private fun onRenderStage(event: RenderLevelStageEvent) {
 		when (event.stage) {
@@ -310,6 +314,16 @@ object VertexLens {
 	@JvmField
 	var kerrApprox = true
 
+	/** With [kerrApprox]: images by the ring refined to the exact ones in closed form (relativityKerrExactImage). */
+	@JvmField
+	var kerrExact = false
+
+	/** The exact solve's reach (shadow radii) and evaluations per vertex ([7].z, w while approximated). */
+	@JvmField
+	var exactReach = 1.6f
+	@JvmField
+	var exactPasses = 24
+
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
 	@JvmField
 	var secondImages = true
@@ -397,7 +411,7 @@ object VertexLens {
 	}
 
 	/** The near-axis cut (blocks) for draws whose shaders carry the pixel check (vertex_lens_core.glsl's relativityAxisCut). */
-	const val CHECKED_AXIS_CUT = 0.1
+	const val CHECKED_AXIS_CUT = 0.01
 	/** The same for draws without it (Flywheel's): vertex_lens_core.glsl's RELATIVITY_AXIS_CUT. */
 	const val UNCHECKED_AXIS_CUT = 2.0
 
@@ -494,7 +508,7 @@ object VertexLens {
 				// [7].y: 1 if the centre is a hole (the Schwarzschild image is a fair first guess and cut there).
 				// ([7].y 2: the hole is the only source in view: the near march, which follows its light alone, may stand in
 				// for the map further out.)
-				data.put(centre.scale.toFloat()).put(if (centre.hole == null) 0f else if (loneHole) (if (kerrApprox) 3f else 2f) else 1f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+				data.put(centre.scale.toFloat()).put(if (centre.hole == null) 0f else if (loneHole) (if (kerrApprox) (if (kerrExact) 4f else 3f) else 2f) else 1f).put(if (kerrApprox && loneHole) exactReach else KerrPaths.width.toFloat()).put(if (kerrApprox && loneHole) exactPasses.toFloat() else KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
 					val c = viewToGame.getColumn(column, Vector3f())

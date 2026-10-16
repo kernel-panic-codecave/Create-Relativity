@@ -444,6 +444,14 @@ bool relativityNearAxis(vec3 p, bool behindOnly) {
     return length(from - along * e1) < cut;
 }
 
+// Whether view-space point p lies within reach (blocks) of the camera-hole line behind the hole.
+bool relativityByAxis(vec3 p, float reach) {
+    vec3 e1 = -normalize(RelativityLensData[0].xyz);
+    vec3 from = p - RelativityLensData[0].xyz;
+    float along = dot(from, e1);
+    return along < 0.0 && length(from - along * e1) < reach;
+}
+
 int relativitySchwarzschildImageAt(vec3 p, vec3 h, out vec3 seen, out bool nearAxis) {
     seen = normalize(p);
     nearAxis = false;
@@ -504,24 +512,522 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
 // against the exact baker for spin 0.9 seen side on and from 37 degrees above: median error under a pixel past 5 shadow
 // radii, 1-4 px out to 2.5, 13 px at 1.3-1.6, tens of px by the shadow's edge. It follows the camera at once.
 const float RELATIVITY_TWIST = 0.274; // 15.7 degrees
+const float RELATIVITY_SHIFT_GROWTH = 0.65;
 bool relativityKerrApproximated() { return RelativityLensData[1].z > 0.5 && RelativityLensData[7].y > 2.5; }
 int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
     mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
     vec3 eGame = normalize(RelativityLensData[6].xyz);
     float spin = RelativityLensData[6].w;
     float rs = RelativityLensData[0].w;
-    vec3 h = RelativityLensData[0].xyz + transpose(viewToGame) * (-spin * 0.5 * rs * cross(vec3(0.0, 1.0, 0.0), eGame));
-    int image = relativitySchwarzschildImageAt(p, h, seen, nearAxis);
+    vec3 shift = transpose(viewToGame) * (-spin * 0.5 * rs * cross(vec3(0.0, 1.0, 0.0), eGame));
+    int image = relativitySchwarzschildImageAt(p, RelativityLensData[0].xyz + shift, seen, nearAxis);
     if (image != 1) return image;
     vec3 e = normalize(RelativityLensData[0].xyz);
     float u0 = min(rs / length(RelativityLensData[0].xyz), 0.999);
     float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
     float alphaC = atan(sin(critical), cos(critical) * sqrt(1.0 - u0));
     float alpha = acos(clamp(dot(seen, e), -1.0, 1.0));
+    // Toward the ring the displacement grows (the spinning shadow sits about 2 a sin i over, twice the far-field lens's):
+    // 1 + 0.65 (alpha_c / alpha)^n, n = 1.5 + 9 r_s / r_c: fitted to the best displacement per band against the exact
+    // images over spins 0.3-0.9, camera distances 4-20 r_s and view angles 0.7-1.5 rad (0.65 the same for all of them;
+    // the fall-off slower the farther the camera); the image once more with it.
+    float falloff = 1.5 + 9.0 * rs / length(RelativityLensData[0].xyz);
+    float grow = RELATIVITY_SHIFT_GROWTH * pow(alphaC / max(alpha, alphaC), falloff);
+    if (grow > 0.01) {
+        vec3 again;
+        bool nearAgain;
+        if (relativitySchwarzschildImageAt(p, RelativityLensData[0].xyz + (1.0 + grow) * shift, again, nearAgain) == 1) {
+            seen = again;
+            alpha = acos(clamp(dot(seen, e), -1.0, 1.0));
+        }
+    }
     float tau = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(alphaC / max(alpha, 0.8 * alphaC), 2.5);
     // (Rodrigues: seen turned by tau round e.)
     seen = normalize(seen * cos(tau) + cross(e, seen) * sin(tau) + e * dot(e, seen) * (1.0 - cos(tau)));
     return 1;
+}
+
+// ---- Closed-form Kerr light paths (physics-core KerrRay; Gralla & Lupsasca 2020), in the hole's Kerr-Schild Cartesian
+// chart with the spin along +z ("physics" axes: game (x, y, z) is physics (y, z, x)); lengths in blocks. ----
+
+// Carlson's symmetric elliptic integrals (duplication; single precision: stop at 1e-4 relative, then the series).
+float relativityRF(float x, float y, float z) {
+    for (int n = 0; n < 12 + relativityRuntimeZero(); n += 1) {
+        float sx = sqrt(x);
+        float sy = sqrt(y);
+        float sz = sqrt(z);
+        float lam = sx * (sy + sz) + sy * sz;
+        x = 0.25 * (x + lam);
+        y = 0.25 * (y + lam);
+        z = 0.25 * (z + lam);
+        float mu = (x + y + z) / 3.0;
+        if (max(abs(x - mu), max(abs(y - mu), abs(z - mu))) < 1e-4 * mu) break;
+    }
+    float mu = (x + y + z) / 3.0;
+    float dx = (mu - x) / mu;
+    float dy = (mu - y) / mu;
+    float dz = (mu - z) / mu;
+    float e2 = dx * dy - dz * dz;
+    float e3 = dx * dy * dz;
+    return (1.0 + (e2 / 24.0 - 0.1 - 3.0 * e3 / 44.0) * e2 + e3 / 14.0) / sqrt(mu);
+}
+
+float relativityRC(float x, float y) {
+    float w = 1.0;
+    if (y < 0.0) {
+        w = sqrt(x / (x - y));
+        x = x - y;
+        y = -y;
+    }
+    if (y <= 0.0) return 1e30;
+    for (int n = 0; n < 12 + relativityRuntimeZero(); n += 1) {
+        float lam = 2.0 * sqrt(x) * sqrt(y) + y;
+        x = 0.25 * (x + lam);
+        y = 0.25 * (y + lam);
+        float mu = (x + 2.0 * y) / 3.0;
+        if (abs((y - mu) / mu) < 1e-4) break;
+    }
+    float mu = (x + 2.0 * y) / 3.0;
+    float s = (y - mu) / mu;
+    return w * (1.0 + s * s * (0.3 + s * (1.0 / 7.0 + s * (0.375 + s * 9.0 / 22.0)))) / sqrt(mu);
+}
+
+float relativityRJ(float x, float y, float z, float p) {
+    float sum = 0.0;
+    float fac = 1.0;
+    for (int n = 0; n < 12 + relativityRuntimeZero(); n += 1) {
+        float sx = sqrt(x);
+        float sy = sqrt(y);
+        float sz = sqrt(z);
+        float lam = sx * (sy + sz) + sy * sz;
+        float alpha = p * (sx + sy + sz) + sx * sy * sz;
+        float beta = p * (p + lam) * (p + lam);
+        sum += fac * relativityRC(alpha * alpha, beta);
+        fac *= 0.25;
+        x = 0.25 * (x + lam);
+        y = 0.25 * (y + lam);
+        z = 0.25 * (z + lam);
+        p = 0.25 * (p + lam);
+        float mu = (x + y + z + 2.0 * p) / 5.0;
+        if (max(max(abs(x - mu), abs(y - mu)), max(abs(z - mu), abs(p - mu))) < 1e-4 * mu) break;
+    }
+    float mu = (x + y + z + 2.0 * p) / 5.0;
+    float dx = (mu - x) / mu;
+    float dy = (mu - y) / mu;
+    float dz = (mu - z) / mu;
+    float dp = (mu - p) / mu;
+    float ea = dx * (dy + dz) + dy * dz;
+    float eb = dx * dy * dz;
+    float ec = dp * dp;
+    float e2 = ea - 3.0 * ec;
+    float e3 = eb + 2.0 * dp * (ea - ec);
+    float e4 = (2.0 * eb + dp * (ea - 3.0 * ec)) * dp;
+    float e5 = eb * dp * dp;
+    return 3.0 * sum + fac * (1.0 - 3.0 * e2 / 14.0 + e3 / 6.0 + 9.0 * e2 * e2 / 88.0 - 3.0 * e4 / 22.0 - 9.0 * e2 * e3 / 52.0 + 3.0 * e5 / 26.0) / (mu * sqrt(mu));
+}
+
+// F(phi | m) and Pi(n; phi | m) for any real phi (periodic extension), m < 1, n < 1.
+float relativityEllipticF(float phi, float m) {
+    float j = floor(phi / 3.14159265 + 0.5);
+    float rest = phi - j * 3.14159265;
+    float s = sin(rest);
+    float c = cos(rest);
+    float part = s * relativityRF(c * c, 1.0 - m * s * s, 1.0);
+    if (j != 0.0) part += 2.0 * j * relativityRF(0.0, 1.0 - m, 1.0);
+    return part;
+}
+
+float relativityEllipticPi(float n, float phi, float m) {
+    float j = floor(phi / 3.14159265 + 0.5);
+    float rest = phi - j * 3.14159265;
+    float s = sin(rest);
+    float c = cos(rest);
+    float part = s * relativityRF(c * c, 1.0 - m * s * s, 1.0) + n / 3.0 * s * s * s * relativityRJ(c * c, 1.0 - m * s * s, 1.0, 1.0 - n * s * s);
+    if (j != 0.0) part += 2.0 * j * (relativityRF(0.0, 1.0 - m, 1.0) + n / 3.0 * relativityRJ(0.0, 1.0 - m, 1.0, 1.0 - n));
+    return part;
+}
+
+// The Jacobi amplitude am(x | m), 0 <= m < 1, by the AGM (descending Landen), x first reduced by whole periods.
+float relativityAmplitudeAgm(float x, float m) {
+    float quarter = relativityRF(0.0, 1.0 - m, 1.0);
+    float j = floor(x / (2.0 * quarter) + 0.5);
+    x -= 2.0 * quarter * j;
+    float aa[10];
+    float cc[10];
+    aa[0] = 1.0;
+    cc[0] = sqrt(m);
+    float b = sqrt(1.0 - m);
+    int n = 0;
+    for (int i = 0; i < 9 + relativityRuntimeZero(); i += 1) {
+        if (abs(cc[n]) < 1e-7) break;
+        aa[n + 1] = 0.5 * (aa[n] + b);
+        cc[n + 1] = 0.5 * (aa[n] - b);
+        b = sqrt(aa[n] * b);
+        n += 1;
+    }
+    float phi = exp2(float(n)) * aa[n] * x;
+    for (int i = n; i >= 1; i -= 1) phi = 0.5 * (phi + asin(clamp(cc[i] / aa[i] * sin(phi), -1.0, 1.0)));
+    return phi + j * 3.14159265;
+}
+
+// am(x | m) for any m < 1 (a negative parameter through the imaginary-modulus transformation).
+float relativityAmplitude(float x, float m) {
+    if (m >= 0.0) return relativityAmplitudeAgm(x, m);
+    float k = 1.0 - m;
+    float mu = -m / k;
+    float phi = relativityAmplitudeAgm(x * sqrt(k), mu);
+    float sp = sin(phi);
+    float dn = sqrt(1.0 - mu * sp * sp);
+    float sn = sp / (dn * sqrt(k));
+    float cn = cos(phi) / dn;
+    return atan(sn, cn) + 6.28318530718 * floor((phi + 3.14159265) / 6.28318530718);
+}
+
+// A ray seen from the camera at cam (physics axes, from the hole) along direction d: its constants and starting state,
+// packed: ray0 (lambda, eta, r0, theta0), ray1 (phiKs0, radial sign, polar sign, turning point r4 or -1), roots (r1..r4).
+// False when it can't be followed in closed form here (no turning point outside the horizon, or vortical: eta <= 0).
+bool relativityKerrRay(vec3 cam, vec3 d, float m, float a, out vec4 ray0, out vec4 ray1, out vec4 roots) {
+    ray0 = vec4(0.0);
+    ray1 = vec4(0.0);
+    roots = vec4(0.0);
+    float w0 = dot(cam, cam) - a * a;
+    float r0 = sqrt(0.5 * w0 + sqrt(0.25 * w0 * w0 + a * a * cam.z * cam.z));
+    float cth = clamp(cam.z / r0, -1.0, 1.0);
+    float sth = sqrt(max(1.0 - cth * cth, 1e-12));
+    // The arriving photon (spatial direction -d): its momentum covector p = g u.
+    vec3 dd = -d;
+    float r2 = r0 * r0;
+    float h = 2.0 * m * r0 * r2 / (r2 * r2 + a * a * cam.z * cam.z);
+    vec4 l = vec4(1.0, (r0 * cam.x + a * cam.y) / (r2 + a * a), (r0 * cam.y - a * cam.x) / (r2 + a * a), cam.z / r0);
+    float ld = dot(l.yzw, dd);
+    // g_00 = -1 + h, g_0i = h l_i, g_ij = delta + h l_i l_j.
+    float qa = dot(dd, dd) + h * ld * ld;
+    float qb = h * ld;
+    float qc = -1.0 + h;
+    float k = (-qb + sqrt(max(qb * qb - qa * qc, 0.0))) / qa;
+    vec4 u = vec4(1.0, k * dd);
+    // p_mu = g_mu nu u^nu = eta_mu nu u^nu + h l_mu (l_nu u^nu), l_0 = 1.
+    float lnu = u.x + dot(l.yzw, u.yzw);
+    vec4 p = vec4(-u.x, u.yzw) + h * l * lnu;
+    float e = -p.x;
+    float lz = cam.x * p.z - cam.y * p.y;
+    float pTheta = (cth / sth) * (cam.x * p.y + cam.y * p.z) - r0 * sth * p.w;
+    float q = pTheta * pTheta + cth * cth * (lz * lz / (sth * sth) - a * a * e * e);
+    float lambda = lz / e;
+    float eta = q / (e * e);
+    // Along +d: which way r and theta go.
+    vec3 xs = cam + 1e-3 * r0 * d;
+    float ws = dot(xs, xs) - a * a;
+    float rs = sqrt(0.5 * ws + sqrt(0.25 * ws * ws + a * a * xs.z * xs.z));
+    float radialSign = rs >= r0 ? 1.0 : -1.0;
+    float polarSign = acos(clamp(xs.z / rs, -1.0, 1.0)) >= acos(cth) ? 1.0 : -1.0;
+    // R(r) = r^4 + A r^2 + B r + C: its roots (Gralla & Lupsasca eqs. 95-96).
+    float aa = a * a - eta - lambda * lambda;
+    float bb = 2.0 * m * (eta + (lambda - a) * (lambda - a));
+    float cc = -a * a * eta;
+    float pp = -aa * aa / 12.0 - cc;
+    float qq = -aa / 3.0 * ((aa / 6.0) * (aa / 6.0) - cc) - bb * bb / 8.0;
+    float disc = (pp / 3.0) * (pp / 3.0) * (pp / 3.0) + (qq / 2.0) * (qq / 2.0);
+    float sum;
+    if (disc >= 0.0) {
+        float sd = sqrt(disc);
+        float c1 = -qq / 2.0 + sd;
+        float c2 = -qq / 2.0 - sd;
+        sum = sign(c1) * pow(abs(c1), 1.0 / 3.0) + sign(c2) * pow(abs(c2), 1.0 / 3.0);
+    } else {
+        float rho = sqrt(-(pp / 3.0) * (pp / 3.0) * (pp / 3.0));
+        float angle = acos(clamp(-qq / 2.0 / rho, -1.0, 1.0));
+        sum = 2.0 * pow(rho, 1.0 / 3.0) * cos(angle / 3.0);
+    }
+    float z = sqrt(max((sum - aa / 3.0) / 2.0, 1e-12));
+    float s1 = -aa / 2.0 - z * z + bb / (4.0 * z);
+    float s2 = -aa / 2.0 - z * z - bb / (4.0 * z);
+    roots = vec4(-z - sqrt(max(s1, 0.0)), -z + sqrt(max(s1, 0.0)), z - sqrt(max(s2, 0.0)), z + sqrt(max(s2, 0.0)));
+    float rPlus = m + sqrt(max(m * m - a * a, 0.0));
+    float turning = (s2 >= 0.0 && roots.w > rPlus && radialSign < 0.0) ? roots.w : -1.0;
+    ray0 = vec4(lambda, eta, r0, acos(cth));
+    ray1 = vec4(atan(cam.y, cam.x) - atan(a, r0), radialSign, polarSign, turning);
+    return turning > 0.0 && eta > 0.0;
+}
+
+// Where that ray is (physics axes, from the hole) when it reaches radius r: on the way in (outbound false) or, past its
+// turning point, on the way out. False if it doesn't. (Light that passes the hole: Mino time and phi's radial part from
+// the turning point in closed form; the polar motion exactly.)
+bool relativityKerrRayAt(vec4 ray0, vec4 ray1, vec4 roots, float m, float a, float r, bool outbound, out vec3 at) {
+    at = vec3(0.0);
+    float lambda = ray0.x;
+    float eta = ray0.y;
+    float r0 = ray0.z;
+    float turning = ray1.w;
+    if (turning <= 0.0 || r < turning) return false;
+    if (!outbound && r > r0) return false;
+    float r1 = roots.x;
+    float r3 = roots.z;
+    float r4 = roots.w;
+    float r31 = r3 - r1;
+    float r41 = r4 - r1;
+    float r32 = r3 - roots.y;
+    float r42 = r4 - roots.y;
+    float r43 = r4 - r3;
+    float k = r32 * r41 / (r31 * r42);
+    float scale = 2.0 / sqrt(r31 * r42);
+    float rPlus = m + sqrt(max(m * m - a * a, 0.0));
+    float rMinus = m - sqrt(max(m * m - a * a, 0.0));
+    float aPlus = (2.0 * m * rPlus - a * lambda) / max(rPlus - rMinus, 1e-6);
+    float aMinus = -(2.0 * m * rMinus - a * lambda) / max(rPlus - rMinus, 1e-6);
+    // From the turning point out to the camera's radius and to r: Mino time and phi's radial part. (Loops over the radii
+    // and the horizons, each integral called from one place: the drivers inline every call.)
+    vec2 legs[2];
+    float radii[2] = float[](r0, r);
+    float horizons[2] = float[](rPlus, rMinus);
+    float weights[2] = float[](aPlus, aMinus);
+    for (int i = 0; i < 2 + relativityRuntimeZero(); i += 1) {
+        float rr = radii[i];
+        float amplitude = asin(min(sqrt(max((rr - r4) * r31 / ((rr - r3) * r41), 0.0)), 1.0));
+        float f = relativityEllipticF(amplitude, k);
+        float phiPart = 0.0;
+        if (rPlus - rMinus > 1e-6) {
+            for (int j = 0; j < 2 + relativityRuntimeZero(); j += 1) {
+                float rh = horizons[j];
+                float n = r41 * (r3 - rh) / (r31 * (r4 - rh));
+                phiPart += weights[j] * (f / (r3 - rh) - r43 / ((r4 - rh) * (r3 - rh)) * relativityEllipticPi(n, amplitude, k));
+            }
+            phiPart *= a * scale;
+        }
+        legs[i] = vec2(scale * f, phiPart);
+    }
+    vec2 total = outbound ? legs[0] + legs[1] : legs[0] - legs[1];
+    float tau = total.x;
+    // The polar motion: cos theta = u+ sn(X | u+^2 / u-^2), X = X0 - (theta's direction) rate tau.
+    float a2 = max(a * a, 1e-8);
+    float dth = 0.5 * (1.0 - (eta + lambda * lambda) / a2);
+    float root = sqrt(dth * dth + eta / a2);
+    float uPlus2 = min(dth + root, 1.0 - 1e-6);
+    float uMinus2 = dth - root;
+    float uPlus = sqrt(max(uPlus2, 0.0));
+    float mm = uPlus2 / uMinus2;
+    float rate = sqrt(a2 * -uMinus2);
+    float x0 = relativityEllipticF(asin(clamp(cos(ray0.w) / uPlus, -1.0, 1.0)), mm);
+    float x = x0 - ray1.z * rate * tau;
+    // (At the camera and at r: one loop, each call in one place.)
+    float ends[2] = float[](x0, x);
+    float amplitudes[2];
+    float pis[2];
+    for (int i = 0; i < 2 + relativityRuntimeZero(); i += 1) {
+        amplitudes[i] = relativityAmplitude(ends[i], mm);
+        pis[i] = relativityEllipticPi(uPlus2, amplitudes[i], mm);
+    }
+    float u = uPlus * sin(amplitudes[1]);
+    float polar = (pis[0] - pis[1]) / (ray1.z * rate);
+    // Back along the path Mino time runs backwards: phi changes by minus the integrals.
+    float phiBl = -(total.y + lambda * polar);
+    float kPhi = 0.0;
+    if (rPlus - rMinus > 1e-6) kPhi = a / (rPlus - rMinus) * (log(abs((r - rPlus) / (r - rMinus))) - log(abs((r0 - rPlus) / (r0 - rMinus))));
+    float phiKs = ray1.x + phiBl + kPhi;
+    float theta = acos(clamp(u, -1.0, 1.0));
+    float st = sin(theta);
+    at = vec3(st * (r * cos(phiKs) - a * sin(phiKs)), st * (r * sin(phiKs) + a * cos(phiKs)), r * cos(theta));
+    return true;
+}
+
+// Where the ray along d lands on its leg at radius (the miss from target); false if it doesn't reach it there, miss.x
+// then -1 if its light falls in (or can't be followed), else its turning point (it turns back short of radius).
+bool relativityKerrLanding(vec3 cam, vec3 d, float m, float a, float radius, bool outbound, vec3 target, out vec3 miss) {
+    vec4 ray0;
+    vec4 ray1;
+    vec4 roots;
+    vec3 hit;
+    miss = vec3(-1.0);
+    if (!relativityKerrRay(cam, d, m, a, ray0, ray1, roots)) return false;
+    miss = vec3(ray1.w);
+    if (!relativityKerrRayAt(ray0, ray1, roots, m, a, radius, outbound, hit)) return false;
+    miss = hit - target;
+    return true;
+}
+
+// The exact image (unit view direction) of view-space point p round the lone spinning hole, by Gauss-Newton on the
+// closed-form path from start (the approximation's image, view space), on the leg the start lands nearer on, then the
+// other: true if it lands within a hundredth of a block (or a thousandth of its radius), seen then the image; false
+// leaves seen as start. One loop with a single call to the closed form (relativityKerrLanding), each pass evaluating
+// one direction as the state says: the drivers inline every call, and the closed form at each step of a solve written
+// out took them far too long to compile.
+// Closed-form evaluations a vertex may spend (most converge in about a dozen; the rest keep the approximation).
+const int RELATIVITY_EXACT_PASSES = 24;
+
+// Debug (GameTests): why the last relativityKerrExactImage gave up: 1 neither leg reached from the start, 10 + state
+// where both legs ran out (the state a leg was last in), 3 out of passes.
+float relativityKerrExactWhy = 0.0;
+bool relativityKerrExactImage(vec3 p, vec3 start, out vec3 seen) {
+    relativityKerrExactWhy = 0.0;
+    seen = start;
+    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+    float m = 0.5 * RelativityLensData[0].w;
+    float a = RelativityLensData[6].w * m;
+    vec3 camGame = -RelativityLensData[6].xyz;
+    vec3 cam = vec3(camGame.z, camGame.x, camGame.y);
+    vec3 pg = viewToGame * p - RelativityLensData[6].xyz;
+    vec3 target = vec3(pg.z, pg.x, pg.y);
+    float wt = dot(target, target) - a * a;
+    float radius = sqrt(0.5 * wt + sqrt(0.25 * wt * wt + a * a * target.z * target.z));
+    vec3 sg = viewToGame * start;
+    vec3 dir0 = normalize(vec3(sg.z, sg.x, sg.y));
+    float tolerance = max(0.01, 1e-3 * radius);
+    float eps = 2e-4;
+    // States: 0, 1 the start on each leg (choosing the first); 2 the current direction; 3, 4 the probes along e1, e2
+    // (5, 6 the same on the other side when one falls in); 7 a trial step (halved while it doesn't help).
+    int state = 0;
+    bool outbound = false;
+    bool first = false;
+    int legsTried = 0;
+    float missIn = 1e9;
+    vec3 dir = dir0;
+    vec3 residual = vec3(1e9);
+    vec3 e1 = vec3(0.0);
+    vec3 e2 = vec3(0.0);
+    vec3 ja = vec3(0.0);
+    vec3 jb = vec3(0.0);
+    vec2 step = vec2(0.0);
+    int halvings = 0;
+    // Levenberg-Marquardt: the normal equations kept, damped further each time a step doesn't help.
+    vec3 normal = vec3(0.0);
+    vec2 gradient = vec2(0.0);
+    float damping = 1e-3;
+    int iterations = 0;
+    // The start nudged (its angle from the hole) while neither leg reaches: out if its light falls in, in if it turns
+    // back short of the point.
+    vec3 toHole = normalize(-cam);
+    int nudges = 0;
+    float fellOrTurned = 0.0;
+    for (int pass = 0; pass < int(RelativityLensData[7].w) + relativityRuntimeZero(); pass += 1) {
+        // The direction and leg this pass evaluates.
+        vec3 d = dir;
+        bool leg = outbound;
+        if (state == 0) { d = dir0; leg = false; }
+        else if (state == 1) { d = dir0; leg = true; }
+        else if (state == 3) d = normalize(dir + eps * e1);
+        else if (state == 4) d = normalize(dir + eps * e2);
+        else if (state == 5) d = normalize(dir - eps * e1);
+        else if (state == 6) d = normalize(dir - eps * e2);
+        else if (state == 7) d = normalize(dir + step.x * e1 + step.y * e2);
+        vec3 miss;
+        bool ok = relativityKerrLanding(cam, d, m, a, radius, leg, target, miss);
+        if (state == 0) {
+            missIn = ok ? length(miss) : 1e9;
+            fellOrTurned = ok ? 0.0 : miss.x;
+            state = 1;
+        } else if (state == 1) {
+            float missOut = ok ? length(miss) : 1e9;
+            if (missIn >= 1e8 && missOut >= 1e8) {
+                if (nudges >= 12) { relativityKerrExactWhy = 1.0; return false; }
+                nudges += 1;
+                // Out (falls in) or in (turns back early), keeping its side of the hole.
+                float alpha = acos(clamp(dot(dir0, toHole), -1.0, 1.0));
+                vec3 side = normalize(dir0 - dot(dir0, toHole) * toHole);
+                alpha *= fellOrTurned < 0.0 ? 1.03 : 0.97;
+                dir0 = normalize(cos(alpha) * toHole + sin(alpha) * side);
+                state = 0;
+                continue;
+            }
+            first = missOut < missIn;
+            outbound = first;
+            legsTried = 1;
+            dir = dir0;
+            state = 2;
+        } else {
+            bool restart = false;
+            if (state == 2) {
+                if (!ok) restart = true;
+                else {
+                    residual = miss;
+                    if (length(residual) < tolerance) {
+                        seen = normalize(transpose(viewToGame) * vec3(dir.y, dir.z, dir.x));
+                        return true;
+                    }
+                    vec3 helper = abs(dir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                    e1 = normalize(cross(dir, helper));
+                    e2 = cross(dir, e1);
+                    state = 3;
+                }
+            } else if (state == 3 || state == 5) {
+                if (ok) { ja = state == 3 ? (miss - residual) / eps : (residual - miss) / eps; state = 4; }
+                else if (state == 3) state = 5;
+                else restart = true;
+            } else if (state == 4 || state == 6) {
+                if (ok) {
+                    jb = state == 4 ? (miss - residual) / eps : (residual - miss) / eps;
+                    normal = vec3(dot(ja, ja), dot(ja, jb), dot(jb, jb));
+                    gradient = vec2(dot(ja, residual), dot(jb, residual));
+                    float aa = normal.x * (1.0 + damping);
+                    float bb = normal.z * (1.0 + damping);
+                    float det = aa * bb - normal.y * normal.y;
+                    if (abs(det) < 1e-30) restart = true;
+                    else {
+                        step = vec2(-(bb * gradient.x - normal.y * gradient.y), -(aa * gradient.y - normal.y * gradient.x)) / det;
+                        halvings = 0;
+                        state = 7;
+                    }
+                } else if (state == 4) state = 6;
+                else restart = true;
+            } else if (state == 7) {
+                if (ok && length(miss) < length(residual)) {
+                    dir = d;
+                    residual = miss;
+                    iterations += 1;
+                    damping = max(damping * 0.25, 1e-6);
+                    if (length(residual) < tolerance) {
+                        seen = normalize(transpose(viewToGame) * vec3(dir.y, dir.z, dir.x));
+                        return true;
+                    }
+                    if (iterations >= 12) restart = true;
+                    else {
+                        vec3 helper = abs(dir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+                        e1 = normalize(cross(dir, helper));
+                        e2 = cross(dir, e1);
+                        state = 3;
+                    }
+                } else {
+                    // Damped more (toward steepest descent, shorter), from the same normal equations.
+                    halvings += 1;
+                    damping *= 8.0;
+                    float aa = normal.x * (1.0 + damping);
+                    float bb = normal.z * (1.0 + damping);
+                    float det = aa * bb - normal.y * normal.y;
+                    step = vec2(-(bb * gradient.x - normal.y * gradient.y), -(aa * gradient.y - normal.y * gradient.x)) / det;
+                    if (halvings >= 8) restart = true;
+                }
+            }
+            // A leg that went nowhere: the other leg from the start, once.
+            if (restart) {
+                relativityKerrExactWhy = relativityKerrExactWhy * 10.0 + 10.0 + float(state);
+                if (legsTried >= 2) return false;
+                legsTried = 2;
+                outbound = !first;
+                dir = dir0;
+                iterations = 0;
+                damping = 1e-3;
+                state = 2;
+            }
+        }
+    }
+    relativityKerrExactWhy = 3.0;
+    return false;
+}
+
+// The exact solve's correction to the approximation at the last vertex (exact - approximate image, view space; 0 where
+// none), which the vertex shaders hand to the pixel check; and the pixel check's own: it adds the interpolated one.
+vec3 relativityLastCorrection = vec3(0.0);
+bool relativityPixelStage = false;
+vec3 relativityPixelCorrection = vec3(0.0);
+
+// How far out (in shadow radii) the exact solve refines the approximation.
+const float RELATIVITY_EXACT_REACH = 1.6; // (past it the approximation errs by a few px at most)
+bool relativityExactWanted(vec3 seen) {
+    vec3 e = normalize(RelativityLensData[0].xyz);
+    float rs = RelativityLensData[0].w;
+    float u0 = min(rs / length(RelativityLensData[0].xyz), 0.999);
+    float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+    float alphaC = atan(sin(critical), cos(critical) * sqrt(1.0 - u0));
+    return acos(clamp(dot(seen, e), -1.0, 1.0)) < RelativityLensData[7].z * alphaC;
 }
 
 // The Kerr image of view-space point p from the image map (KerrImageMap): 1 with seen its view direction; -1 with
@@ -698,6 +1204,7 @@ const float RELATIVITY_NEAR_BLEND = 0.35;
 // pixel check, per pixel, leaves it out).
 int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     seen = normalize(p);
+    relativityLastCorrection = vec3(0.0);
     bool nearAxis = false;
     int image = 1;
     // The Schwarzschild image: alone for non-spinning holes; for anything else a hole's first guess and its axis cut.
@@ -709,6 +1216,19 @@ int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
         // sphere's, hidden.)
         if (image == 2 && length(p - RelativityLensData[0].xyz) <= RelativityLensData[0].w) return -1;
         if (nearAxis) return -1;
+        // Within RELATIVITY_EXACT_REACH shadow radii of the hole the approximation errs by pixels to tens of them: the
+        // exact image there, solved from it in closed form (relativityKerrExactImage; where that fails, the
+        // approximation stands).
+        // (The pixel check doesn't solve per pixel: it takes the approximation plus the correction its triangle's
+        // vertices found, interpolated.)
+        if (relativityPixelStage) seen = normalize(seen + relativityPixelCorrection);
+        else if (image == 1 && RelativityLensData[7].y > 3.5 && !relativitySecond() && relativityExactWanted(seen)) {
+            vec3 exact;
+            if (relativityKerrExactImage(p, seen, exact)) {
+                relativityLastCorrection = exact - seen;
+                seen = exact;
+            }
+        }
         return image;
     }
     if (relativitySecond()) {
@@ -832,7 +1352,9 @@ vec4 relativityLens(vec4 clip, mat4 proj) {
 // within RELATIVITY_PIXEL_SLACK pixels; if not, or if that point has no image, it's discarded, and what's truly there
 // shows through (the geometry behind, or the post pass). Close to the camera the corners are placed directly (the near
 // march) and the check is skipped: too costly per pixel, and not needed there.
-const float RELATIVITY_PIXEL_SLACK = 3.0;
+const float RELATIVITY_PIXEL_SLACK = 6.0;
+const float RELATIVITY_POLAR_REACH = 0.75; // QuadSubdivision.POLAR_REACH
+const float RELATIVITY_AXIS_SLACK = 40.0;
 
 // Whether the lens bends draws made with projection proj (the level's, with lensing on): those carry the check.
 bool relativityLensed(mat4 proj) {
@@ -849,12 +1371,18 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // the player's own body, round the camera, is all triangles across the ring.)
     if (holeCentre && d < RELATIVITY_NEAR_BLEND * length(hole) && !relativitySecond()) return false;
     if (!relativitySecond() && relativityWeakNear(unbent)) return false;
+    // By the axis behind a non-spinning hole the image moves round the Einstein ring far faster than the point does,
+    // and a pixel's own image is touchy: checked as closely as elsewhere it threw away a ring of what's there (the faces
+    // there are split round the axis, QuadSubdivision.POLAR_REACH, so their edges follow the ring anyway). Checked
+    // loosely, which still catches a face straddling the axis (with the camera moving, before the split catches up):
+    // drawn straight across the ring, off by hundreds of pixels.
+    float slack = RelativityLensData[1].z < 0.5 && relativityByAxis(unbent, RELATIVITY_POLAR_REACH) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
     vec3 seen;
     int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;
     if (image < 0) return true;
     float angle = acos(clamp(dot(seen, normalize(bent)), -1.0, 1.0));
-    return angle > RELATIVITY_PIXEL_SLACK * RelativityLensData[11].x;
+    return angle > slack * RelativityLensData[11].x;
 }
 
 // For shader packs' world programs (always the level's view; their projection may be jittered for TAA, which comes

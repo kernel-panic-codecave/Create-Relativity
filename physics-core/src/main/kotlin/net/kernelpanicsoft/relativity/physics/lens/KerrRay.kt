@@ -241,6 +241,65 @@ class KerrRay(val m: Double, val a: Double, camera: DoubleArray, direction: Doub
 	}
 
 	companion object {
+		/**
+		 * The image of [point] (Kerr-Schild Cartesian, from the hole) seen from [camera]: the view direction whose light,
+		 * followed back, reaches it; Levenberg-Marquardt on the closed-form path from each of [starts] in turn (each on the
+		 * leg the start lands nearer on, then the other), until one lands within [tolerance] (blocks). Null if none does.
+		 */
+		fun image(m: Double, a: Double, camera: DoubleArray, point: DoubleArray, starts: List<DoubleArray>, tolerance: Double = 1e-4): DoubleArray? {
+			val w = point[0] * point[0] + point[1] * point[1] + point[2] * point[2] - a * a
+			val radius = sqrt(0.5 * w + sqrt(0.25 * w * w + a * a * point[2] * point[2]))
+			fun norm(v: DoubleArray) = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+			fun miss(hit: DoubleArray) = sqrt((0..2).sumOf { (hit[it] - point[it]) * (hit[it] - point[it]) })
+			fun solve(outbound: Boolean, start: DoubleArray): DoubleArray? {
+				var dir = start
+				fun residual(d: DoubleArray): DoubleArray? {
+					val ray = KerrRay(m, a, camera, d)
+					val hit = ray.at(radius, outbound) ?: ray.closest() ?: return null
+					return DoubleArray(3) { hit[it] - point[it] }
+				}
+				var damping = 1e-3
+				var rv = residual(dir) ?: return null
+				for (iteration in 0 until 16) {
+					val missNow = norm(rv)
+					if (missNow < tolerance) return dir
+					val helper = if (abs(dir[2]) < 0.9) doubleArrayOf(0.0, 0.0, 1.0) else doubleArrayOf(1.0, 0.0, 0.0)
+					val c = doubleArrayOf(dir[1] * helper[2] - dir[2] * helper[1], dir[2] * helper[0] - dir[0] * helper[2], dir[0] * helper[1] - dir[1] * helper[0])
+					val cn = norm(c)
+					val e1 = DoubleArray(3) { c[it] / cn }
+					val e2 = doubleArrayOf(dir[1] * e1[2] - dir[2] * e1[1], dir[2] * e1[0] - dir[0] * e1[2], dir[0] * e1[1] - dir[1] * e1[0])
+					val eps = 1e-6
+					val ra = residual(DoubleArray(3) { dir[it] + eps * e1[it] }) ?: return null
+					val rb = residual(DoubleArray(3) { dir[it] + eps * e2[it] }) ?: return null
+					val ja = DoubleArray(3) { (ra[it] - rv[it]) / eps }
+					val jb = DoubleArray(3) { (rb[it] - rv[it]) / eps }
+					val aa0 = ja.indices.sumOf { ja[it] * ja[it] }; val ab = ja.indices.sumOf { ja[it] * jb[it] }; val bb0 = jb.indices.sumOf { jb[it] * jb[it] }
+					val ga = ja.indices.sumOf { ja[it] * rv[it] }; val gb = jb.indices.sumOf { jb[it] * rv[it] }
+					var accepted = false
+					for (tries in 0 until 8) {
+						val aa = aa0 * (1 + damping); val bb = bb0 * (1 + damping)
+						val det = aa * bb - ab * ab
+						if (abs(det) < 1e-300) break
+						val da = -(bb * ga - ab * gb) / det; val db = -(aa * gb - ab * ga) / det
+						val nd = DoubleArray(3) { dir[it] + da * e1[it] + db * e2[it] }; val nn = norm(nd)
+						val trial = DoubleArray(3) { nd[it] / nn }
+						val tr = residual(trial)
+						if (tr != null && norm(tr) < missNow) { dir = trial; rv = tr; damping = max(damping / 4, 1e-6); accepted = true; break }
+						damping *= 8
+					}
+					if (!accepted) return null
+				}
+				return null
+			}
+			for (start in starts) {
+				val ray = KerrRay(m, a, camera, start)
+				val first = listOf(false, true).minByOrNull { leg -> ray.at(radius, leg)?.let { miss(it) } ?: 1e30 }!!
+				solve(first, start)?.let { return it }
+				solve(!first, start)?.let { return it }
+			}
+			return null
+		}
+
 		/** Carlson's R_F (duplication). */
 		fun carlsonRF(x0: Double, y0: Double, z0: Double): Double {
 			var x = x0; var y = y0; var z = z0
