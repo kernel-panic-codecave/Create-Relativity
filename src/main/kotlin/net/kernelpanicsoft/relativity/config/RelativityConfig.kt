@@ -20,6 +20,16 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.physics.speed_of_light.comment"),
 				default = SpacetimeUnits.DEFAULT_C,
 			)
+			val lightFollowsPhysics by boolean(
+				title = Component.translatable("config.create_relativity.physics.light_follows_physics"),
+				comment = Component.translatable("config.create_relativity.physics.light_follows_physics.comment"),
+				default = true,
+			)
+			val lightBlocksPerStep by double(
+				title = Component.translatable("config.create_relativity.physics.light_blocks_per_step"),
+				comment = Component.translatable("config.create_relativity.physics.light_blocks_per_step.comment"),
+				default = 1.6,
+			)
 			val speedOfLightOverrides by doubleMap(
 				title = Component.translatable("config.create_relativity.physics.speed_of_light_overrides"),
 				comment = Component.translatable("config.create_relativity.physics.speed_of_light_overrides.comment"),
@@ -151,7 +161,22 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 
 	/** Speed of light in [dimension]: its override if one is set, otherwise the default. */
 	fun speedOfLight(dimension: ResourceKey<Level>): Double =
-		Server.Physics.speedOfLightOverrides[dimension.location().toString()] ?: Server.Physics.speedOfLight
+		Server.Physics.speedOfLightOverrides[dimension.location().toString()] ?: defaultSpeedOfLight()
+
+	/**
+	 * The speed of light where no override sets it: with Light Follows Physics, as fast as the physics can follow
+	 * smoothly, [Server.Physics.lightBlocksPerStep] blocks per Sable physics substep (20 x its substeps a second: 64 at
+	 * its default 2 and 1.6); else [Server.Physics.speedOfLight].
+	 */
+	fun defaultSpeedOfLight(): Double {
+		if (!Server.Physics.lightFollowsPhysics) return Server.Physics.speedOfLight
+		val substeps = try {
+			dev.ryanhcode.sable.SableServerConfig.SUB_LEVEL_SUBSTEPS_PER_TICK.getAsInt()
+		} catch (_: Exception) {
+			2 // (its config not loaded yet)
+		}
+		return Server.Physics.lightBlocksPerStep * 20.0 * substeps.coerceAtLeast(1)
+	}
 
 	/** Ṁ_Edd for a hole of Schwarzschild radius [rs] (blocks): the feeding rate (mass/s) where radiation balances gravity. */
 	fun eddingtonRate(rs: Double): Double = Server.BlackHoles.eddingtonRatePerBlock * rs

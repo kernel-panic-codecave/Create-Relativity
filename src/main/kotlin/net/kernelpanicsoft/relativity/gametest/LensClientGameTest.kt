@@ -8,6 +8,7 @@ import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.DiskMesh
+import net.kernelpanicsoft.relativity.client.lens.JetMesh
 import net.kernelpanicsoft.relativity.client.lens.LensResolution
 import net.kernelpanicsoft.relativity.client.lens.StageTimers
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
@@ -1201,6 +1202,81 @@ class LensClientGameTest {
 			runOnClient {
 				it.options.hideGui = false
 				SpacetimeDebugRenderer.hidden = false
+			}
+		}
+	}
+
+	/**
+	 * A showcase flight (not a check: frames for a video): a spinning, fed hole over a coast at sunset, its disk churning
+	 * and jets firing, the camera circling it and sinking toward its disk's plane, looking at it. One screenshot a frame
+	 * (showcase_NNN, plus _iris with a shader pack), for ffmpeg.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.showcase() {
+		if (!ClientTestInput.selected("showcase")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(16)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.fov().set(80)
+		}
+		withTestWorld(seed = "-3745315768298803473") {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set 12300", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			val hole = net.minecraft.world.phys.Vec3(-15.5, 96.0, -146.0)
+			command("relativity bh create ${hole.x} ${hole.y} ${hole.z} 4 0.9")
+			command("relativity bh feed 3000000")
+			val suffix = if (net.neoforged.fml.ModList.get().isLoaded("iris")) "_iris" else ""
+			val frames = 240
+			fun place(frame: Int) {
+				val f = frame / (frames - 1.0)
+				val angle = Math.toRadians(200.0 + 300.0 * f)
+				val distance = 75.0 - 15.0 * f
+				val height = 30.0 * (1.0 - f) * (1.0 - f) + 12.0
+				val x = hole.x + distance * kotlin.math.cos(angle)
+				val z = hole.z + distance * kotlin.math.sin(angle)
+				val y = hole.y + height
+				val dx = hole.x - x; val dy = hole.y - y; val dz = hole.z - z
+				val yaw = Math.toDegrees(kotlin.math.atan2(-dx, dz)).toFloat()
+				val pitch = Math.toDegrees(-kotlin.math.atan2(dy, kotlin.math.sqrt(dx * dx + dz * dz))).toFloat()
+				runOnClient { minecraft ->
+					val player = minecraft.player!!
+					player.setPos(x, y - player.eyeHeight, z)
+					player.setYRot(yaw); player.yRotO = yaw
+					player.setXRot(pitch); player.xRotO = pitch
+					player.deltaMovement = net.minecraft.world.phys.Vec3.ZERO
+				}
+			}
+			place(0)
+			command("tp @a ${hole.x - 40} ${hole.y + 30} ${hole.z}")
+			waitTicks(100) // the disk brightens as the feed's rate builds up
+			// The world along the whole path generated and meshed first (stops every 20 frames, each until all is drawn).
+			for (frame in 0 until frames step 20) {
+				place(frame)
+				waitTicks(20)
+				for (i in 0 until 600) {
+					if (computeOnClient { it.levelRenderer.hasRenderedAllSections() }) break
+					waitTick()
+				}
+			}
+			place(0)
+			waitTicks(60)
+			settle()
+			for (frame in 0 until frames) {
+				if (frame % 60 == 0) command("relativity bh feed 600000") // (keeps it fed: the rate decays)
+				place(frame)
+				waitTicks(2)
+				takeScreenshot("showcase$suffix" + "_%03d".format(frame))
+			}
+			runOnClient {
+				it.options.hideGui = false
+				SpacetimeDebugRenderer.hidden = false
+				it.options.fov().set(70)
 			}
 		}
 	}

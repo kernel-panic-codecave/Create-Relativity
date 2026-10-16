@@ -3,7 +3,7 @@
   "force_group.create_relativity.spacetime_curvature.description": "Geodesic acceleration from nearby gravitational sources",
   "config.create_relativity.physics": "Physics",
   "config.create_relativity.physics.speed_of_light": "Default Speed of Light (blocks/s)",
-  "config.create_relativity.physics.speed_of_light.comment": "Used in every dimension without an override. Low values make special relativity reachable; real c would make every effect invisible.",
+  "config.create_relativity.physics.speed_of_light.comment": "Used in every dimension without an override, when Light Follows Physics is off. Low values make special relativity reachable; real c would make every effect invisible.",
   "config.create_relativity.physics.unit_radius_mass": "Mass of a 1-Block Black Hole",
   "config.create_relativity.physics.unit_radius_mass.comment": "Sable mass whose Schwarzschild radius is one block; sets the gravitational constant. Default block mass is 1.0.",
   "config.create_relativity.physics.speed_of_light_overrides": "Speed of Light per Dimension",
@@ -85,5 +85,9 @@
   "config.create_relativity.render.disk_scheme": "Accretion Disk Colours",
   "config.create_relativity.render.disk_scheme.comment": "Realistic: blackbody light, shifted and beamed by the gas's motion and gravity (bluer and brighter where it comes toward you). Movie: the film look, warm orange to white by heat alone. Custom: the gradient below.",
   "config.create_relativity.render.disk_gradient": "Custom Disk Gradient",
-  "config.create_relativity.render.disk_gradient.comment": "The Custom scheme's colours, from the hot inner edge (left) to the cool outer edge (right): click the bar to add a colour, drag one to move it, right-click to remove it. The gas's motion still shifts along it and beams it."
+  "config.create_relativity.render.disk_gradient.comment": "The Custom scheme's colours, from the hot inner edge (left) to the cool outer edge (right): click the bar to add a colour, drag one to move it, right-click to remove it. The gas's motion still shifts along it and beams it.",
+  "config.create_relativity.physics.light_follows_physics": "Light Follows Physics",
+  "config.create_relativity.physics.light_follows_physics.comment": "The speed of light set by the physics: as fast as Sable's physics steps can follow smoothly (Light Blocks per Step x 20 x its substeps per tick). Off: the Speed of Light value. Per-dimension overrides apply either way.",
+  "config.create_relativity.physics.light_blocks_per_step": "Light Blocks per Step",
+  "config.create_relativity.physics.light_blocks_per_step.comment": "How far light goes in one Sable physics substep (blocks), with Light Follows Physics. Higher is faster light but jumpier motion near it. 1.6 at Sable's default 2 substeps is 64 blocks/s."
 }

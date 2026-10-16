@@ -265,18 +265,21 @@ vec3 skyAt(vec3 d) {
     vec2 longLat = vec2(atan(d.z, d.x) / (2.0 * PI) + 0.5, asin(clamp(d.y, -1.0, 1.0)) / PI + 0.5);
     vec4 probe = texture(SkyProbe, longLat);
     if (probe.a > 0.5) return probe.rgb;
-    // Never seen that way: the sky seen at the same height (it changes mostly with height), then the nearest heights.
-    for (int ring = 0; ring < 16; ring += 1) {
-        vec4 sum = vec4(0.0);
+    // Never seen that way: the sky seen at about the same height (it changes mostly with height), weighted smoothly by
+    // how far in height (stopping at the first height with any, it changed in steps: contour bands across bent sky),
+    // and toward the plain gradient where little was seen near that height.
+    vec4 sum = vec4(0.0);
+    for (int ring = -12; ring <= 12; ring += 1) {
+        float offset = float(ring) * 0.025;
+        float weight = exp(-offset * offset / (2.0 * 0.06 * 0.06));
         for (int k = 0; k < 8; k += 1) {
-            for (int side = -1; side <= 1; side += 2) {
-                vec2 at = vec2(float(k) / 8.0 + 0.5 / 8.0, clamp(longLat.y + float(side * ring) * 0.03, 0.0, 1.0));
-                vec4 seen = texture(SkyProbe, at);
-                sum += vec4(seen.rgb * seen.a, seen.a);
-            }
+            vec2 at = vec2(float(k) / 8.0 + 0.5 / 8.0, clamp(longLat.y + offset, 0.0, 1.0));
+            vec4 seen = texture(SkyProbe, at);
+            sum += vec4(seen.rgb * seen.a, seen.a) * weight;
         }
-        if (sum.a > 0.5) return sum.rgb / sum.a;
     }
+    vec3 plain = mix(LensFogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y));
+    if (sum.a > 1e-4) return mix(plain, sum.rgb / sum.a, smoothstep(0.0, 2.0, sum.a));
     return mix(LensFogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y));
 }
 

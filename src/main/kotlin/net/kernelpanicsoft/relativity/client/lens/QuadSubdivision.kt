@@ -53,6 +53,21 @@ object QuadSubdivision {
 		return Triple(hole[0] - CAUSTIC_SHIFT * a * ez, hole[1], hole[2] + CAUSTIC_SHIFT * a * ex)
 	}
 
+	/**
+	 * With the camera close to a hole (within [CLOSE_START] r_s) nearly everything it sees is bent hard, and block faces
+	 * far from the hole too come out jagged: everything within [CLOSE_REACH] r_s of it is split [closeBoost] a side, up
+	 * to 4 at [CLOSE_START] / 4 r_s and nearer. In steps, so sections are rebuilt only as the camera crosses one.
+	 */
+	@Volatile
+	private var closeBoost = 1
+	private const val CLOSE_START = 12.0
+	private const val CLOSE_REACH = 40.0
+
+	private fun boostFor(camera: net.minecraft.world.phys.Vec3, holes: List<DoubleArray>): Int = holes.maxOfOrNull { hole ->
+		val d = sqrt((camera.x - hole[0]) * (camera.x - hole[0]) + (camera.y - hole[1]) * (camera.y - hole[1]) + (camera.z - hole[2]) * (camera.z - hole[2]))
+		ceil(CLOSE_START / maxOf(d / hole[3], 1.0)).toInt().coerceIn(1, 4)
+	} ?: 1
+
 	/** The holes' centres, radii and spins (x, y, z, r_s, spin; world), as the chunk builder threads see them. */
 	@Volatile
 	private var holes: List<DoubleArray> = emptyList()
@@ -146,6 +161,7 @@ object QuadSubdivision {
 			val dz = z - hole[2]
 			val distance = sqrt(dx * dx + dy * dy + dz * dz)
 			if (distance < NEAR_REACH * hole[3]) level = maxOf(level, ceil(NEAR_SCALE / maxOf(distance, 1e-3)).toInt())
+			if (closeBoost > 1 && distance < CLOSE_REACH * hole[3]) level = maxOf(level, closeBoost)
 		}
 		return level.coerceAtMost(MAX_LEVEL)
 	}
@@ -180,6 +196,19 @@ object QuadSubdivision {
 		active = level != null && RelativityConfig.Client.Render.lensing
 		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius, it.spin) }
 		updateAxis(minecraft, now)
+		val boost = boostFor(minecraft.gameRenderer.mainCamera.position, now)
+		if (boost != closeBoost) {
+			closeBoost = boost
+			for (hole in now) {
+				val reach = CLOSE_REACH * hole[3]
+				val lo = SectionPos.of(floor(hole[0] - reach).toInt() shr 4, floor(hole[1] - reach).toInt() shr 4, floor(hole[2] - reach).toInt() shr 4)
+				val hi = SectionPos.of(floor(hole[0] + reach).toInt() shr 4, floor(hole[1] + reach).toInt() shr 4, floor(hole[2] + reach).toInt() shr 4)
+				try {
+					for (sx in lo.x()..hi.x()) for (sy in lo.y()..hi.y()) for (sz in lo.z()..hi.z()) minecraft.levelRenderer.setSectionDirty(sx, sy, sz)
+				} catch (_: NullPointerException) {
+				}
+			}
+		}
 		// (Turning the vertex lens on or off empties or fills the list, which counts as a change too.)
 		if (!changed(now)) return
 		holes = now
