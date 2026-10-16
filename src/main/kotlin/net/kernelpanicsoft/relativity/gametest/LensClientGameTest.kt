@@ -1249,6 +1249,24 @@ class LensClientGameTest {
 				takeScreenshot("disk_scheme_${scheme.name.lowercase()}")
 			}
 			runOnClient { RelativityConfig.Client.Render.diskScheme = RelativityConfig.DiskScheme.REALISTIC }
+			// A spinning hole's polar jets, from far enough out to see both, and a little above.
+			command("tick unfreeze")
+			command("relativity bh clear")
+			command("relativity bh create 0.5 -20 0.5 3 0.9")
+			command("relativity bh feed 1000000")
+			waitTicks(100)
+			command("tick freeze")
+			command("tp @a -79.5 ${-20.0 + 8.0 - eyeHeight} 0.5 -90 5")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(40)
+			settle()
+			takeScreenshot("jets")
+			command("tp @a -29.5 ${-20.0 + 40.0 - eyeHeight} 0.5 -90 50")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+			waitTicks(20)
+			takeScreenshot("jets_above")
+			command("tp @a ${0.5 - distance * kotlin.math.cos(Math.toRadians(6.0))} ${-20.0 + distance * kotlin.math.sin(Math.toRadians(6.0)) - eyeHeight} 0.5 -90 6")
+			waitTicks(20)
 			runOnClient { DiskMesh.secondaries = false }
 			waitTicks(5)
 			takeScreenshot("disk_mesh_primary")

@@ -194,6 +194,7 @@ object VertexLens {
 			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame) {
 				HorizonMesh.draw(hole, event.modelViewMatrix)
 				DiskMesh.draw(hole, event.modelViewMatrix)
+				JetMesh.draw(hole, event.modelViewMatrix)
 			}
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
 				setEnabled(false)
