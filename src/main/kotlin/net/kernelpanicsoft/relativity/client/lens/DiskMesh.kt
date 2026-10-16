@@ -44,6 +44,17 @@ object DiskMesh {
 
 	private const val AZIMUTHS = 384
 	private const val RINGS = 48
+
+	/**
+	 * Volumetric: the disk drawn as this many thin translucent layers through its thickness (a height growing with
+	 * radius: [ASPECT] of it, more as it's fed harder), each taking a share of its opacity by a gaussian across the
+	 * thickness (so face on it's as bright as one sheet, edge on thick and glowing) and its own phase of the turbulence,
+	 * drifting against the others as it turns ([DRIFT]): the gas churns, not only rotates.
+	 */
+	@JvmField
+	var layers = 7
+	private const val ASPECT = 0.05
+	private const val DRIFT = 0.08
 	private const val TEXTURE_WIDTH = 256
 	private const val TEXTURE_HEIGHT = 64
 
@@ -102,6 +113,8 @@ object DiskMesh {
 		val hole: BlackHole, val camX: Double, val camY: Double, val camZ: Double,
 		val rIn: Double, val rOut: Double, val ratio: Double, val sense: Double, val time: Double,
 	) {
+		/** The disk's half-thickness over radius. */
+		val aspect = ASPECT * (0.6 + 0.6 * min(ratio, 1.5))
 		val rs = hole.schwarzschildRadius
 		// The hole relative to the camera, and its unit vector toward the camera (e1, as the vertex lens has it).
 		val hx = hole.x - camX
@@ -113,26 +126,47 @@ object DiskMesh {
 
 		fun emit(consumer: com.mojang.blaze3d.vertex.VertexConsumer, table: FloatArray, secondary: Boolean) {
 			if (rc <= rs) return
+			val count = layers.coerceAtLeast(1)
+			// Back to front: from the side away from the camera.
+			val order = (0 until count).let { if (hy < 0.0) it.toList() else it.reversed() }
+			// (The gaussian's weights, summing to 1: each layer's opacity is 1 - (1 - a)^w.)
+			val offsets = DoubleArray(count) { if (count == 1) 0.0 else -1.0 + 2.0 * it / (count - 1) }
+			val weights = DoubleArray(count) { exp(-offsets[it] * offsets[it] / 0.35) }.let { w -> val total = w.sum(); DoubleArray(count) { w[it] / total } }
+			for (layer in order) emitLayer(consumer, table, secondary, offsets[layer], weights[layer], layer)
+		}
+
+		// Per ring and per azimuth, worked out once (not per quad corner): radius, orbital angular speed, the ring's
+		// texture row; each azimuth's cosine and sine.
+		private val radii = DoubleArray(RINGS + 1) { radius(it) }
+		private val omegas = DoubleArray(RINGS + 1) { sense * sqrt(0.5 * rs / (radii[it] * radii[it] * radii[it])) }
+		private val rows = FloatArray(RINGS + 1) { (it + 0.5f) / (RINGS + 1) }
+		private val cosines = DoubleArray(AZIMUTHS + 1) { cos(2.0 * PI * it / AZIMUTHS) }
+		private val sines = DoubleArray(AZIMUTHS + 1) { sin(2.0 * PI * it / AZIMUTHS) }
+
+		private fun emitLayer(consumer: com.mojang.blaze3d.vertex.VertexConsumer, table: FloatArray, secondary: Boolean, offset: Double, weight: Double, layer: Int) {
 			val pose = PoseStack().last()
 			val colors = colorsFor(this, table, secondary)
-			for (ring in 0 until RINGS) for (a in 0 until AZIMUTHS) {
-				val corners = arrayOf(ring to a, ring to a + 1, ring + 1 to a + 1, ring + 1 to a)
-				// (One winding: the render type doesn't cull, so it's seen from above and below, and mirrored.)
-				run {
-					for ((k, j) in corners) {
-						val r = radius(k)
-						val phi = 2.0 * PI * j / AZIMUTHS
-						val omega = sense * sqrt(0.5 * rs / (r * r * r))
-						val u = ((phi - omega * time) / (2.0 * PI)).toFloat()
-						val v = (k.toFloat() + 0.5f) / (RINGS + 1)
-						val argb = colors[k][j]
-						consumer.addVertex(pose, (hx + r * cos(phi)).toFloat(), hy.toFloat(), (hz + r * sin(phi)).toFloat())
-							.setColor((argb shr 16) and 255, (argb shr 8) and 255, argb and 255, (argb ushr 24) and 255)
-							.setUv(u, v)
-							.setLight(0xF000F0)
-							.setNormal(0f, 1f, 0f)
-					}
-				}
+			// The layer's opacity per vertex alpha (0-255), and its phase in the turbulence.
+			val alphaOf = IntArray(256) { a -> (255.0 * (1.0 - Math.pow(1.0 - min(a / 255.0, 0.999), weight))).toInt().coerceIn(0, 255) }
+			val phase = 0.137 * layer
+			val turn = time * (1.0 + DRIFT * offset)
+			// (The faint layers off the midplane at half the resolution each way: a quarter of the vertices.)
+			val step = if (offset == 0.0) 1 else 2
+			fun put(k: Int, j: Int) {
+				val r = radii[k]
+				val argb = colors[k][j]
+				consumer.addVertex(pose, (hx + r * cosines[j]).toFloat(), (hy + offset * aspect * r).toFloat(), (hz + r * sines[j]).toFloat())
+					.setColor((argb shr 16) and 255, (argb shr 8) and 255, argb and 255, alphaOf[(argb ushr 24) and 255])
+					.setUv(((2.0 * PI * j / AZIMUTHS - omegas[k] * turn) / (2.0 * PI) + phase).toFloat(), rows[k])
+					.setLight(0xF000F0)
+					.setNormal(0f, 1f, 0f)
+			}
+			// (One winding: the render type doesn't cull, so it's seen from above and below, and mirrored.)
+			for (ring in 0 until RINGS step step) for (a in 0 until AZIMUTHS step step) {
+				put(ring, a)
+				put(ring, a + step)
+				put(ring + step, a + step)
+				put(ring + step, a)
 			}
 		}
 
