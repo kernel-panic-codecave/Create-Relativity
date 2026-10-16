@@ -222,14 +222,16 @@ class KerrRay(val m: Double, val a: Double, camera: DoubleArray, direction: Doub
 	 */
 	private fun polar(tau: Double): Pair<Double, Double>? {
 		if (eta <= 0.0) return null
-		val a2 = max(a * a, 1e-18)
-		val dth = 0.5 * (1 - (eta + lambda * lambda) / a2)
-		val root = sqrt(dth * dth + eta / a2)
-		val uPlus2 = min(dth + root, 1 - 1e-12) // (just short of the pole: light passing over it)
-		val uMinus2 = dth - root
+		// u+^2 and u-^2, the roots of a^2 u^4 + (eta + lambda^2 - a^2) u^2 - eta = 0, in the form that doesn't cancel
+		// (u+^2 u-^2 = -eta / a^2): written as their difference they are two numbers of size 1 / a^2 apart, which loses
+		// everything as a goes to 0 (at a = 0 every path fell into the equator). Then m = u+^2 / u-^2 = -a^2 u+^4 / eta
+		// and the rate sqrt(-a^2 u-^2) = sqrt(eta) / u+: at a = 0, sin and the Schwarzschild sqrt(eta + lambda^2).
+		val a2 = a * a
+		val b = eta + lambda * lambda - a2
+		val uPlus2 = min(2 * eta / (b + sqrt(b * b + 4 * a2 * eta)), 1 - 1e-12) // (just short of the pole: light passing over it)
 		val uPlus = sqrt(max(uPlus2, 0.0))
-		val mm = uPlus2 / uMinus2
-		val rate = sqrt(a2 * -uMinus2)
+		val mm = -a2 * uPlus2 * uPlus2 / eta
+		val rate = sqrt(eta) / uPlus
 		val u0 = cos(theta0)
 		// cos theta = u+ sn(X | m), X = X0 - (theta's direction) rate tau: theta increasing is u decreasing.
 		val x0 = ellipticF(asin((u0 / uPlus).coerceIn(-1.0, 1.0)), mm)

@@ -45,7 +45,7 @@ object VertexLens {
 	private val TEXTURE_UNIT: Int by lazy { GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - 1 }
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
-	private const val BLOCK_BYTES = 192 // 12 vec4s: see vertex_lens_core.glsl's RelativityLensData
+	private const val BLOCK_BYTES = 448 // 28 vec4s: see vertex_lens_core.glsl's RelativityLensData
 	private const val KERR_SAMPLER = "RelativityKerrPaths"
 
 	/** The Kerr image map's sampler (KerrImageMap), on the unit below the path table's. */
@@ -519,9 +519,14 @@ object VertexLens {
 				// The pixel check's pixel angle; the image map: from just outside the horizon (or the centre's own inner
 				// radius) out to the paths' end.
 				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(centre.inner.toFloat()).put(reach.toFloat())
+				// [12..27]: an approximated lone spinning hole's exact shadow edge (HorizonMesh.edges), or 0s.
+				val hole = centre.hole
+				val edges = if (hole != null && hole.spin != 0.0 && loneHole && kerrApprox) HorizonMesh.edges(hole, camX, camY, camZ) else null
+				for (k in 0 until HorizonMesh.EDGE_SAMPLES) data.put(edges?.get(k) ?: 0f)
 			} else {
 				repeat(20) { data.put(0f) }
 				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
+				repeat(HorizonMesh.EDGE_SAMPLES) { data.put(0f) }
 			}
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, target)

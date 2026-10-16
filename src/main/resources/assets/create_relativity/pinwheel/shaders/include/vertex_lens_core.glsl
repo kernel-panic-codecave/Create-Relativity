@@ -14,8 +14,10 @@
 // [11] x: the angle one screen pixel covers (radians; the pixel check); y: bit 1 turns the pixel check off (debug), bit 2
 //      places vertices at their secondary images (VertexLens.drawSecondImages); z, w: the image map's inner and outer
 //      radius (blocks)
+// [12..27] an approximated lone spinning hole's exact shadow edge (HorizonMesh.edges): its angle from the hole at 64
+//      azimuths round it (relativityShadowEdge), all 0 when there's none
 layout(std140) uniform RelativityLens {
-    vec4 RelativityLensData[12];
+    vec4 RelativityLensData[28];
 };
 uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sqrt u0, sqrt uP, phi / pi): r the
                                     // launch-angle correction, g whether there's an image (interpolated)
@@ -507,11 +509,37 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
 // A lone spinning hole's image (primary or, with relativitySecond, secondary), approximated from the non-spinning one,
 // with no solving: what's seen of a spinning hole is, to a good approximation, a non-spinning hole's view of the point
 // with the hole moved sideways by -a (up x e) (e camera to hole, a = spin M: far out a Kerr lens is a Schwarzschild
-// lens displaced so), turned round the hole by frame dragging: tau = -RELATIVITY_TWIST (a / M) cos i (alpha_c / alpha)^2.5
-// (i the spin axis's angle from the line of sight, alpha the image's angle from the hole, alpha_c the shadow's). Fitted
-// against the exact baker for spin 0.9 seen side on and from 37 degrees above: median error under a pixel past 5 shadow
-// radii, 1-4 px out to 2.5, 13 px at 1.3-1.6, tens of px by the shadow's edge. It follows the camera at once.
-const float RELATIVITY_TWIST = 0.274; // 15.7 degrees
+// lens displaced so), turned round the hole by frame dragging: tau = -RELATIVITY_TWIST (a / M) cos i x^-(n + m u0)
+// (i the spin axis's angle from the line of sight, x = tan alpha / tan alpha_c the image's distance from the hole in
+// shadow radii, u0 = r_s / r_c; n, m RELATIVITY_TWIST_FALLOFF). Fitted against the exact closed-form images (KerrRay)
+// over spins 0.3-0.9, view angles 15-90 degrees and camera distances 7.5-40 m: past a third of a shadow radius out the
+// error is a few px (median 8 at 0.3-1 shadow radii out for a camera 7.5 r_s away, 2-3 farther out); in the thin band
+// by the shadow's edge (light that has wound round) tens to hundreds, the photon ring's sliver. It follows the camera
+// at once.
+// The exact shadow's edge (HorizonMesh.edges) at game-space direction d from the camera, e the direction to the hole:
+// its angle from e at d's azimuth round e (from up's projection, HorizonMesh.frame), interpolated; 0 if there's none.
+float relativityShadowEdge(vec3 d, vec3 e) {
+    vec3 up = abs(e.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 zero = normalize(up - dot(up, e) * e);
+    vec3 quarter = cross(e, zero);
+    float azimuth = atan(dot(d, quarter), dot(d, zero));
+    if (azimuth < 0.0) azimuth += 6.28318531;
+    float f = azimuth / 6.28318531 * 64.0;
+    int i0 = int(floor(f));
+    float t = f - floor(f);
+    int i1 = i0 + 1;
+    if (i0 > 63) i0 -= 64;
+    if (i1 > 63) i1 -= 64;
+    float a0 = RelativityLensData[12 + i0 / 4][i0 - 4 * (i0 / 4)];
+    float a1 = RelativityLensData[12 + i1 / 4][i1 - 4 * (i1 / 4)];
+    if (a0 <= 0.0 || a1 <= 0.0) return 0.0;
+    return mix(a0, a1, t);
+}
+// How far out (in shadow radii past the approximation's own edge) what's drawn is pulled onto the exact edge: the pull
+// falls as exp(-q / RELATIVITY_EDGE_REACH).
+const float RELATIVITY_EDGE_REACH = 0.08;
+const float RELATIVITY_TWIST = 0.386;
+const vec2 RELATIVITY_TWIST_FALLOFF = vec2(2.73, -4.93);
 const float RELATIVITY_SHIFT_GROWTH = 0.65;
 bool relativityKerrApproximated() { return RelativityLensData[1].z > 0.5 && RelativityLensData[7].y > 2.5; }
 int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
@@ -541,9 +569,35 @@ int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
             alpha = acos(clamp(dot(seen, e), -1.0, 1.0));
         }
     }
-    float tau = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(alphaC / max(alpha, 0.8 * alphaC), 2.5);
+    float x = max(tan(min(alpha, 1.5)) / tan(alphaC), 1.15);
+    float tau = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(x, -(RELATIVITY_TWIST_FALLOFF.x + RELATIVITY_TWIST_FALLOFF.y * u0));
     // (Rodrigues: seen turned by tau round e.)
     seen = normalize(seen * cos(tau) + cross(e, seen) * sin(tau) + e * dot(e, seen) * (1.0 - cos(tau)));
+    // By the edge: the spinning shadow is flattened on its approaching side, the non-spinning one moved and turned is a
+    // circle. What's drawn there is pulled radially (round the hole) so the approximation's own edge falls on the exact
+    // one (HorizonMesh's, the shadow drawn), fading out away from it.
+    float edge = relativityShadowEdge(viewToGame * seen, eGame);
+    if (edge > 0.0 && edge < 1.5) {
+        // The approximation's edge along this azimuth: the circle of the shadow's radius round its lens's centre at the
+        // edge (the hole moved by (1 + RELATIVITY_SHIFT_GROWTH) shift, turned by the twist there), on the tangent plane.
+        float tauEdge = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(1.15, -(RELATIVITY_TWIST_FALLOFF.x + RELATIVITY_TWIST_FALLOFF.y * u0));
+        vec3 lens = normalize(RelativityLensData[0].xyz + (1.0 + RELATIVITY_SHIFT_GROWTH) * shift);
+        lens = normalize(lens * cos(tauEdge) + cross(e, lens) * sin(tauEdge) + e * dot(e, lens) * (1.0 - cos(tauEdge)));
+        vec3 c = lens / dot(lens, e) - e;
+        vec3 radial = seen - e * dot(seen, e);
+        float rl = length(radial);
+        if (rl > 1e-6) {
+            radial /= rl;
+            float uc = dot(radial, c);
+            float r = tan(alphaC);
+            float own = uc + sqrt(max(uc * uc - dot(c, c) + r * r, 0.0));
+            float here = rl / max(dot(seen, e), 1e-3);
+            float q = here / own - 1.0;
+            float pull = exp(-max(q, 0.0) / RELATIVITY_EDGE_REACH);
+            float moved = max(here + (tan(edge) - own) * pull, 0.0);
+            seen = normalize(e + moved * radial);
+        }
+    }
     return 1;
 }
 

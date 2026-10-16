@@ -54,10 +54,8 @@ object HorizonMesh {
 		if (rc <= 1.05 * hole.equatorialExtent(hole.horizonRadius)) return
 		update(doubleArrayOf(rx, ry, rz, m, a), rc)
 		val impacts = outline ?: return
-		val exact = directions(impacts, doubleArrayOf(rx, ry, rz), rc, m)
-		// An approximated spinning hole (VertexLens.kerrApprox): the exact, flattened outline, moved to where the
-		// approximation has the lens by the ring, so what's drawn round it meets it.
-		val directions = if (VertexLens.kerrApprox && hole.spin != 0.0) shifted(exact, hole, doubleArrayOf(rx, ry, rz), rc) else exact
+		// (Round an approximated spinning hole the lens pulls what it draws by the edge onto this same outline: edges.)
+		val directions = directions(impacts, doubleArrayOf(rx, ry, rz), rc, m)
 		val stack = com.mojang.blaze3d.systems.RenderSystem.getModelViewStack()
 		stack.pushMatrix()
 		stack.set(modelView)
@@ -114,30 +112,34 @@ object HorizonMesh {
 		}
 	}
 
+	/** Azimuths [edges] gives the shadow's edge at. */
+	const val EDGE_SAMPLES = 64
+
 	/**
-	 * [outline] moved on the sky so its centre is where the approximation (vertex_lens_core.glsl relativityKerrApprox) has
-	 * the lens by the ring: the hole's direction moved by (1 + RELATIVITY_SHIFT_GROWTH) times -a (up x e).
+	 * The exact shadow's edge for the lens (vertex_lens_core.glsl relativityShadowEdge): its angle from the hole's
+	 * direction (radians) at [EDGE_SAMPLES] azimuths round it, evenly from the projection of up ([frame]'s zero) toward
+	 * its quarter; null until an outline is ready for this camera.
 	 */
-	private fun shifted(outline: Array<DoubleArray>, hole: BlackHole, camera: DoubleArray, rc: Double): Array<DoubleArray> {
-		val e = DoubleArray(3) { -camera[it] / rc }
-		val a = hole.spin * 0.5 * hole.schwarzschildRadius
-		val toLens = DoubleArray(3) { -camera[it] } .also { it[0] += (1.0 + SHIFT_GROWTH) * -a * e[2]; it[2] += (1.0 + SHIFT_GROWTH) * a * e[0] }
-		val ln = sqrt(toLens[0] * toLens[0] + toLens[1] * toLens[1] + toLens[2] * toLens[2])
-		// Centres as offsets across the line of sight (tangent to the sky at e).
-		fun across(d: DoubleArray): DoubleArray { val along = d[0] * e[0] + d[1] * e[1] + d[2] * e[2]; return DoubleArray(3) { d[it] / along - e[it] } }
-		val target = across(DoubleArray(3) { toLens[it] / ln })
-		val centre = DoubleArray(3)
-		for (d in outline) { val t = across(d); for (c in 0..2) centre[c] += t[c] / outline.size }
-		return Array(outline.size) { k ->
-			val t = across(outline[k])
-			val moved = DoubleArray(3) { e[it] + t[it] - centre[it] + target[it] }
-			val n = sqrt(moved[0] * moved[0] + moved[1] * moved[1] + moved[2] * moved[2])
-			DoubleArray(3) { moved[it] / n }
+	fun edges(hole: BlackHole, cameraX: Double, cameraY: Double, cameraZ: Double): FloatArray? {
+		val rx = cameraX - hole.x
+		val ry = cameraY - hole.y
+		val rz = cameraZ - hole.z
+		val rc = sqrt(rx * rx + ry * ry + rz * rz)
+		if (rc <= 1.05 * hole.equatorialExtent(hole.horizonRadius)) return null
+		update(doubleArrayOf(rx, ry, rz, hole.mass, hole.spin * hole.mass), rc)
+		val impacts = outline ?: return null
+		val redshift = sqrt(maxOf(1.0 - 2.0 * hole.mass / rc, 1e-6))
+		val n = impacts.size
+		return FloatArray(EDGE_SAMPLES) { k ->
+			val f = k.toDouble() * n / EDGE_SAMPLES
+			val i0 = kotlin.math.floor(f).toInt() % n
+			val t = f - kotlin.math.floor(f)
+			val impact = (1 - t) * impacts[i0] + t * impacts[(i0 + 1) % n]
+			val sine = (kotlin.math.abs(impact) * redshift / rc).coerceIn(0.0, 1.0)
+			val angle = kotlin.math.asin(sine)
+			(if (impact < 0.0) Math.PI - angle else angle).toFloat()
 		}
 	}
-
-	/** vertex_lens_core.glsl's RELATIVITY_SHIFT_GROWTH: the approximation's displacement at the ring over the far one, less 1. */
-	private const val SHIFT_GROWTH = 0.65
 
 	/** Takes in a finished outline; starts the next if the camera has moved far enough from the last one's place. */
 	private fun update(key: DoubleArray, rc: Double) {
