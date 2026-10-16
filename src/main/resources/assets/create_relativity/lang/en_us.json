@@ -81,7 +81,5 @@
   "config.create_relativity.render.light_delay": "Light Delay",
   "config.create_relativity.render.light_delay.comment": "See distant things as they were when their light left them: block and entity updates are held for distance / c. At c = 64 b/s, something 64 blocks away is a second in the past.",
   "config.create_relativity.time.shaft_torsion": "Shaft Torsion (su per rpm)",
-  "config.create_relativity.time.shaft_torsion.comment": "Create networks spanning different clock rates twist: each block adds this × |its dτ/dt − the source's| stress per rpm. Long shafts down a gravity well overstress. 0 turns it off.",
-  "config.create_relativity.render.trace_blocks": "Lens Traces Hidden Blocks",
-  "config.create_relativity.render.trace_blocks.comment": "Bent light that reaches blocks the camera can't see (behind the hole, off screen, the Einstein ring's images) is traced through a copy of the blocks round the hole. Off: such light shows the sky instead, and the copy isn't kept (less CPU and GPU)."
+  "config.create_relativity.time.shaft_torsion.comment": "Create networks spanning different clock rates twist: each block adds this × |its dτ/dt − the source's| stress per rpm. Long shafts down a gravity well overstress. 0 turns it off."
 }

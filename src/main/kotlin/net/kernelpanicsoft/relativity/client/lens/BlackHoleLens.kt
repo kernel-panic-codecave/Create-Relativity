@@ -29,7 +29,7 @@ import java.util.concurrent.CompletableFuture
  * The post pass of the black-hole lens, as a Veil post pipeline (black_hole_lens.json), after the vertex lens
  * ([VertexLens]) has drawn the world where its light appears: the shadow over what lies beyond the hole, the
  * accretion disk, and in the sky (where nothing was drawn) each view ray's bent path (lens_scene.glsl; the nearest
- * spinning hole through Kerr) to the geometry round the hole ([LensVoxels]) or the sky: the Einstein ring and the
+ * spinning hole through Kerr) to the sky (never geometry: the vertex lens draws all of that): the Einstein ring and the
  * images round it. The paths come from quarter-resolution tables (kerr_table.fsh, scene_table.fsh), which the lens
  * pass interpolates, marching per pixel only where neighbouring entries disagree. [SchwarzschildLens]' table (built
  * once at startup, normalised by r_s) gives the shadow's edge.
@@ -89,18 +89,6 @@ object BlackHoleLens {
 	/** With [rawFrame], also skips the tables (LensMode 5): the pipeline's fixed cost, for profiling. */
 	@JvmField
 	var skipTables = false
-
-	/** What the sky's bent paths can meet (lens_scene.glsl's UnseenSource). */
-	enum class Unseen {
-		/** Nothing: those paths show the sky. */
-		NONE,
-		/** The block grid round the hole (LensVoxels). */
-		VOXELS,
-	}
-
-	/** Voxels by default; NONE is for comparison (GameTests). */
-	@JvmField
-	var unseen = Unseen.VOXELS
 
 	/** How the nearest spinning hole's rays are found; only GameTests change it. */
 	@JvmField
@@ -346,6 +334,8 @@ object BlackHoleLens {
 		}
 		uploadDisk(::uniform, level, holes.firstOrNull(), minecraft)
 		uniform("HoleCount") { setInt(holes.size) }
+		// A lone hole's shadow is drawn as geometry (HorizonMesh, exact, following the camera): this pass leaves it be.
+		uniform("ShadowDrawn") { setInt(if (HorizonMesh.enabled && VertexLens.loneHole && holes.isNotEmpty()) 1 else 0) }
 		uniform("Holes") { setVectors(*holeUniforms) }
 		uniform("HoleSpins") { setVectors(*spinUniforms) }
 		val (sourceCount, general) = packSources(holes, visibleSources(level), camera, sourceUniforms)
@@ -361,10 +351,7 @@ object BlackHoleLens {
 		uniform("LensFogEnd") { setFloat(fogEnd) }
 		uniform("LensFogShape") { setInt(fogShape) }
 		uniform("ProfileFlags") { setInt(profileFlags) }
-		LensVoxels.waterSurface.let { w -> pipeline.getUniformSafe("WaterSurface").setVector(w[0], w[1], w[2], w[3]) }
 		uniform("RenderDistance") { setFloat(minecraft.gameRenderer.renderDistance) }
-		uniform("ViewChunks") { setInt(minecraft.options.effectiveRenderDistance) }
-		uniform("CameraInChunk") { setVector((camera.x - 16.0 * kotlin.math.floor(camera.x / 16.0)).toFloat(), (camera.z - 16.0 * kotlin.math.floor(camera.z / 16.0)).toFloat()) }
 
 		// The tables' own view: kept while the screen stays inside it, so turning reuses them.
 		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
@@ -372,13 +359,8 @@ object BlackHoleLens {
 		uniform("TableToWorld") { setMatrix(TableFrame.toWorld) }
 		uniform("TableFromWorld") { setMatrix(TableFrame.fromWorld) }
 		uniform("TableScale") { setFloat(TableFrame.SCALE) }
-		// The last pass's touch-up: sharpen at full lens resolution or finer, blur below it (the tables' texels would show).
-		run {
-			val scale = LensResolution.scale()
-			uniform("AaSharpen") { setFloat(0.25f) }
-			// (Below full resolution: 4 / scale pixels, a Kerr-table texel, the coarsest whose steps show.)
-			uniform("BlurRadius") { setFloat(if (scale >= 1f) 0f else 4f / scale) }
-		}
+		// The last pass's touch-up: a light sharpen.
+		uniform("AaSharpen") { setFloat(0.25f) }
 
 		// Whether the tables can be last frame's (TableCache): everything they read, as a key (the table frame's
 		// orientation, not the camera's: turning inside it changes nothing they hold).
@@ -404,60 +386,29 @@ object BlackHoleLens {
 			key += disk.toFloat()
 			key += fogStart; key += fogEnd; key += fogShape.toFloat()
 			key += minecraft.gameRenderer.renderDistance
-			key += (LensVoxels.version and 0xFFFFFF).toFloat(); key += (LensVoxels.version shr 24).toFloat()
 			key += minecraft.window.width.toFloat(); key += minecraft.window.height.toFloat()
 			key += profileFlags.toFloat(); key += kerrMode.ordinal.toFloat()
 			key += (if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0).toFloat()
-			key += unseen.ordinal.toFloat()
 			TableCache.update(key.toFloatArray())
 		}
 
 		// Every sampler gets a real texture, whatever the mode: Veil binds missing ones to a placeholder on unit 0 and
-		// renumbers the rest, and a mismatch there (the voxels' integer 3D sampler) makes the whole draw invalid.
-		LensVoxels.ensureTextures()
+		// renumbers the rest, and a mismatch there (a 3D sampler on a 2D texture) makes the whole draw invalid.
+		KerrImageMap.ensureTexture()
 		val lens = VeilRenderSystem.renderer().shaderManager.getShader(SHADER)
 		// The lens pass runs the vertex lens's maths (where the world drew a traced point): its block, and its tables
 		// through Veil (which numbers this program's samplers itself).
 		lens?.let {
 			VertexLens.linkProgram(it.program)
 			KerrPaths.ensureTexture()
-			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: LensVoxels.main.light)
+			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
 			it.setTexture("RelativityKerrPaths", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
 			KerrImageMap.ensureTexture()
 			it.setTexture("RelativityKerrMap", GL12.GL_TEXTURE_3D, KerrImageMap.texture)
 			// (Every 3D sampler it declares needs a 3D texture, even unread: one left on unit 0, with the block atlas
 			// there, invalidates the draw, and the frame shows the atlas.)
-			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: LensVoxels.main.light)
+			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
 			it.setTexture("RelativityKerrSecondMap", GL12.GL_TEXTURE_3D, KerrSlots.secondTexture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
 		}
-		val atlas = minecraft.textureManager.getTexture(net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS).id
-		for (shader in listOfNotNull(lens) + tables) {
-			for ((suffix, grid) in listOf("" to LensVoxels.main, "Behind" to LensVoxels.behind)) {
-				shader.setTexture("Voxels$suffix", GL12.GL_TEXTURE_3D, grid.cells)
-				shader.setTexture("VoxelLight$suffix", GL12.GL_TEXTURE_3D, grid.light)
-				shader.setTexture("VoxelTint$suffix", GL12.GL_TEXTURE_3D, grid.tint)
-				shader.setTexture("VoxelBricks$suffix", GL12.GL_TEXTURE_3D, grid.bricks)
-				shader.setTexture("VoxelSmallBricks$suffix", GL12.GL_TEXTURE_3D, grid.smallBricks)
-			}
-			shader.setTexture("VoxelQuads", org.lwjgl.opengl.GL31.GL_TEXTURE_BUFFER, LensVoxels.quadTexture)
-			for (slot in 0 until LensVoxels.TEXTURE_SLOTS) {
-				shader.setTexture("VoxelTex$slot", GL11.GL_TEXTURE_2D, LensVoxels.textureSlots[slot].takeIf { it != 0 } ?: atlas)
-			}
-		}
-		val lightmap = (minecraft.gameRenderer.lightTexture() as net.kernelpanicsoft.relativity.mixin.client.LightTextureAccessor).`create_relativity$location`()
-		lens?.setTexture("Lightmap", GL11.GL_TEXTURE_2D, minecraft.textureManager.getTexture(lightmap).id)
-		var source = if (RelativityConfig.Client.Render.traceBlocks) unseen else Unseen.NONE
-		if (source == Unseen.VOXELS) {
-			LensVoxels.update(level, holes.firstOrNull(), camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
-			for ((suffix, grid) in listOf("" to LensVoxels.main, "Behind" to LensVoxels.behind)) {
-				val origin = grid.origin ?: continue
-				uniform("VoxelOrigin$suffix") {
-					setVector((origin.x - camera.x).toFloat(), (origin.y - camera.y).toFloat(), (origin.z - camera.z).toFloat())
-				}
-			}
-			uniform("VoxelBehindReady") { setInt(if (LensVoxels.behind.ready) 1 else 0) }
-			if (!LensVoxels.ready) source = Unseen.NONE
-		}
-		uniform("UnseenSource") { setInt(source.ordinal) }
 	}
 }

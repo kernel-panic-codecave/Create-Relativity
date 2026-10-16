@@ -4,8 +4,8 @@
 
 // Gravitational lensing by black holes, after the vertex lens (VertexLens) has drawn the world where its light
 // appears: the shadow over what lies beyond the hole, and in the sky the bent paths of view rays (lens_scene.glsl;
-// spinning holes through Kerr, kerr.glsl) to the geometry round the hole (LensVoxels) or the sky: the Einstein ring
-// and the images round it. From reduced-resolution tables (kerr_table.fsh, scene_table.fsh) where they're accurate,
+// spinning holes through Kerr, kerr.glsl) to the sky: the Einstein ring and the images round it (the world's own
+// geometry the vertex lens draws, never this pass). From reduced-resolution tables (kerr_table.fsh, scene_table.fsh) where they're accurate,
 // marched per pixel where not. Then the accretion disk on top.
 
 uniform sampler2D DiffuseSampler0;
@@ -13,6 +13,7 @@ uniform sampler2D LensLookup;
 uniform vec4 Disk;      // nearest hole's accretion disk: x brightness (0 = none), y/z inner/outer radius (blocks),
                         // w spin sense (+1 counter-clockwise from above, -1 clockwise)
 uniform float DiskTime; // seconds x c (blocks of light travel), for the disk's rotating turbulence
+uniform int ShadowDrawn; // 1 while the shadow is drawn as geometry (HorizonMesh): this pass draws none
 uniform int DiskFillOnly; // 1 while the disk is drawn as geometry (DiskMesh): here only in sky pixels, its images' holes
 
 uniform sampler2D KerrTable0; // kerr_table.fsh outputs, at reduced resolution
@@ -23,8 +24,6 @@ uniform int KerrTableEnabled; // 0: march every pixel, 1: use the Kerr table, 2:
 uniform sampler2D SceneTable2; // scene_refine.fsh output: the paths at half resolution
 uniform sampler2D SkyProbe;   // sky_probe.fsh: the sky all round (latitude-longitude; alpha 0 where never seen)
 uniform vec3 SkyColor;          // the sky overhead and at the horizon (fog), for paths that escape with nothing else
-uniform sampler2D Lightmap;     // the game's lightmap (block light x sky light)
-uniform vec4 WaterSurface;      // LensVoxels.waterSurface: water's surface (untinted RGB) and opacity
 uniform int LensMode; // 0: the lens; debug: 1 paints each sky pixel by its path's outcome, 2 by its full-resolution
                       // march's step count (every pixel marched), 3 marches every pixel, 4 passes the frame through,
                       // 5 also skips the tables; 6 paints pixels re-marched at full resolution (red: scene, blue: Kerr)
@@ -235,111 +234,6 @@ SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
     return nearest;
 }
 
-// Vanilla's face shading for normal n: top 1, bottom 0.5, north/south 0.8, east/west 0.6, blended.
-float faceShade(vec3 n) {
-    float vertical = 0.5;
-    if (n.y > 0.0) vertical = 1.0;
-    return n.x * n.x * 0.6 + n.z * n.z * 0.8 + n.y * n.y * vertical;
-}
-
-// The lightmap's colour for sky and block light levels (0-15), sampled as vanilla's minecraft_sample_lightmap does.
-vec3 lightmapColor(float sky, float block) {
-    return texture(Lightmap, clamp(vec2(block, sky) / 16.0, vec2(0.5 / 16.0), vec2(15.5 / 16.0))).rgb;
-}
-
-// Light at camera-relative point p, from a light grid (from origin; linear, so smooth across cells); full sky outside it.
-vec3 lightAt(vec3 p, sampler3D light, vec3 origin) {
-    vec3 g = (p - origin) / float(VOXEL_SIZE);
-    if (any(lessThan(g, vec3(0.0))) || any(greaterThan(g, vec3(1.0)))) return lightmapColor(15.0, 0.0);
-    vec2 levels = texture(light, g).rg * 15.0;
-    return lightmapColor(levels.r, levels.g);
-}
-
-// Mip level for a texture seen at distance d: about a texel (16 per block) per pixel.
-float mipFor(float d) {
-    return max(log2(d * pixelAngle() * 16.0), 0.0);
-}
-
-// The colour of the quad at `at` (camera-relative), hit facing along `face`: the quad that contains the point in its
-// cell (or the cell across the face; of quads drawn over one another, the later), its pixel there, shaded by its
-// normal (by winding: its front) and lit by the light in front of it. From one grid's cells, tints and light (origin).
-vec3 geometryColor(vec3 at, int face, usampler3D cells, usampler3D tintGrid, sampler3D light, vec3 origin) {
-    int axis = face / 2;
-    vec3 n = vec3(0.0);
-    n[axis] = -1.0;
-    if (face - 2 * axis == 1) n[axis] = 1.0;
-    float lod = mipFor(length(at));
-    for (int side = 0; side < 2; side += 1) {
-        vec3 g = at - origin - n * (0.002 - 0.004 * float(side));
-        ivec3 cell = ivec3(floor(g));
-        if (any(lessThan(cell, ivec3(0))) || any(greaterThanEqual(cell, ivec3(VOXEL_SIZE)))) continue;
-        uint run = texelFetch(cells, cell, 0).r;
-        uvec2 tints = texelFetch(tintGrid, cell, 0).rg;
-        int start = int(run >> 8u);
-        int count = min(int(run & 255u), MAX_CELL_QUADS);
-        vec3 p = at - origin - vec3(cell);
-        bool found = false;
-        vec3 shown = vec3(0.0);
-        for (int i = 0; i < count; i += 1) {
-            int q = start + i;
-            int base = q * QUAD_TEXELS;
-            vec3 p0 = texelFetch(VoxelQuads, base).xyz;
-            vec3 p1 = texelFetch(VoxelQuads, base + 1).xyz;
-            vec3 p2 = texelFetch(VoxelQuads, base + 2).xyz;
-            vec3 p3 = texelFetch(VoxelQuads, base + 3).xyz;
-            for (int k = 0; k < 2; k += 1) {
-                vec3 pb = p1;
-                vec3 pc = p2;
-                if (k == 1) {
-                    pb = p2;
-                    pc = p3;
-                }
-                vec3 e1 = pb - p0;
-                vec3 e2 = pc - p0;
-                vec3 normal = cross(e1, e2);
-                float area = length(normal);
-                if (area < 1e-9) continue;
-                normal /= area;
-                vec3 r = p - p0;
-                if (abs(dot(r, normal)) > 0.01 || abs(dot(normal, n)) < 0.5) continue; // in the face hit, not an edge's other face
-                if (int(texelFetch(VoxelQuads, base + 3).w + 0.5) == 2) continue; // water: seen through
-                // Barycentrics of p projected on the triangle.
-                float d00 = dot(e1, e1);
-                float d01 = dot(e1, e2);
-                float d11 = dot(e2, e2);
-                float d20 = dot(r, e1);
-                float d21 = dot(r, e2);
-                float den = d00 * d11 - d01 * d01;
-                vec2 bary = vec2(d11 * d20 - d01 * d21, d00 * d21 - d01 * d20) / den;
-                if (bary.x < -0.01 || bary.y < -0.01 || bary.x + bary.y > 1.01) continue;
-                vec3 color;
-                if (!quadPixel(q, k == 1, clamp(bary, 0.0, 1.0), lod, tints, color)) continue;
-                shown = color * faceShade(normal) * lightAt(at + normal * 0.5, light, origin);
-                found = true;
-                // Under water (the cell in front holds a tinted fluid): its surface blended over, as the game draws it.
-                vec3 front = at - origin + normal * 0.5;
-                ivec3 frontCell = ivec3(floor(front));
-                if (all(greaterThanEqual(frontCell, ivec3(0))) && all(lessThan(frontCell, ivec3(VOXEL_SIZE)))) {
-                    uint fluid = texelFetch(tintGrid, frontCell, 0).g;
-                    // (The surface is lit as open water: full sky light.)
-                    if (fluid != 0xFFFFFFFFu) shown = mix(shown, WaterSurface.rgb * unpackTint(fluid) * lightmapColor(15.0, 0.0), WaterSurface.a);
-                }
-            }
-        }
-        if (found) return shown;
-    }
-    return vec3(0.5);
-}
-
-// Vanilla's linear fog on a traced surface at camera-relative point p.
-vec3 linearFog(vec3 color, vec3 p) {
-    float distance = fogDistance(p);
-    if (distance <= LensFogStart) return color;
-    float fog = 1.0;
-    if (distance < LensFogEnd) fog = smoothstep(LensFogStart, LensFogEnd, distance);
-    return mix(color, LensFogColor.rgb, fog * LensFogColor.a);
-}
-
 // The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
 // game or a shader pack drew them, already through its tonemapping), else the sky probe's, else a plain gradient.
 vec3 skyAt(vec3 d) {
@@ -369,37 +263,10 @@ vec3 skyAt(vec3 d) {
     return mix(LensFogColor.rgb, SkyColor, smoothstep(0.0, 0.4, d.y));
 }
 
-// Where the world's drawing shows camera-relative point p (the vertex lens put it where its light appears, at its
-// true distance): that pixel's colour, as the game or a shader pack shaded it, if the depth there is p's.
-bool drawnAt(vec3 p, out vec3 color) {
-    color = vec3(0.0);
-    vec4 clip = VeilCamera.ProjMat * vec4((VeilCamera.ViewMat * vec4(p, 0.0)).xyz, 1.0);
-    vec4 bent = relativityBend(clip, VeilCamera.ProjMat);
-    if (bent.w <= 0.0 || bent.z > bent.w) return false; // behind the camera, or hidden (past the far plane)
-    vec2 uv = bent.xy / bent.w * 0.5 + 0.5;
-    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
-    float distance = length(p);
-    if (abs(sceneDistance(uv) - distance) > 0.3 + 0.01 * distance) return false;
-    color = texture(DiffuseSampler0, uv).rgb;
-    return true;
-}
-
-bool fromDrawing = false; // debug (LensMode 1): the colour came from the world's drawing (drawnAt)
-
 // The colour a bent path ends on.
 vec3 sceneColor(SceneHit hit, vec4 original) {
-    if (hit.outcome >= SCENE_VOXEL) {
-        vec3 drawn;
-        if (drawnAt(hit.value, drawn)) {
-            fromDrawing = true;
-            return drawn; // shaded (and fogged, tonemapped) as the world itself
-        }
-        if (hit.outcome >= SCENE_VOXEL_BEHIND) {
-            return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL_BEHIND, VoxelsBehind, VoxelTintBehind, VoxelLightBehind, VoxelOriginBehind), hit.value);
-        }
-        return linearFog(geometryColor(hit.value, hit.outcome - SCENE_VOXEL, Voxels, VoxelTint, VoxelLight, VoxelOrigin), hit.value);
-    }
-    if (hit.outcome == SCENE_FELL_IN) return vec3(0.0);
+    // (Where the shadow is drawn as geometry, its edge is that mesh's: a coarser table's fall-in past it shows sky.)
+    if (hit.outcome == SCENE_FELL_IN) return ShadowDrawn == 1 ? skyAt(hit.value) : vec3(0.0);
     if (hit.outcome == SCENE_ESCAPED) return skyAt(hit.value);
     return original.rgb;
 }
@@ -529,7 +396,7 @@ void main() {
     if (sceneDist < 1e29) {
         // Geometry is already where its light appears; only the shadow can hide it (if it lies beyond the hole).
         scene = original.rgb;
-        if (HoleCount > 0 && inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
+        if (ShadowDrawn == 0 && HoleCount > 0 && inShadow(dir, first) && sceneDist > length(Holes[0].xyz)) scene = vec3(0.0);
     } else {
         hit = sceneNearest(dir, tableUv(dir), sceneDist);
         scene = sceneColor(hit, original);
@@ -544,13 +411,10 @@ void main() {
     fragColor = vec4(mix(scene, disk.rgb, disk.a), made ? 0.5 : 1.0);
     if (LensMode == 2) fragColor = vec4(vec3(float(marchSteps) / 64.0), 1.0);
     if (LensMode == 1) {
-        // grey none (drawn geometry), green unbent, white escaped (cyan: out of steps), black fell in, yellow geometry
-        // (blue: coloured from where the world drew it)
-        vec3 outcome[7] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0), vec3(1.0, 1.0, 0.0));
-        fragColor = vec4(outcome[min(hit.outcome, SCENE_VOXEL)], 1.0);
+        // grey none (drawn geometry), green unbent, white escaped (cyan: out of steps), black fell in
+        vec3 outcome[6] = vec3[](vec3(0.5), vec3(0.0, 1.0, 0.0), vec3(0.5), vec3(0.5), vec3(1.0), vec3(0.0));
+        fragColor = vec4(outcome[min(hit.outcome, 5)], 1.0);
         if (sceneDist < 1e29) fragColor = vec4(vec3(clamp(sceneDist / 256.0, 0.0, 1.0)), 1.0); // drawn: grey by distance
-        if (fromDrawing) fragColor = vec4(0.0, 0.6, 1.0, 1.0); // geometry coloured from the drawing: blue
-        if (hit.outcome >= SCENE_VOXEL && (ProfileFlags & 32) != 0) fragColor = vec4(1.0, clamp(fogDistance(hit.value) / 128.0, 0.0, 1.0), 0.0, 1.0); // debug: traced hit's fog distance
         if (hit.outcome == SCENE_ESCAPED && marchSteps >= SCENE_STEPS) fragColor = vec4(0.0, 1.0, 1.0, 1.0); // out of steps: cyan
     }
     if (KerrTableEnabled == 2 && first.diskG < -0.5) fragColor = vec4(1.0, 0.0, 0.0, 1.0);

@@ -4,7 +4,6 @@
   "package": "net.kernelpanicsoft.relativity.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "client.LevelRendererMixin",
     "client.LevelRendererSecondImagesMixin",
     "client.BufferUploaderMixin",
     "client.BlockEntityRenderDispatcherMixin",
@@ -26,9 +25,6 @@
     "client.GameRendererPickMixin",
     "client.FrustumMixin",
     "client.CompositePostPipelineMixin",
-    "client.RenderTypeTextureAccessors$Composite",
-    "client.RenderTypeTextureAccessors$State",
-    "client.RenderTypeTextureAccessors$Texture",
     "client.flywheel.VisualizationManagerImplMixin",
     "client.flywheel.CompilationMixin",
     "client.flywheel.ProgramLinkerMixin",

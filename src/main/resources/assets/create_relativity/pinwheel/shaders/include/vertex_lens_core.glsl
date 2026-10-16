@@ -58,7 +58,8 @@ float relativityAxisCut() {
     // (Codes from 1000 up: the fine cut even there, for fine geometry, DiskMesh's.)
     float code = floor(RelativityLensData[11].y / 4.0);
     if (code >= 1000.0) return (code - 1000.0) / 100.0;
-    if (RelativityLensData[1].z > 0.5) return RELATIVITY_AXIS_CUT;
+    // (An approximated spinning hole is lensed as a non-spinning one is, round its moved centre: the same fine cut.)
+    if (RelativityLensData[1].z > 0.5 && RelativityLensData[7].y < 2.5) return RELATIVITY_AXIS_CUT;
     return code > 0.5 ? code / 100.0 : RELATIVITY_AXIS_CUT;
 }
 const float RELATIVITY_BEYOND = 1e4;   // NDC depth of hidden vertices: far past the far plane
@@ -427,8 +428,9 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
 const float RELATIVITY_KERR_CUT_K = 0.12;
 
 // Whether view-space point p is within the axis cut of the camera-hole line (behindOnly: past the hole).
-bool relativityNearAxis(vec3 p, bool behindOnly) {
-    vec3 axis = RelativityLensData[0].xyz;
+// (hole: the lens's centre the image is worked out round: an approximated spinning hole's is moved, and so is its axis.)
+bool relativityNearAxis(vec3 p, bool behindOnly, vec3 hole) {
+    vec3 axis = hole;
     vec3 e1 = -normalize(axis); // hole to camera
     vec3 from = p - axis;
     float along = dot(from, e1);
@@ -437,7 +439,8 @@ bool relativityNearAxis(vec3 p, bool behindOnly) {
     // Round a spinning hole: a fraction of the Einstein radius at the point's distance behind the hole (where images
     // are stretched more than about 1 / RELATIVITY_KERR_CUT_K times), the way the stretch grows: with the square root of
     // the hole's size and of the distance behind it. (Not a fixed width: wider than needed by the hole, narrower far out.)
-    if (RelativityLensData[1].z > 0.5) {
+    // (An approximated one is lensed as a non-spinning one is, round its moved centre: the fine cut, as for that.)
+    if (RelativityLensData[1].z > 0.5 && RelativityLensData[7].y < 2.5) {
         float rc = length(RelativityLensData[0].xyz);
         float behind = max(-along, 0.0);
         float einstein = sqrt(2.0 * RelativityLensData[0].w * behind * rc / (rc + behind));
@@ -446,10 +449,23 @@ bool relativityNearAxis(vec3 p, bool behindOnly) {
     return length(from - along * e1) < cut;
 }
 
-// Whether view-space point p lies within reach (blocks) of the camera-hole line behind the hole.
+// Where the lens's Einstein-ring axis runs through: the hole, or round an approximated spinning hole the centre it's
+// lensed round there (relativityKerrApprox: moved by shift, grown by about RELATIVITY_CAUSTIC_SHIFT by the ring).
+const float RELATIVITY_CAUSTIC_SHIFT = 1.2; // QuadSubdivision.CAUSTIC_SHIFT
+vec3 relativityCausticCentre() {
+    vec3 hole = RelativityLensData[0].xyz;
+    if (RelativityLensData[1].z < 0.5 || RelativityLensData[7].y < 2.5) return hole;
+    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+    vec3 eGame = normalize(RelativityLensData[6].xyz);
+    vec3 shift = transpose(viewToGame) * (-RelativityLensData[6].w * 0.5 * RelativityLensData[0].w * cross(vec3(0.0, 1.0, 0.0), eGame));
+    return hole + RELATIVITY_CAUSTIC_SHIFT * shift;
+}
+
+// Whether view-space point p lies within reach (blocks) of the Einstein-ring axis behind the hole.
 bool relativityByAxis(vec3 p, float reach) {
-    vec3 e1 = -normalize(RelativityLensData[0].xyz);
-    vec3 from = p - RelativityLensData[0].xyz;
+    vec3 centre = relativityCausticCentre();
+    vec3 e1 = -normalize(centre);
+    vec3 from = p - centre;
     float along = dot(from, e1);
     return along < 0.0 && length(from - along * e1) < reach;
 }
@@ -479,7 +495,7 @@ int relativitySchwarzschildImageAt(vec3 p, vec3 h, out vec3 seen, out bool nearA
         // The secondary image: launched just outside the critical angle, toward the far side from p's, sweeping
         // 2 pi - phi. Near the camera-hole line on either side its images run all round the ring, as the primary's
         // do behind the hole.
-        nearAxis = relativityNearAxis(p, false);
+        nearAxis = relativityNearAxis(p, false, h);
         if (u0 >= 2.0 / 3.0) return -1; // inside the photon sphere: none tabled
         vec2 second = texture(RelativitySecondImages, (axes * (size - 1.0) + 0.5) / size).rg;
         if (second.g < 0.999) return -1;
@@ -490,7 +506,7 @@ int relativitySchwarzschildImageAt(vec3 p, vec3 h, out vec3 seen, out bool nearA
         return 1;
     }
     vec2 image = texture(RelativityImages, (axes * (size - 1.0) + 0.5) / size).rg;
-    nearAxis = relativityNearAxis(p, true);
+    nearAxis = relativityNearAxis(p, true, h);
     if (image.g < 0.5) return -1;
     float rcU = 1.0 / u0;
     float rpU = 1.0 / uP;
@@ -566,6 +582,7 @@ int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
         bool nearAgain;
         if (relativitySchwarzschildImageAt(p, RelativityLensData[0].xyz + (1.0 + grow) * shift, again, nearAgain) == 1) {
             seen = again;
+            nearAxis = nearAgain;
             alpha = acos(clamp(dot(seen, e), -1.0, 1.0));
         }
     }
@@ -576,8 +593,10 @@ int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
     // By the edge: the spinning shadow is flattened on its approaching side, the non-spinning one moved and turned is a
     // circle. What's drawn there is pulled radially (round the hole) so the approximation's own edge falls on the exact
     // one (HorizonMesh's, the shadow drawn), fading out away from it.
+    // (Only near the hole's direction, where the pull is anything at all: the tangent plane it works on can't hold
+    // directions a right angle or more away, and rebuilt from it they'd flip forward.)
     float edge = relativityShadowEdge(viewToGame * seen, eGame);
-    if (edge > 0.0 && edge < 1.5) {
+    if (edge > 0.0 && edge < 1.5 && dot(seen, e) > 0.2 && alpha < 3.0 * edge) {
         // The approximation's edge along this azimuth: the circle of the shadow's radius round its lens's centre at the
         // edge (the hole moved by (1 + RELATIVITY_SHIFT_GROWTH) shift, turned by the twist there), on the tangent plane.
         float tauEdge = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(1.15, -(RELATIVITY_TWIST_FALLOFF.x + RELATIVITY_TWIST_FALLOFF.y * u0));
@@ -1238,15 +1257,21 @@ const float RELATIVITY_NEAR = 0.25;
 // the camera's side poorly (its shells meet the light edge on there).
 const float RELATIVITY_WEAK_MISS = 3.0;
 
-// Whether view-space point p (camera at the origin) is such a point.
-bool relativityWeakNear(vec3 p) {
-    if (RelativityLensData[1].z < 0.5 || RelativityLensData[7].y < 1.5) return false; // (a lone hole: [7].y 2)
+// How much of view-space point p's place the near march gives (relativityBend), 0 to 1: a lone spinning hole's points
+// nearer than it whose light passes it wide. Ramped, not switched: past either edge the far image takes over, and the
+// two differ by pixels round a spinning hole (the far one approximated), so a hard switch put a seam (and the pixel
+// check, holes) along the ground where the camera's distance is the hole's.
+float relativityWeakNearWeight(vec3 p) {
+    if (RelativityLensData[1].z < 0.5 || RelativityLensData[7].y < 1.5) return 0.0; // (a lone hole: [7].y 2)
     vec3 hole = RelativityLensData[0].xyz;
+    float rc = length(hole);
     float d = length(p);
-    if (d >= length(hole)) return false;
+    if (d >= rc) return 0.0;
     float t = clamp(dot(hole, p) / (d * d), 0.0, 1.0);
-    return length(hole - t * p) > RELATIVITY_WEAK_MISS * RelativityLensData[0].w;
+    float miss = length(hole - t * p) / (RELATIVITY_WEAK_MISS * RelativityLensData[0].w);
+    return (1.0 - smoothstep(0.85 * rc, rc, d)) * smoothstep(1.0, 1.3, miss);
 }
+bool relativityWeakNear(vec3 p) { return relativityWeakNearWeight(p) > 0.0; }
 
 // How many times faster than the point the image may move round it before the vertex is hidden (relativityFarImage).
 const float RELATIVITY_STRETCH_CUT = 25.0;
@@ -1358,7 +1383,8 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
         vec3 seen;
         // (Round a spinning hole, only what lies beyond the hole: nearer things' secondary images are slivers by the
         // photon ring, under a pixel, and the per-frame map solves them poorly: a spray of shards round the shadow.)
-        bool spinNear = RelativityLensData[1].z > 0.5 && d < rc;
+        // (Not round an approximated one, lensed as a non-spinning one is: its secondary images are as good as those.)
+        bool spinNear = RelativityLensData[1].z > 0.5 && RelativityLensData[7].y < 2.5 && d < rc;
         if (spinNear || relativityFarImage(p, seen, false) != 1) {
             vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
             hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
@@ -1368,7 +1394,7 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     }
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
     float nearness = holeCentre ? smoothstep(RELATIVITY_NEAR * rc, RELATIVITY_NEAR_BLEND * rc, d) : 1.0;
-    if (relativityWeakNear(p)) nearness = 0.0;
+    nearness = min(nearness, 1.0 - relativityWeakNearWeight(p));
     vec3 seen;
     int image = 1;
     if (nearness > 0.0) {
@@ -1430,7 +1456,8 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // there are split round the axis, QuadSubdivision.POLAR_REACH, so their edges follow the ring anyway). Checked
     // loosely, which still catches a face straddling the axis (with the camera moving, before the split catches up):
     // drawn straight across the ring, off by hundreds of pixels.
-    float slack = RelativityLensData[1].z < 0.5 && relativityByAxis(unbent, RELATIVITY_POLAR_REACH) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
+    bool schwarzschildLike = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 2.5;
+    float slack = schwarzschildLike && relativityByAxis(unbent, RELATIVITY_POLAR_REACH) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
     vec3 seen;
     int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;

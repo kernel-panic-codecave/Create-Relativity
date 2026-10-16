@@ -14,7 +14,6 @@ import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
 import net.kernelpanicsoft.relativity.client.lens.KerrSlots
 import net.kernelpanicsoft.relativity.client.lens.KerrPaths
 import net.kernelpanicsoft.relativity.client.lens.KerrSecondImageMap
-import net.kernelpanicsoft.relativity.client.lens.LensVoxels
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos
 import net.minecraft.world.level.block.Blocks
@@ -582,21 +581,18 @@ class LensClientGameTest {
 			for ((mode, label) in listOf(1 to "placed", 2 to "inbound", 3 to "outbound")) {
 				runOnClient {
 					VertexLens.kerrDebug = mode
-					BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE
 				}
 				waitTicks(10)
 				takeScreenshot("kerr_vertex_$label")
 			}
 			runOnClient {
 				VertexLens.kerrDebug = 0
-				BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
 				VertexLens.kerrOff = true
 			}
 			waitTicks(10)
 			takeScreenshot("kerr_vertex_schwarzschild")
 			runOnClient { VertexLens.kerrOff = false }
 			// The vertex lens alone (no grid trace for the sky), spinning and not: holes it leaves show as sky.
-			runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE }
 			waitTicks(10)
 			takeScreenshot("kerr_vertex_nogrid")
 			// The vertex lens's own solve on the GPU for the floor (y -60) round the hole at (0.5, 0.5): the same map as
@@ -666,7 +662,6 @@ class LensClientGameTest {
 			takeScreenshot("kerr_vertex_nogrid_schwarzschild")
 			runOnClient {
 				VertexLens.kerrOff = false
-				BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
 			}
 			// From farther off, where the edge of the path table's reach (and the switch to the Schwarzschild image)
 			// falls on screen.
@@ -800,11 +795,9 @@ class LensClientGameTest {
 					}
 				}
 				CreateRelativity.LOGGER.info("Mixed sources, floor corners solved directly:\n{}", direct)
-				runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.NONE }
 				waitTicks(10)
 				val vertexOnly = takeScreenshot("mixed_sources_vertex_only")
 				CreateRelativity.LOGGER.info("Mixed sources, vertex lens alone vs reference: {}% of pixels in the wrong class", "%.1f".format(LensReference.compare(reference, vertexOnly) * 100))
-				runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS }
 				// Which sources break the floor behind the holes (x 4 .. 48): the share of its corners left unplaced.
 				fun unplacedBehind(): Double = computeOnClient { minecraft ->
 					val camera = minecraft.gameRenderer.mainCamera
@@ -1756,70 +1749,6 @@ class LensClientGameTest {
 	}
 
 	/**
-	 * The geometry the lens traces where the frame can't show (LensVoxels) is every block's full render: block models
-	 * of any shape, cutout plants, a block entity's renderer (a chest), and Flywheel-drawn Create shafts and cogs.
-	 * Each gets quads in the grid; screenshots of the hole in front of them show how they come out bent.
-	 */
-	@ClientGameTest
-	fun ClientGameTestContext.modelsAroundHole() {
-		if (!ClientTestInput.selected("modelsAroundHole")) return
-		runOnClient { minecraft ->
-			minecraft.options.renderDistance().set(6)
-			minecraft.options.hideGui = true
-			SpacetimeDebugRenderer.hidden = true
-		}
-		withTestWorld { // superflat: the ground is at y = -61
-			waitTicks(60)
-			for (command in listOf(
-				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
-				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
-				"gamerule relativityBlackHoleGrowth false",
-			)) command(command)
-			val shaft = com.simibubi.create.AllBlocks.SHAFT.get().defaultBlockState()
-			val cog = com.simibubi.create.AllBlocks.COGWHEEL.get().defaultBlockState()
-			val placed = mapOf(
-				"stairs" to BlockPos(6, -60, 0) to Blocks.OAK_STAIRS.defaultBlockState(),
-				"slab" to BlockPos(6, -60, 2) to Blocks.STONE_SLAB.defaultBlockState(),
-				"fence" to BlockPos(6, -60, -2) to Blocks.OAK_FENCE.defaultBlockState(),
-				"poppy" to BlockPos(5, -60, 1) to Blocks.POPPY.defaultBlockState(),
-				"torch" to BlockPos(5, -60, -1) to Blocks.TORCH.defaultBlockState(),
-				"chest" to BlockPos(7, -60, 1) to Blocks.CHEST.defaultBlockState(),
-				"shaft" to BlockPos(7, -60, -1) to shaft,
-				"cog" to BlockPos(7, -59, -1) to cog,
-			)
-			server.runOnServer { minecraft ->
-				val level = minecraft.overworld()
-				for ((key, state) in placed) level.setBlock(key.second, state, 2)
-			}
-			command("relativity bh create 0.5 -56 0.5 2 0")
-			command("tick freeze")
-			command("tp @a -10.5 -55 0.5 -90 5")
-			runOnClient {
-				it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO
-				BlackHoleLens.timeGpu = true
-			}
-			// Filling (until both grids are full; they share a frame's budget): the most a frame spends on it.
-			var worst = 0.0
-			for (i in 0 until 600) {
-				waitTick()
-				worst = maxOf(worst, computeOnClient { LensVoxels.updateMillis })
-				if (i >= 60 && computeOnClient { LensVoxels.ready && LensVoxels.behind.ready }) break
-			}
-			val counts = computeOnClient { minecraft -> placed.keys.associate { (name, pos) -> name to LensVoxels.quadsAt(minecraft.level!!, pos) } }
-			val steady = (0 until 20).map { waitTick(); computeOnClient { LensVoxels.updateMillis } }.sorted()[10]
-			CreateRelativity.LOGGER.info("Lens geometry: quads per block {}; filling took up to {} ms a frame, then {} ms", counts, "%.2f".format(worst), "%.2f".format(steady))
-			takeScreenshot("models")
-			runOnClient {
-				BlackHoleLens.timeGpu = false
-				it.options.hideGui = false
-				SpacetimeDebugRenderer.hidden = false
-			}
-			for ((name, count) in counts) assertTrue(count > 0) { "No quads for the $name in the lens grid ($counts)" }
-			assertTrue(counts.getValue("stairs") >= 10) { "The stairs should have more than a cube's quads ($counts)" }
-		}
-	}
-
-	/**
 	 * One view of a hole (r_s 2, [spin]) at (0.5, -54, 0.5) from [at] ("x y z yaw pitch"), traced on the CPU and drawn by
 	 * the lens, with each source for what the sky's bent paths meet (voxels, the default; nothing). Logs accuracy and
 	 * the post pass's cost (medians over 20 frames); adds the default's misses to [failures].
@@ -1843,16 +1772,14 @@ class LensClientGameTest {
 		}
 		val wrongBy = HashMap<String, Double>()
 		val traced = camera()
-		// The lens, with and without the geometry round the hole for the sky's bent paths.
-		// And the vertex lens alone (the post pass passing the frame through): what's left to do before it can go.
-		val modes = listOf("lens" to BlackHoleLens.Unseen.VOXELS, "lens_none" to BlackHoleLens.Unseen.NONE, "vertex_only" to BlackHoleLens.Unseen.VOXELS, "vertex_only_slots" to BlackHoleLens.Unseen.VOXELS)
+		// The lens, and the vertex lens alone (the post pass passing the frame through).
+		val modes = listOf("lens", "vertex_only", "vertex_only_slots")
 		// (Only the per-frame Kerr solver has anything to settle and the slots anything to blend: a non-spinning hole
 		// uses its table, an approximated spinning one solves and bakes nothing.)
 		val approximated = spin == 0.0 || computeOnClient { VertexLens.kerrApprox }
-		for ((mode, unseen) in modes) {
+		for (mode in modes) {
 			if (approximated && mode == "vertex_only_slots") continue
 			runOnClient {
-				BlackHoleLens.unseen = unseen
 				BlackHoleLens.timeGpu = true
 				BlackHoleLens.rawFrame = mode.startsWith("vertex_only")
 			}
@@ -1882,10 +1809,10 @@ class LensClientGameTest {
 			val samples = (0 until 20).map {
 				waitTick()
 				computeOnClient {
-					doubleArrayOf(BlackHoleLens.gpuMillis, if (unseen == BlackHoleLens.Unseen.VOXELS) LensVoxels.updateMillis else 0.0)
+					doubleArrayOf(BlackHoleLens.gpuMillis)
 				}
 			}
-			val median = DoubleArray(2) { k -> samples.map { it[k] }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] } }
+			val median = DoubleArray(1) { k -> samples.map { it[k] }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] } }
 			val shot = takeScreenshot("ground_${name}_$mode")
 			val wrong = LensReference.compare(reference, shot)
 			// (And with white and blue as one class: the Einstein ring's checkerboard, finer than the reference's grid, is
@@ -1893,15 +1820,14 @@ class LensClientGameTest {
 			val gaps = LensReference.compare(reference, shot, floorAsOne = true)
 			wrongBy[mode] = wrong
 			CreateRelativity.LOGGER.info(
-				"Lens vs reference, {} ({}): {}% of pixels in the wrong class, {}% counting white and blue as one; GPU lens {} ms, voxels CPU {} ms (slots blending {})",
-				name, mode, "%.1f".format(wrong * 100), "%.1f".format(gaps * 100), "%.2f".format(median[0]), "%.2f".format(median[1]), computeOnClient { KerrSlots.blending },
+				"Lens vs reference, {} ({}): {}% of pixels in the wrong class, {}% counting white and blue as one; GPU lens {} ms (slots blending {})",
+				name, mode, "%.1f".format(wrong * 100), "%.1f".format(gaps * 100), "%.2f".format(median[0]), computeOnClient { KerrSlots.blending },
 			)
 		}
-		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS; BlackHoleLens.rawFrame = false; KerrSlots.enabled = true }
-		// Within 4%, or (where the reference's classes are rough, e.g. shaded block sides) a point of the lens without
-		// the geometry.
+		runOnClient { BlackHoleLens.rawFrame = false; KerrSlots.enabled = true }
+		// Within 4% (6% in the busy scene, where the reference's classes are rough: shaded block sides).
 		val wrong = wrongBy.getValue("lens")
-		if (wrong > maxOf(0.04, wrongBy.getValue("lens_none") + 0.01)) failures += "$name: ${wrong * 100}% of pixels in the wrong class"
+		if (wrong > if (name.endsWith("busy")) 0.06 else 0.04) failures += "$name: ${wrong * 100}% of pixels in the wrong class"
 	}
 
 	/** The camera's position and look direction. */
@@ -1940,7 +1866,6 @@ class LensClientGameTest {
 				BlackHoleLens.remarchDebug = false
 				BlackHoleLens.profileFlags = 0
 				BlackHoleLens.timeGpu = false
-				BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS
 				VertexLens.kerrOff = false
 				VertexLens.kerrSolveOff = false
 				VertexLens.kerrDebug = 0
@@ -1989,7 +1914,7 @@ class LensClientGameTest {
 
 	private fun ClientGameTestContext.settle() {
 		for (i in 0 until 600) {
-			if (computeOnClient { it.levelRenderer.hasRenderedAllSections() && LensVoxels.ready && LensVoxels.behind.ready }) break
+			if (computeOnClient { it.levelRenderer.hasRenderedAllSections() }) break
 			waitTick()
 		}
 		waitTicks(20)

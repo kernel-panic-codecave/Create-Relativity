@@ -31,13 +31,29 @@ import kotlin.math.sqrt
  */
 object QuadSubdivision {
 	/** Quads are split into up to this many per side round the hole... */
-	const val MAX_LEVEL = 16
+	const val MAX_LEVEL = 32
 
 	/** ...n = ceil(NEAR_SCALE / distance from the hole's centre (blocks)), within NEAR_REACH r_s of it. */
-	private const val NEAR_SCALE = 16.0
+	private const val NEAR_SCALE = 48.0
 	private const val NEAR_REACH = 8.0
 
-	/** The holes' centres and radii (x, y, z, r_s; world), as the chunk builder threads see them. */
+	/** vertex_lens_core.glsl's RELATIVITY_CAUSTIC_SHIFT: how far (in shifts) an approximated spinning hole's lens is moved by its ring. */
+	private const val CAUSTIC_SHIFT = 1.2
+
+	/** Where [hole]'s Einstein-ring axis runs through, seen from the camera: its centre, moved for an approximated spinning hole. */
+	private fun causticCentre(hole: DoubleArray, camX: Double, camY: Double, camZ: Double): Triple<Double, Double, Double> {
+		val spin = hole.getOrElse(4) { 0.0 }
+		if (spin == 0.0 || !VertexLens.kerrApprox) return Triple(hole[0], hole[1], hole[2])
+		var ex = hole[0] - camX
+		var ez = hole[2] - camZ
+		val n = sqrt(ex * ex + (hole[1] - camY) * (hole[1] - camY) + ez * ez).coerceAtLeast(1e-9)
+		ex /= n; ez /= n
+		// -a (up x e), a = spin M = spin r_s / 2; up x e = (e.z, 0, -e.x).
+		val a = spin * 0.5 * hole[3]
+		return Triple(hole[0] - CAUSTIC_SHIFT * a * ez, hole[1], hole[2] + CAUSTIC_SHIFT * a * ex)
+	}
+
+	/** The holes' centres, radii and spins (x, y, z, r_s, spin; world), as the chunk builder threads see them. */
 	@Volatile
 	private var holes: List<DoubleArray> = emptyList()
 	private var applied: List<DoubleArray> = emptyList()
@@ -160,7 +176,7 @@ object QuadSubdivision {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level
 		active = level != null && RelativityConfig.Client.Render.lensing
-		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius) }
+		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius, it.spin) }
 		updateAxis(minecraft, now)
 		// (Turning the vertex lens on or off empties or fills the list, which counts as a change too.)
 		if (!changed(now)) return
@@ -192,7 +208,10 @@ object QuadSubdivision {
 			val k = AXIS_K * sqrt(sqrt(minOf(2.0 * it[3] / distance, 1.0)))
 			// Out to where n falls to 2, and to the render distance behind the hole.
 			val reach = minecraft.options.effectiveRenderDistance * 16.0 + 16.0
-			doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3], k, 0.5 * k, reach)
+			// (Round an approximated spinning hole, the axis of the moved centre it's lensed round there:
+			// vertex_lens_core.glsl relativityCausticCentre.)
+			val (cx, cy, cz) = causticCentre(it, camera.x, camera.y, camera.z)
+			doubleArrayOf(camera.x, camera.y, camera.z, cx, cy, cz, it[3], k, 0.5 * k, reach)
 		}
 		val old = appliedAxis
 		if (now == null && old == null) return

@@ -105,11 +105,6 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.lensing.comment"),
 				default = true,
 			)
-			val traceBlocks by boolean(
-				title = Component.translatable("config.create_relativity.render.trace_blocks"),
-				comment = Component.translatable("config.create_relativity.render.trace_blocks.comment"),
-				default = true,
-			)
 			val lensResolution by intSlider(
 				title = Component.translatable("config.create_relativity.render.lens_resolution"),
 				comment = Component.translatable("config.create_relativity.render.lens_resolution.comment"),
