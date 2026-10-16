@@ -245,10 +245,12 @@ object VertexLens {
 		val (count, general) = BlackHoleLens.packSources(holes, others, camera, sources)
 		// A lone spinning hole: the live map from baked camera slots when they're ready (KerrSlots), no solving.
 		val lone = centre?.hole
-		val slotted = !perspective && lone != null && holes.size == 1 && others.isEmpty() && abs(lone.spin) >= MIN_KERR_SPIN &&
-			!kerrOff && !kerrSolveOff && KerrSlots.update(lone, camera)
-		var kerr = false
-		if (centre != null && general && !slotted && !(kerrOff && others.isEmpty())) {
+		val loneKerr = lone != null && holes.size == 1 && others.isEmpty() && abs(lone.spin) >= MIN_KERR_SPIN && !kerrOff
+		// (Or approximated from the non-spinning lens in the shaders (kerrApprox): nothing to solve or bake at all.)
+		val approximated = loneKerr && kerrApprox
+		val slotted = !perspective && loneKerr && !approximated && !kerrSolveOff && KerrSlots.update(lone!!, camera)
+		var kerr = approximated
+		if (centre != null && general && !slotted && !approximated && !(kerrOff && others.isEmpty())) {
 			val holeGame = Vector3f((centre.x - camera.x).toFloat(), (centre.y - camera.y).toFloat(), (centre.z - camera.z).toFloat())
 			// A jump (a teleport, a fast flight) redraws the tables whole; walking catches them up a slice a frame.
 			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
@@ -280,7 +282,7 @@ object VertexLens {
 			}
 			mapHole = centre?.key
 			lastSlotted = slotted
-			if (kerr && !kerrSolveOff && !slotted) {
+			if (kerr && !kerrSolveOff && !slotted && !approximated) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
 				KerrImageMap.draw(KerrPaths.changed, jump, sources, count)
 				// The secondary images too, for the second-image pass (a lone hole: they follow its light alone).
@@ -293,13 +295,20 @@ object VertexLens {
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 4)
-		val perFrameSecond = kerr && !kerrSolveOff && !slotted && loneHole
+		val perFrameSecond = kerr && !kerrSolveOff && !slotted && !approximated && loneHole
 		KerrSecondImageMap.ensureTexture()
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, if (perFrameSecond) KerrSecondImageMap.texture else KerrSlots.secondTexture)
 		GlStateManager._activeTexture(previous)
 		// Round a spinning hole: its secondary map solved per frame, or the slots' blended one.
-		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || perFrameSecond || (slotted && KerrSlots.secondBlending))
+		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || approximated || perFrameSecond || (slotted && KerrSlots.secondBlending))
 	}
+
+	/**
+	 * A lone spinning hole's images approximated from the non-spinning one (vertex_lens_core.glsl relativityKerrApprox:
+	 * displaced, turned by frame dragging), not solved: no per-frame Kerr tables, no lag. Off: the per-frame solver.
+	 */
+	@JvmField
+	var kerrApprox = true
 
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
 	@JvmField
@@ -485,7 +494,7 @@ object VertexLens {
 				// [7].y: 1 if the centre is a hole (the Schwarzschild image is a fair first guess and cut there).
 				// ([7].y 2: the hole is the only source in view: the near march, which follows its light alone, may stand in
 				// for the map further out.)
-				data.put(centre.scale.toFloat()).put(if (centre.hole == null) 0f else if (loneHole) 2f else 1f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
+				data.put(centre.scale.toFloat()).put(if (centre.hole == null) 0f else if (loneHole) (if (kerrApprox) 3f else 2f) else 1f).put(KerrPaths.width.toFloat()).put(KerrPaths.height.toFloat())
 				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
 				for (column in 0..2) {
 					val c = viewToGame.getColumn(column, Vector3f())

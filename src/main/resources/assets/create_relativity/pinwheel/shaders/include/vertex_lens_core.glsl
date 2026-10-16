@@ -444,10 +444,9 @@ bool relativityNearAxis(vec3 p, bool behindOnly) {
     return length(from - along * e1) < cut;
 }
 
-int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
+int relativitySchwarzschildImageAt(vec3 p, vec3 h, out vec3 seen, out bool nearAxis) {
     seen = normalize(p);
     nearAxis = false;
-    vec3 h = RelativityLensData[0].xyz;
     float rs = RelativityLensData[0].w;
     float rc = length(h);
     vec3 fromHole = p - h;
@@ -490,6 +489,38 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
     // directions are coordinate directions, like the rest of the lens.
     float psi = atan(sin(local), cos(local) * sqrt(1.0 - u0));
     seen = -cos(psi) * e1 + sin(psi) * e2;
+    return 1;
+}
+
+int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
+    return relativitySchwarzschildImageAt(p, RelativityLensData[0].xyz, seen, nearAxis);
+}
+
+// A lone spinning hole's image (primary or, with relativitySecond, secondary), approximated from the non-spinning one,
+// with no solving: what's seen of a spinning hole is, to a good approximation, a non-spinning hole's view of the point
+// with the hole moved sideways by -a (up x e) (e camera to hole, a = spin M: far out a Kerr lens is a Schwarzschild
+// lens displaced so), turned round the hole by frame dragging: tau = -RELATIVITY_TWIST (a / M) cos i (alpha_c / alpha)^2.5
+// (i the spin axis's angle from the line of sight, alpha the image's angle from the hole, alpha_c the shadow's). Fitted
+// against the exact baker for spin 0.9 seen side on and from 37 degrees above: median error under a pixel past 5 shadow
+// radii, 1-4 px out to 2.5, 13 px at 1.3-1.6, tens of px by the shadow's edge. It follows the camera at once.
+const float RELATIVITY_TWIST = 0.274; // 15.7 degrees
+bool relativityKerrApproximated() { return RelativityLensData[1].z > 0.5 && RelativityLensData[7].y > 2.5; }
+int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
+    mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
+    vec3 eGame = normalize(RelativityLensData[6].xyz);
+    float spin = RelativityLensData[6].w;
+    float rs = RelativityLensData[0].w;
+    vec3 h = RelativityLensData[0].xyz + transpose(viewToGame) * (-spin * 0.5 * rs * cross(vec3(0.0, 1.0, 0.0), eGame));
+    int image = relativitySchwarzschildImageAt(p, h, seen, nearAxis);
+    if (image != 1) return image;
+    vec3 e = normalize(RelativityLensData[0].xyz);
+    float u0 = min(rs / length(RelativityLensData[0].xyz), 0.999);
+    float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+    float alphaC = atan(sin(critical), cos(critical) * sqrt(1.0 - u0));
+    float alpha = acos(clamp(dot(seen, e), -1.0, 1.0));
+    float tau = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(alphaC / max(alpha, 0.8 * alphaC), 2.5);
+    // (Rodrigues: seen turned by tau round e.)
+    seen = normalize(seen * cos(tau) + cross(e, seen) * sin(tau) + e * dot(e, seen) * (1.0 - cos(tau)));
     return 1;
 }
 
@@ -672,6 +703,14 @@ int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     // The Schwarzschild image: alone for non-spinning holes; for anything else a hole's first guess and its axis cut.
     // Round another source (a mass, a bubble) the map alone places points; outside it they stand where they are.
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
+    if (relativityKerrApproximated()) {
+        image = relativityKerrApprox(p, seen, nearAxis);
+        // (Inside r_s, for the Schwarzschild image "nothing to bend": round a spinning hole such points are the horizon
+        // sphere's, hidden.)
+        if (image == 2 && length(p - RelativityLensData[0].xyz) <= RelativityLensData[0].w) return -1;
+        if (nearAxis) return -1;
+        return image;
+    }
     if (relativitySecond()) {
         // Round a spinning hole, from its secondary-image map (only drawn while the slots blend one: VertexLens).
         if (RelativityLensData[1].z > 0.5) {
