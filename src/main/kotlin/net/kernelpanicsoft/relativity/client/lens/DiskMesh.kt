@@ -283,7 +283,8 @@ object DiskMesh {
 
 	/** The current scheme's colours, hottest first (RGB 0-1): the post pass gets them too (BlackHoleLens). */
 	fun schemeGradient(): List<DoubleArray> = when (RelativityConfig.Client.Render.diskScheme) {
-		RelativityConfig.DiskScheme.CUSTOM -> RelativityConfig.Client.Render.diskGradient.map { doubleArrayOf(it.red / 255.0, it.green / 255.0, it.blue / 255.0) }.ifEmpty { MOVIE_GRADIENT }
+		// (The custom gradient sampled evenly: its stops can sit anywhere.)
+		RelativityConfig.DiskScheme.CUSTOM -> RelativityConfig.Client.Render.diskGradient.let { g -> List(8) { k -> g.sample(k / 7f).let { c -> doubleArrayOf(c.red / 255.0, c.green / 255.0, c.blue / 255.0) } } }
 		else -> MOVIE_GRADIENT
 	}
 

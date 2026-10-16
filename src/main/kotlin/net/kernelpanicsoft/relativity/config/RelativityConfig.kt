@@ -4,6 +4,7 @@ import net.kernelpanicsoft.archie.config.CategorySpec
 import net.kernelpanicsoft.archie.config.ConfigContainer
 import net.kernelpanicsoft.archie.config.ConfigSpec
 import net.kernelpanicsoft.archie.gui.util.KColor
+import net.kernelpanicsoft.archie.gui.util.KGradient
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.physics.SpacetimeUnits
 import net.minecraft.network.chat.Component
@@ -124,11 +125,10 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				kclass = DiskScheme::class,
 				default = DiskScheme.REALISTIC,
 			)
-			val diskGradient by colorList(
+			val diskGradient by gradient(
 				title = Component.translatable("config.create_relativity.render.disk_gradient"),
 				comment = Component.translatable("config.create_relativity.render.disk_gradient.comment"),
-				default = listOf(KColor.ofRgb(0xFFFFFF), KColor.ofRgb(0x9FD8FF), KColor.ofRgb(0x7B4DFF), KColor.ofRgb(0x2A0A5E)),
-				factory = { KColor.ofRgb(0xFFFFFF) },
+				default = KGradient.even(KColor.ofRgb(0xFFFFFF), KColor.ofRgb(0x9FD8FF), KColor.ofRgb(0x7B4DFF), KColor.ofRgb(0x2A0A5E)),
 			)
 		}
 

@@ -85,5 +85,5 @@
   "config.create_relativity.render.disk_scheme": "Accretion Disk Colours",
   "config.create_relativity.render.disk_scheme.comment": "Realistic: blackbody light, shifted and beamed by the gas's motion and gravity (bluer and brighter where it comes toward you). Movie: the film look, warm orange to white by heat alone. Custom: the gradient below.",
   "config.create_relativity.render.disk_gradient": "Custom Disk Gradient",
-  "config.create_relativity.render.disk_gradient.comment": "The colours of the Custom scheme, from the hot inner edge to the cool outer edge (the gas's motion still shifts along it and beams it)."
+  "config.create_relativity.render.disk_gradient.comment": "The Custom scheme's colours, from the hot inner edge (left) to the cool outer edge (right): click the bar to add a colour, drag one to move it, right-click to remove it. The gas's motion still shifts along it and beams it."
 }
