@@ -461,13 +461,15 @@ vec3 relativityCausticCentre() {
     return hole + RELATIVITY_CAUSTIC_SHIFT * shift;
 }
 
-// Whether view-space point p lies within reach (blocks) of the Einstein-ring axis behind the hole.
+// Whether view-space point p lies within reach (blocks) of the Einstein-ring axis behind the hole (either way for
+// secondary images).
 bool relativityByAxis(vec3 p, float reach) {
     vec3 centre = relativityCausticCentre();
     vec3 e1 = -normalize(centre);
     vec3 from = p - centre;
     float along = dot(from, e1);
-    return along < 0.0 && length(from - along * e1) < reach;
+    // (Drawing secondary images, the camera's side too: their Einstein ring is round the axis there.)
+    return (along < 0.0 || relativitySecond()) && length(from - along * e1) < reach;
 }
 
 int relativitySchwarzschildImageAt(vec3 p, vec3 h, out vec3 seen, out bool nearAxis) {
@@ -1457,7 +1459,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // loosely, which still catches a face straddling the axis (with the camera moving, before the split catches up):
     // drawn straight across the ring, off by hundreds of pixels.
     bool schwarzschildLike = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 2.5;
-    float slack = schwarzschildLike && relativityByAxis(unbent, RELATIVITY_POLAR_REACH) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
+    float slack = schwarzschildLike && !relativitySecond() && relativityByAxis(unbent, RELATIVITY_POLAR_REACH) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
     vec3 seen;
     int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;

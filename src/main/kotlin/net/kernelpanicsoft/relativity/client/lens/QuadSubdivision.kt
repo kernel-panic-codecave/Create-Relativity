@@ -124,7 +124,9 @@ object QuadSubdivision {
 		val dy = y - a[4]
 		val dz = z - a[5]
 		val t = dx * ux + dy * uy + dz * uz
-		if (t < -a[8] || t > a[9] + a[8]) return null
+		// (Both ways: behind the hole, the primary images' Einstein ring; through the camera and on behind it, the
+		// secondary images' one.)
+		if (t < -(length + a[9]) || t > a[9] + a[8]) return null
 		val px = dx - t * ux
 		val py = dy - t * uy
 		val pz = dz - t * uz
@@ -222,15 +224,18 @@ object QuadSubdivision {
 		val renderer = minecraft.levelRenderer
 		val dirty = HashSet<Long>()
 		for (a in listOfNotNull(old, now)) {
-			// Sections along the tube: every few blocks along it, those within its radius.
+			// Sections along the tube, from past the camera (behind it, the secondary images' axis) to the far end behind
+			// the hole: every few blocks along it, those within its radius.
 			val far = farEnd(a, a[9])
-			val steps = ceil(a[9] / 4.0).toInt()
+			val back = DoubleArray(3) { a[3 + it] + (a[3 + it] - far[it]) / a[9] * (sqrt((0..2).sumOf { k -> (a[3 + k] - a[k]) * (a[3 + k] - a[k]) }) + a[9]) }
+			val span = sqrt((0..2).sumOf { (far[it] - back[it]) * (far[it] - back[it]) })
+			val steps = ceil(span / 4.0).toInt()
 			val across = ceil(a[8] / 8.0).toInt()
 			for (k in 0..steps) {
 				val f = k.toDouble() / steps
-				val x = a[3] + f * (far[0] - a[3])
-				val y = a[4] + f * (far[1] - a[4])
-				val z = a[5] + f * (far[2] - a[5])
+				val x = back[0] + f * (far[0] - back[0])
+				val y = back[1] + f * (far[1] - back[1])
+				val z = back[2] + f * (far[2] - back[2])
 				for (dx in -across..across) for (dy in -across..across) for (dz in -across..across) {
 					val r = a[8] / across
 					dirty += SectionPos.asLong(floor(x + dx * r).toInt() shr 4, floor(y + dy * r).toInt() shr 4, floor(z + dz * r).toInt() shr 4)
@@ -433,7 +438,7 @@ class QuadSubdivider : VertexConsumer {
 			across[k * 2] = dx * ax + dy * ay + dz * az
 			across[k * 2 + 1] = dx * cx + dy * cy + dz * cz
 		}
-		if (behind <= 0.0) return false
+		// (Behind the hole or on the camera's side alike: the secondary images' Einstein ring is round the axis there.)
 		// (s, t) of a point across the axis: P(s, t) = v0 + s (v3 - v0) + t (v1 - v0), seen along the axis.
 		val sx = across[6] - across[0]
 		val sy = across[7] - across[1]
