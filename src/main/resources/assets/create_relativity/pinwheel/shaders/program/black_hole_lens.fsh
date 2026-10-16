@@ -14,6 +14,8 @@ uniform vec4 Disk;      // nearest hole's accretion disk: x brightness (0 = none
                         // w spin sense (+1 counter-clockwise from above, -1 clockwise)
 uniform float DiskTime; // seconds x c (blocks of light travel), for the disk's rotating turbulence
 uniform int ShadowDrawn; // 1 while the shadow is drawn as geometry (HorizonMesh): this pass draws none
+uniform int DiskScheme;        // RelativityConfig.DiskScheme: 0 realistic, 1 movie, 2 custom (DiskMesh.shade)
+uniform vec4 DiskGradient[8];  // the scheme's colours (movie's, or the custom ones), hottest first; w 1 where set
 uniform int DiskFillOnly; // 1 while the disk is drawn as geometry (DiskMesh): here only in sky pixels, its images' holes
 
 uniform sampler2D KerrTable0; // kerr_table.fsh outputs, at reduced resolution
@@ -94,12 +96,27 @@ float diskFlux(float r, float rIn) {
 
 // Disk colour and opacity at radius r, with frequency shift g (observed / emitted), azimuth angle (for the
 // turbulence) and signed angular velocity omega (radians per block of light travel).
+const float DISK_MOVIE_BRIGHTNESS = 0.55; // DiskMesh.MOVIE_BRIGHTNESS
 vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega) {
     float flux = diskFlux(r, rIn);
     float turning = angle - omega * DiskTime;
     float swirl = 0.55 + 0.9 * turbulence(vec2(cos(turning), sin(turning)) * (2.0 + 6.0 * log(r / rIn + 1.0)));
-    float temperature = mix(2500.0, 11000.0, clamp(Disk.x, 0.0, 1.5) / 1.5) * pow(flux, 0.25);
+    float heat = pow(flux, 0.25);
+    float temperature = mix(2500.0, 11000.0, clamp(Disk.x, 0.0, 1.5) / 1.5) * heat;
     vec3 light = blackbody(temperature * g) * (flux * g * g * g * g) * swirl * (1.5 + 2.0 * Disk.x);
+    // (As DiskMesh.shade: movie warm by heat alone, a little brighter approaching; custom its gradient, shifted.)
+    if (DiskScheme != 0) {
+        int count = 0;
+        for (int k = 0; k < 8; k += 1) {
+            if (DiskGradient[k].w > 0.5) count = k + 1;
+        }
+        float t = DiskScheme == 1 ? 1.0 - heat : 1.0 - clamp(heat * g, 0.0, 1.0);
+        float f = t * float(max(count - 1, 0));
+        int i = min(int(floor(f)), max(count - 2, 0));
+        vec3 base = mix(DiskGradient[i].rgb, DiskGradient[min(i + 1, count - 1)].rgb, f - float(i));
+        float brightness = DiskScheme == 1 ? DISK_MOVIE_BRIGHTNESS * flux * g : flux * g * g * g * g;
+        light = base * brightness * swirl * (1.5 + 2.0 * Disk.x);
+    }
     vec3 color = vec3(1.0) - exp(-light);
     float alpha = clamp(flux * 3.0, 0.0, 1.0) * smoothstep(rOut, 0.8 * rOut, r);
     return vec4(color, alpha);

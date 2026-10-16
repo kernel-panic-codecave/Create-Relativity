@@ -5,6 +5,7 @@ import net.kernelpanicsoft.archie.gametest.ClientGameTest
 import net.kernelpanicsoft.archie.gametest.ClientGameTestContext
 import net.kernelpanicsoft.archie.gametest.TestSingleplayerContext
 import net.kernelpanicsoft.relativity.CreateRelativity
+import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.DiskMesh
 import net.kernelpanicsoft.relativity.client.lens.LensResolution
@@ -1241,6 +1242,13 @@ class LensClientGameTest {
 				waitTicks(5)
 				shots[mesh] = takeScreenshot("disk_mesh_$mesh")
 			}
+			// Each colour scheme, for a look.
+			for (scheme in RelativityConfig.DiskScheme.entries) {
+				runOnClient { RelativityConfig.Client.Render.diskScheme = scheme }
+				waitTicks(5)
+				takeScreenshot("disk_scheme_${scheme.name.lowercase()}")
+			}
+			runOnClient { RelativityConfig.Client.Render.diskScheme = RelativityConfig.DiskScheme.REALISTIC }
 			runOnClient { DiskMesh.secondaries = false }
 			waitTicks(5)
 			takeScreenshot("disk_mesh_primary")

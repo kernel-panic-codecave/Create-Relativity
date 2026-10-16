@@ -211,15 +211,9 @@ object DiskMesh {
 			val omega = sqrt(0.5 * rs / (r * r * r))
 			val ut = 1.0 / sqrt(max(1.0 - 1.5 * rs / r, 1e-4))
 			val g = 1.0 / (sqrt(1.0 - u0) * ut * (1.0 - omega * lz))
-			// diskColor: flux, temperature, blackbody shifted by g, intensity by g^4; tonemapped (1 - e^-x).
 			val x = rIn / r
 			val flux = max((1.0 - sqrt(x)) * x * x * x, 0.0) / 0.05667
-			val temperature = (2500.0 + (11000.0 - 2500.0) * (min(ratio, 1.5) / 1.5)) * flux.pow(0.25)
-			val bb = blackbody(temperature * g)
-			val intensity = flux * g * g * g * g * (1.5 + 2.0 * ratio)
-			val red = 1.0 - exp(-bb[0] * intensity)
-			val green = 1.0 - exp(-bb[1] * intensity)
-			val blue = 1.0 - exp(-bb[2] * intensity)
+			val (red, green, blue) = shade(flux, g, ratio)
 			val alpha = (flux * 3.0).coerceIn(0.0, 1.0) * smoothstep(rOut, 0.8 * rOut, r)
 			// (Times the texture's 1.45, which it stores divided by: its swirl then scales the colour round 1.)
 			fun byte(v: Double) = (v.coerceIn(0.0, 1.0) * 255.0 + 0.5).toInt()
@@ -233,7 +227,8 @@ object DiskMesh {
 
 	private fun colorsFor(geometry: Geometry, table: FloatArray, secondary: Boolean): Array<IntArray> {
 		val kind = if (secondary) 1 else 0
-		val key = doubleArrayOf(geometry.hx, geometry.hy, geometry.hz, geometry.rs, geometry.rIn, geometry.ratio, geometry.sense, System.identityHashCode(table).toDouble())
+		val key = doubleArrayOf(geometry.hx, geometry.hy, geometry.hz, geometry.rs, geometry.rIn, geometry.ratio, geometry.sense, System.identityHashCode(table).toDouble(),
+			RelativityConfig.Client.Render.diskScheme.ordinal.toDouble(), RelativityConfig.Client.Render.diskGradient.hashCode().toDouble())
 		val cached = cachedColors[kind]
 		if (cached != null && cachedKeys[kind].contentEquals(key)) return cached
 		val colors = Array(RINGS + 1) { ring -> IntArray(AZIMUTHS + 1) { a -> geometry.color(geometry.radius(ring), 2.0 * PI * a / AZIMUTHS, table, secondary) } }
@@ -250,10 +245,60 @@ object DiskMesh {
 		val ratio = (hole.accretionRate / RelativityConfig.eddingtonRate(hole.schwarzschildRadius)).coerceIn(0.05, 2.0)
 		val x = 36.0 / 49.0
 		val flux = max((1.0 - sqrt(x)) * x * x * x, 0.0) / 0.05667
-		val temperature = (2500.0 + (11000.0 - 2500.0) * (min(ratio, 1.5) / 1.5)) * flux.pow(0.25)
-		val bb = blackbody(temperature * g)
-		val intensity = flux * g * g * g * g * (1.5 + 2.0 * ratio)
-		return DoubleArray(3) { 1.0 - exp(-bb[it] * intensity) }
+		return shade(flux, g, ratio)
+	}
+
+	/**
+	 * The disk's colour (tonemapped RGB, 1 - e^-x) where its flux is [flux] (1 at the brightest ring), its light shifted
+	 * by [g] (Doppler and gravitational), fed at [ratio] of Eddington: by the config's scheme (RelativityConfig.DiskScheme).
+	 */
+	fun shade(flux: Double, g: Double, ratio: Double): DoubleArray {
+		// Heat across the disk, 0 .. 1 (the temperature's profile: flux to the quarter).
+		val heat = flux.coerceAtLeast(0.0).pow(0.25)
+		val rgb: DoubleArray
+		val intensity: Double
+		when (RelativityConfig.Client.Render.diskScheme) {
+			RelativityConfig.DiskScheme.REALISTIC -> {
+				// Blackbody at the temperature, shifted by g; brightness by g^4 (beaming).
+				val temperature = (2500.0 + (11000.0 - 2500.0) * (min(ratio, 1.5) / 1.5)) * heat
+				rgb = blackbody(temperature * g)
+				intensity = flux * g * g * g * g * (1.5 + 2.0 * ratio)
+			}
+			RelativityConfig.DiskScheme.MOVIE -> {
+				// Warm by heat alone; a little brighter on the approaching side (g, not g^4).
+				rgb = gradient(MOVIE_GRADIENT, 1.0 - heat)
+				intensity = MOVIE_BRIGHTNESS * flux * g * (1.5 + 2.0 * ratio)
+			}
+			RelativityConfig.DiskScheme.CUSTOM -> {
+				// The player's gradient, hot inner edge first, the shift moving along it; beamed as the realistic one.
+				rgb = gradient(schemeGradient(), 1.0 - (heat * g).coerceIn(0.0, 1.0))
+				intensity = flux * g * g * g * g * (1.5 + 2.0 * ratio)
+			}
+		}
+		return DoubleArray(3) { 1.0 - exp(-rgb[it] * intensity) }
+	}
+
+	/** The film look's brightness (lower than the realistic one's: its colours are kept, not burned to white). */
+	private const val MOVIE_BRIGHTNESS = 0.55
+
+	/** The current scheme's colours, hottest first (RGB 0-1): the post pass gets them too (BlackHoleLens). */
+	fun schemeGradient(): List<DoubleArray> = when (RelativityConfig.Client.Render.diskScheme) {
+		RelativityConfig.DiskScheme.CUSTOM -> RelativityConfig.Client.Render.diskGradient.map { doubleArrayOf(it.red / 255.0, it.green / 255.0, it.blue / 255.0) }.ifEmpty { MOVIE_GRADIENT }
+		else -> MOVIE_GRADIENT
+	}
+
+	/** The film look's colours, hottest first: white-hot, gold, orange, ember. */
+	private val MOVIE_GRADIENT = listOf(0xFFF3DC, 0xFFC56A, 0xFF7A1C, 0x6A1E04).map { c ->
+		doubleArrayOf(((c shr 16) and 255) / 255.0, ((c shr 8) and 255) / 255.0, (c and 255) / 255.0)
+	}
+
+	/** [stops] (evenly spaced) at [t] in 0 .. 1, linearly between them. */
+	private fun gradient(stops: List<DoubleArray>, t: Double): DoubleArray {
+		if (stops.size == 1) return stops[0]
+		val f = t.coerceIn(0.0, 1.0) * (stops.size - 1)
+		val i = min(floor(f).toInt(), stops.size - 2)
+		val w = f - i
+		return DoubleArray(3) { stops[i][it] + w * (stops[i + 1][it] - stops[i][it]) }
 	}
 
 	private fun smoothstep(edge0: Double, edge1: Double, x: Double): Double {

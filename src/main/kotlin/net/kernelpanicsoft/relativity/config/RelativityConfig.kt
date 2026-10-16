@@ -3,6 +3,7 @@ package net.kernelpanicsoft.relativity.config
 import net.kernelpanicsoft.archie.config.CategorySpec
 import net.kernelpanicsoft.archie.config.ConfigContainer
 import net.kernelpanicsoft.archie.config.ConfigSpec
+import net.kernelpanicsoft.archie.gui.util.KColor
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.physics.SpacetimeUnits
 import net.minecraft.network.chat.Component
@@ -117,6 +118,18 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.light_delay.comment"),
 				default = true,
 			)
+			var diskScheme by enumSelector(
+				title = Component.translatable("config.create_relativity.render.disk_scheme"),
+				comment = Component.translatable("config.create_relativity.render.disk_scheme.comment"),
+				kclass = DiskScheme::class,
+				default = DiskScheme.REALISTIC,
+			)
+			val diskGradient by colorList(
+				title = Component.translatable("config.create_relativity.render.disk_gradient"),
+				comment = Component.translatable("config.create_relativity.render.disk_gradient.comment"),
+				default = listOf(KColor.ofRgb(0xFFFFFF), KColor.ofRgb(0x9FD8FF), KColor.ofRgb(0x7B4DFF), KColor.ofRgb(0x2A0A5E)),
+				factory = { KColor.ofRgb(0xFFFFFF) },
+			)
 		}
 
 		object Debug : CategorySpec(Component.translatable("config.create_relativity.debug"), "debug") {
@@ -127,6 +140,14 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 			)
 		}
 	}
+
+	/**
+	 * How the accretion disk is coloured: [REALISTIC] its blackbody light, Doppler and gravitationally shifted and
+	 * beamed; [MOVIE] the film look (Interstellar's): warm orange to white by heat alone, the shift and beaming left
+	 * out but a little brightening on the approaching side; [CUSTOM] the gradient set in the config, hot inner edge to
+	 * cool outer, with the realistic shifts.
+	 */
+	enum class DiskScheme { REALISTIC, MOVIE, CUSTOM }
 
 	/** Speed of light in [dimension]: its override if one is set, otherwise the default. */
 	fun speedOfLight(dimension: ResourceKey<Level>): Double =

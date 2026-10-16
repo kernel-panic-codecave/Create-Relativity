@@ -225,6 +225,10 @@ object BlackHoleLens {
 	private fun uploadDisk(uniform: (String, ShaderUniformAccess.() -> Unit) -> Unit, level: Level, hole: BlackHole?, minecraft: Minecraft) {
 		// Where the disk is drawn as geometry (DiskMesh), here only in sky pixels: the holes in the mesh's images.
 		uniform("DiskFillOnly") { setInt(if (DiskMesh.drawsDisk(hole)) 1 else 0) }
+		// The colour scheme (DiskMesh.shade's), so what's filled matches the mesh.
+		uniform("DiskScheme") { setInt(RelativityConfig.Client.Render.diskScheme.ordinal) }
+		val stops = DiskMesh.schemeGradient().take(8)
+		uniform("DiskGradient") { setVectors(*Array(8) { k -> stops.getOrNull(k)?.let { org.joml.Vector4f(it[0].toFloat(), it[1].toFloat(), it[2].toFloat(), 1f) } ?: org.joml.Vector4f(0f) }) }
 		if (hole == null || hole.accretionRate <= 0.0) {
 			uniform("Disk") { setVector(0f, 0f, 0f, 0f) }
 			return
