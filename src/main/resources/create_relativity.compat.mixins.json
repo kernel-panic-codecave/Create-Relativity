@@ -6,6 +6,9 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "sodium.GlProgramBuilderMixin",
+    "sodium.ChunkMeshBufferBuilderMixin",
+    "sodium.ChunkBuilderMeshingTaskMixin",
+    "sodium.TranslucentGeometryCollectorMixin",
     "iris.TransformPatcherMixin"
   ],
   "injectors": {

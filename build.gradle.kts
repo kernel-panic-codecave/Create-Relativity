@@ -91,6 +91,10 @@ repositories {
         }
     }
     exclusiveContent {
+        forRepository { maven("https://maven.caffeinemc.net/releases") { name = "CaffeineMC (Sodium)" } }
+        filter { includeGroup("net.caffeinemc") }
+    }
+    exclusiveContent {
         forRepository { maven("https://api.modrinth.com/maven") { name = "Modrinth" } }
         filter { includeGroup("maven.modrinth") }
     }
@@ -138,6 +142,10 @@ dependencies {
     modImplementation("dev.ryanhcode.sable-companion:sable-companion-common-$mcVersion:${property("sable_companion_version")}") { isTransitive = false }
     modRuntimeOnly("dev.ryanhcode.sable:sable-sable_rapier-$mcVersion:${property("sable_version")}") { isTransitive = false }
     modImplementation("foundry.veil:veil-neoforge-$mcVersion:${property("veil_version")}") { isTransitive = false }
+    // Sodium and Iris, to compile our hooks into them against (QuadSubdivision on Sodium's chunk meshing; Iris's shader
+    // packs); the hooks apply only when they're loaded (CompatMixinPlugin).
+    modCompileOnly("net.caffeinemc:sodium-neoforge-mod:0.8.13+mc$mcVersion") { isTransitive = false }
+    modCompileOnly("maven.modrinth:iris:1.8.14-beta.1+$mcVersion-neoforge") { isTransitive = false }
     "forgeRuntimeLibrary"("gg.moonflower:molang-compiler:${property("veil_molang_version")}")
     compileOnly("gg.moonflower:molang-compiler:${property("veil_molang_version")}") // (the lens resolution setting reaches Veil's post pipelines as a Molang query)
     "forgeRuntimeLibrary"("io.github.ocelot:glsl-processor:${property("veil_glsl_processor_version")}")
@@ -151,8 +159,9 @@ dependencies {
 }
 
 // Dev-only compatibility runs (nothing shipped): -PwithSodium adds Sodium (its own chunk renderer and shaders),
-// -PwithIris adds Sodium and Iris (shader packs, from run/shaderpacks). They go into run/mods as downloaded, not
-// through Loom: its remap drops META-INF/jarjar/metadata.json, so the real mods nested inside never load.
+// -PwithIris adds Sodium and Iris (shader packs, from run/shaderpacks). Copied into run/mods, where Sodium's own
+// locator loads the real mod nested in its jar: through Loom's runtime classpath (Modrinth's jar, or the maven dev
+// artifacts with Forgified Fabric API) its API and mod end up in different layers and the game won't start.
 val compatMods: Configuration = configurations.create("compatMods") { isTransitive = false }
 val withIris = providers.gradleProperty("withIris").isPresent
 val withSodium = withIris || providers.gradleProperty("withSodium").isPresent
@@ -172,6 +181,7 @@ val syncCompatMods by tasks.registering {
     }
 }
 tasks.matching { it.name.startsWith("run") }.configureEach { dependsOn(syncCompatMods) }
+
 
 kotlin {
     jvmToolchain(21)

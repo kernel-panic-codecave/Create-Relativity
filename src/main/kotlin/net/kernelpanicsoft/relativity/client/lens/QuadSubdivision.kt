@@ -585,7 +585,7 @@ class QuadSubdivider : VertexConsumer {
 		target.addVertex(f(position, 3, 0), f(position, 3, 1), f(position, 3, 2))
 			.setColor(i(color, 4, 0), i(color, 4, 1), i(color, 4, 2), i(color, 4, 3))
 			.setUv(f(uv, 2, 0), f(uv, 2, 1))
-			.setUv1(overlay[0], overlay[1])
+			.setUv1(i(overlay, 2, 0), i(overlay, 2, 1)) // (constant on a vanilla quad; Sodium's ambient occlusion: SodiumQuads)
 			.setUv2(i(light, 2, 0), i(light, 2, 1))
 			.setNormal(f(normal, 3, 0), f(normal, 3, 1), f(normal, 3, 2))
 	}
