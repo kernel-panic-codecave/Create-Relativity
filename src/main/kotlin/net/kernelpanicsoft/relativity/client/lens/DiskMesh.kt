@@ -208,6 +208,20 @@ object DiskMesh {
 		return colors
 	}
 
+	/**
+	 * The disk's light where it's brightest (its flux peaks at 49/36 of the inner edge), for the photon ring (HorizonMesh):
+	 * tonemapped RGB as [Geometry.color] works it out, its frequency shifted by [g].
+	 */
+	fun innerGlow(hole: BlackHole, g: Double): DoubleArray {
+		val ratio = (hole.accretionRate / RelativityConfig.eddingtonRate(hole.schwarzschildRadius)).coerceIn(0.05, 2.0)
+		val x = 36.0 / 49.0
+		val flux = max((1.0 - sqrt(x)) * x * x * x, 0.0) / 0.05667
+		val temperature = (2500.0 + (11000.0 - 2500.0) * (min(ratio, 1.5) / 1.5)) * flux.pow(0.25)
+		val bb = blackbody(temperature * g)
+		val intensity = flux * g * g * g * g * (1.5 + 2.0 * ratio)
+		return DoubleArray(3) { 1.0 - exp(-bb[it] * intensity) }
+	}
+
 	private fun smoothstep(edge0: Double, edge1: Double, x: Double): Double {
 		val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0.0, 1.0)
 		return t * t * (3.0 - 2.0 * t)

@@ -79,12 +79,77 @@ object HorizonMesh {
 				}
 			}
 			buffers.endBatch()
+			if (ring) drawRing(hole, directions, rc, cx, cy, cz)
 		} finally {
 			VertexLens.setEnabled(true)
 			VertexLens.ownSecondImages = false
 			stack.popMatrix()
 			com.mojang.blaze3d.systems.RenderSystem.applyModelViewMatrix()
 		}
+	}
+
+	/** Draws the photon ring round the shadow. */
+	@JvmField
+	var ring = true
+
+	/**
+	 * Its brightness across it, from the shadow's edge outward (fractions of the shadow's radius): light that has wound
+	 * round the hole, once and again, packed ever closer to the edge. (It also covers the sliver there the approximated
+	 * spinning lens can't follow: vertex_lens_core.glsl relativityKerrApprox.)
+	 */
+	private val RING_OFFSETS = doubleArrayOf(-0.004, 0.006, 0.018, 0.04)
+	private val RING_GLOW = doubleArrayOf(1.0, 0.6, 0.22, 0.0)
+
+	/**
+	 * The photon ring: additive bands just outside the shadow's outline ([directions], from the camera; the hole's centre
+	 * at (cx, cy, cz) from it, [rc] away), at the hole's distance. Lit by the disk's inner edge when it has one (brighter
+	 * where the disk comes toward the camera), else by the sky.
+	 */
+	private fun drawRing(hole: BlackHole, directions: Array<DoubleArray>, rc: Double, cx: Float, cy: Float, cz: Float) {
+		val minecraft = Minecraft.getInstance()
+		val level = minecraft.level ?: return
+		val e = doubleArrayOf(cx / rc, cy / rc, cz / rc)
+		val disk = DiskMesh.drawsDisk(hole)
+		val sky = level.getSkyColor(minecraft.gameRenderer.mainCamera.position, minecraft.timer.getGameTimeDeltaPartialTick(false))
+		val sense = if (hole.spin < 0.0) -1.0 else 1.0
+		// The disk's speed by its inner edge (a fair half of light's), for the beaming.
+		val speed = 0.45
+		val consumer = buffers.getBuffer(RenderType.lightning())
+		val pose = PoseStack().last()
+		fun colour(d: DoubleArray): DoubleArray {
+			if (!disk) return doubleArrayOf(sky.x * 0.55, sky.y * 0.55, sky.z * 0.55)
+			// The side of the hole d lies on (across the line of sight): disk material there moves along side x up for
+			// positive spin (DiskMesh's turbulence turns that way); its speed toward the camera (-e) shifts and beams it.
+			val along = d[0] * e[0] + d[1] * e[1] + d[2] * e[2]
+			val side = DoubleArray(3) { d[it] - along * e[it] }
+			val sl = sqrt(side[0] * side[0] + side[1] * side[1] + side[2] * side[2]).coerceAtLeast(1e-9)
+			// (side x up = (-side.z, 0, side.x)) . (-e)
+			val toward = sense * (side[2] * e[0] - side[0] * e[2]) / sl
+			val g = 0.85 * sqrt(1 - speed * speed) / (1 - speed * toward.coerceIn(-1.0, 1.0))
+			return DiskMesh.innerGlow(hole, g)
+		}
+		for (k in directions.indices) {
+			val ds = arrayOf(directions[k], directions[(k + 1) % directions.size])
+			val colours = ds.map { colour(it) }
+			// Each direction pushed out from the hole's by a fraction of its angle (on the plane tangent to the sky at e).
+			fun at(d: DoubleArray, offset: Double): DoubleArray {
+				val along = d[0] * e[0] + d[1] * e[1] + d[2] * e[2]
+				val v = DoubleArray(3) { e[it] + (d[it] / along - e[it]) * (1 + offset) }
+				val n = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+				return DoubleArray(3) { v[it] / n * rc }
+			}
+			for (band in 0 until RING_OFFSETS.size - 1) {
+				val quad = listOf(0 to band, 1 to band, 1 to band + 1, 0 to band + 1)
+				for ((which, step) in quad + quad.reversed()) {
+					val p = at(ds[which], RING_OFFSETS[step])
+					val c = colours[which]
+					val glow = RING_GLOW[step]
+					fun byte(v: Double) = (v.coerceIn(0.0, 1.0) * 255.0 + 0.5).toInt()
+					consumer.addVertex(pose, p[0].toFloat(), p[1].toFloat(), p[2].toFloat()).setColor(byte(c[0]), byte(c[1]), byte(c[2]), byte(glow))
+				}
+			}
+		}
+		buffers.endBatch()
 	}
 
 	/** The camera-hole line from the camera (unit) and the two directions round it the outline's angles start from:
