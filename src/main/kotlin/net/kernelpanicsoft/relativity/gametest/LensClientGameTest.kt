@@ -12,6 +12,8 @@ import net.kernelpanicsoft.relativity.client.lens.StageTimers
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
 import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
 import net.kernelpanicsoft.relativity.client.lens.KerrSlots
+import net.kernelpanicsoft.relativity.client.lens.KerrPaths
+import net.kernelpanicsoft.relativity.client.lens.KerrSecondImageMap
 import net.kernelpanicsoft.relativity.client.lens.LensVoxels
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos
@@ -1850,9 +1852,13 @@ class LensClientGameTest {
 			}
 			// (The last: once the baked slots blend, for a spinning hole.)
 			if (mode == "vertex_only") {
-				// (The per-frame solver alone, given time to settle.)
-				runOnClient { KerrSlots.enabled = false }
-				waitTicks(300)
+				// (The per-frame solver alone, from scratch, until the path table and the map have both caught up and the
+				// map's repair pass is done; then a little longer.)
+				runOnClient { KerrSlots.enabled = false; KerrImageMap.invalidate(); KerrSecondImageMap.invalidate() }
+				waitTicks(20)
+				var waited = 0
+				while (waited < 1200 && !computeOnClient { !KerrPaths.changed && KerrImageMap.settled }) { waitTicks(10); waited += 10 }
+				waitTicks(40)
 			}
 			if (mode == "vertex_only_slots") {
 				runOnClient { KerrSlots.enabled = true }
@@ -1874,11 +1880,15 @@ class LensClientGameTest {
 				}
 			}
 			val median = DoubleArray(2) { k -> samples.map { it[k] }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] } }
-			val wrong = LensReference.compare(reference, takeScreenshot("ground_${name}_$mode"))
+			val shot = takeScreenshot("ground_${name}_$mode")
+			val wrong = LensReference.compare(reference, shot)
+			// (And with white and blue as one class: the Einstein ring's checkerboard, finer than the reference's grid, is
+			// compared too, and what it measures is whether there's floor there at all: gaps.)
+			val gaps = LensReference.compare(reference, shot, floorAsOne = true)
 			wrongBy[mode] = wrong
 			CreateRelativity.LOGGER.info(
-				"Lens vs reference, {} ({}): {}% of pixels in the wrong class; GPU lens {} ms, voxels CPU {} ms (slots blending {})",
-				name, mode, "%.1f".format(wrong * 100), "%.2f".format(median[0]), "%.2f".format(median[1]), computeOnClient { KerrSlots.blending },
+				"Lens vs reference, {} ({}): {}% of pixels in the wrong class, {}% counting white and blue as one; GPU lens {} ms, voxels CPU {} ms (slots blending {})",
+				name, mode, "%.1f".format(wrong * 100), "%.1f".format(gaps * 100), "%.2f".format(median[0]), "%.2f".format(median[1]), computeOnClient { KerrSlots.blending },
 			)
 		}
 		runOnClient { BlackHoleLens.unseen = BlackHoleLens.Unseen.VOXELS; BlackHoleLens.rawFrame = false; KerrSlots.enabled = true }

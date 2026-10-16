@@ -11,6 +11,7 @@ import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
 import com.mojang.blaze3d.vertex.VertexConsumer
 import foundry.veil.api.client.render.VeilLevelPerspectiveRenderer
 import net.kernelpanicsoft.archie.gui.util.extension.invoke
+import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
@@ -24,6 +25,7 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Wireframe gizmos for each black hole: the horizon (oblate when spinning) and the ergosphere as meridians, with
@@ -84,7 +86,7 @@ object SpacetimeDebugRenderer {
 		RenderSystem.setShader(GameRenderer::getRendertypeLinesShader)
 		RenderSystem.lineWidth(2f)
 		// Gizmos mark true positions: keep the vertex lens out of them.
-		net.kernelpanicsoft.relativity.client.lens.VertexLens.setEnabled(false)
+		VertexLens.setEnabled(false)
 
 		val poseStack = PoseStack()
 		poseStack.mulPose(camera.rotation().conjugate(Quaternionf()))
@@ -127,7 +129,7 @@ object SpacetimeDebugRenderer {
 	 * [MERIDIANS] meridians. A Kerr horizon (constant r) comes out oblate; the ergosphere touches it at the poles.
 	 */
 	private fun surface(lines: VertexConsumer, pose: PoseStack.Pose, a: Double, rgb: Int, radius: (Double) -> Double) {
-		ring(lines, pose, kotlin.math.sqrt(radius(0.0).let { it * it } + a * a), Plane.XZ, rgb, 255)
+		ring(lines, pose, sqrt(radius(0.0).let { it * it } + a * a), Plane.XZ, rgb, 255)
 		for (m in 0 until MERIDIANS) {
 			val azimuth = PI * m / MERIDIANS
 			var previous: FloatArray? = null
@@ -135,7 +137,7 @@ object SpacetimeDebugRenderer {
 				val theta = 2 * PI * i / SEGMENTS // full circle: both halves of the meridian
 				val cosTheta = cos(theta)
 				val r = radius(cosTheta)
-				val rho = kotlin.math.sqrt(r * r + a * a) * sin(theta)
+				val rho = sqrt(r * r + a * a) * sin(theta)
 				val point = floatArrayOf((rho * cos(azimuth)).toFloat(), (r * cosTheta).toFloat(), (rho * sin(azimuth)).toFloat())
 				previous?.let { segment(lines, pose, it, point, rgb, 255) }
 				previous = point
@@ -169,7 +171,7 @@ object SpacetimeDebugRenderer {
 		val nx = p1[0] - p0[0]
 		val ny = p1[1] - p0[1]
 		val nz = p1[2] - p0[2]
-		val len = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-6f)
+		val len = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-6f)
 		val r = (rgb shr 16) and 0xff
 		val g = (rgb shr 8) and 0xff
 		val b = rgb and 0xff
@@ -189,7 +191,7 @@ object SpacetimeDebugRenderer {
 			val nx = p1[0] - p0[0]
 			val ny = p1[1] - p0[1]
 			val nz = p1[2] - p0[2]
-			val len = kotlin.math.sqrt(nx * nx + ny * ny + nz * nz)
+			val len = sqrt(nx * nx + ny * ny + nz * nz)
 			lines.addVertex(pose, p0[0], p0[1], p0[2]).setColor(r, g, b, alpha).setNormal(pose, nx / len, ny / len, nz / len)
 			lines.addVertex(pose, p1[0], p1[1], p1[2]).setColor(r, g, b, alpha).setNormal(pose, nx / len, ny / len, nz / len)
 		}

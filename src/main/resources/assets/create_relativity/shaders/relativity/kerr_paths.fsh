@@ -3,9 +3,13 @@
 // through every source together (kerr.glsl's Sources and spacetimeBackward), followed back in time, recorded as where it
 // is seen from the lens centre (the dominant source) at fixed points along it.
 //
-// A path is parameterised by distance along it, s, around its closest approach to the centre s*: 29 samples at
-// s = s* -+ L (k / 14)^2 for k = 14 .. 1 (L: s* coming in, the rest of the path going out), dense where the path turns
-// and smooth through it. Nothing assumes one turning point or attraction: a path may come close more than once (two
+// A path is parameterised by how much it has changed, m = integral of |d turn| + |dr| / r (the angle its direction from
+// the centre turns through, whichever way: a spinning hole swings light out of its starting plane, over its poles, and the
+// angle in that plane alone missed it; and the distance from the centre), around its closest approach to the centre m*: 29 samples at
+// m = m* -+ M k / 14 for k = 14 .. 1 (M: m* coming in, the rest of the path going out), so they're as close in every
+// stretch, however the light bends there. (By distance along the path, a ray winding round the photon sphere spent its
+// whole turn between two samples, a radian or more apart round the hole: interpolating across that put its image ten
+// pixels off.) Nothing assumes one turning point or attraction: a path may come close more than once (two
 // sources, a warp bubble) or be pushed away (negative energy); s* is just where it's closest. Two marches: the first
 // finds s*, the path's length and its fate, the second records the samples. Every texel's ray is traced, however far
 // it passes, so the vertex lens never switches method on screen (a visible seam).
@@ -38,13 +42,14 @@ layout(location = 7) out vec4 Path7;
 
 const int PATH_STEPS = 420;
 
-vec3 pathE1;     // centre to camera
-vec3 pathSide;   // in the ray's plane, perpendicular to pathE1, toward the ray's side
-vec3 pathNormal; // the ray's plane's normal
+vec3 pathE1 = vec3(1.0, 0.0, 0.0);     // centre to camera (set in main; initialized against driver warnings)
+vec3 pathSide = vec3(0.0, 1.0, 0.0);   // in the ray's plane, perpendicular to pathE1, toward the ray's side
+vec3 pathNormal = vec3(0.0, 0.0, 1.0); // the ray's plane's normal
 float pathTurn = 0.0; // the last angle, for unwrapping
 
-// A sample: the angle round the centre in the ray's plane (unwrapped against the last one), and the offset out of it
-// with the distance from the centre packed into the second channel, of the photon at x (camera-relative, game axes).
+// A sample: the angle round the centre in the ray's plane (unwrapped against the last one), and the elevation out of it
+// (an angle: its sine loses precision at half precision near the plane's poles, where spinning holes swing light) with
+// the distance from the centre packed into the second channel, of the photon at x (camera-relative, game axes).
 vec2 pathSample(vec3 x) {
     vec3 d = x - CentreGame;
     float r = length(d);
@@ -52,7 +57,18 @@ vec2 pathSample(vec3 x) {
     float angle = atan(dot(n, pathSide), dot(n, pathE1));
     angle += 6.28318530718 * floor((pathTurn - angle) / 6.28318530718 + 0.5);
     pathTurn = angle;
-    return vec2(angle, relativityPackPair(dot(n, pathNormal), r));
+    return vec2(angle, relativityPackPair(asin(clamp(dot(n, pathNormal), -1.0, 1.0)), r));
+}
+
+// How much the path changes from x0 to x1 (camera-relative): the m of the samples' spacing. (The turn as 2 asin(chord / 2):
+// acos of a dot product near 1 loses the small angles in single precision.)
+float pathChange(vec3 x0, vec3 x1) {
+    vec3 d0 = x0 - CentreGame;
+    vec3 d1 = x1 - CentreGame;
+    float r0 = length(d0);
+    float r1 = length(d1);
+    float turn = 2.0 * asin(min(0.5 * length(d1 / max(r1, 1e-6) - d0 / max(r0, 1e-6)), 1.0));
+    return turn + abs(r1 - r0) / max(min(r0, r1), 1e-3);
 }
 
 // Whether x is behind some hole's horizon (with a margin: traced back, light only nears it).
@@ -128,36 +144,37 @@ void main() {
     vec4 start = vec4(dir * t0, -t0);
     vec4 startP = spacetimeArriving(start, dir);
 
-    // First march (group 0; group 1 reads what it found from the head): the path's length, its closest approach to
-    // the centre, and its fate.
+    // First march (group 0; group 1 reads what it found from the head): how much the path changes in all (m), up to
+    // its closest approach to the centre, and its fate.
     vec4 x4 = start;
     vec4 p4 = startP;
-    float s = 0.0;
-    float sClosest = 0.0;
+    float m = 0.0;
+    float mClosest = 0.0;
     float rMin = length(start.xyz - CentreGame);
     float status = 3.0;
     int firstSteps = PATH_STEPS;
     if (Group == 1) {
         vec4 head = texelFetch(Head, ivec2(gl_FragCoord.xy), 0);
-        sClosest = head.x;
+        mClosest = head.x;
         status = floor(head.y / 8192.0);
-        s = head.y - 8192.0 * status;
+        m = head.y - 8192.0 * status;
         firstSteps = 0;
     }
+    vec3 last = start.xyz;
     for (int n = 0; n < firstSteps; n += 1) {
-        float ds = pathStep(x4);
-        pathAdvance(x4, p4, ds);
-        s += ds;
+        pathAdvance(x4, p4, pathStep(x4));
+        float r = length(x4.xyz - CentreGame);
+        m += pathChange(last, x4.xyz);
+        last = x4.xyz;
         if (pathCaptured(x4.xyz)) {
             status = 2.0;
-            sClosest = s;
-            rMin = length(x4.xyz - CentreGame);
+            mClosest = m;
+            rMin = r;
             break;
         }
-        float r = length(x4.xyz - CentreGame);
         if (r < rMin) {
             rMin = r;
-            sClosest = s;
+            mClosest = m;
         }
         // Out past the sphere and still leaving: done.
         if (r > startRadius) {
@@ -170,14 +187,15 @@ void main() {
             }
         }
     }
-    float sEnd = s;
+    float mEnd = m;
 
-    // Second march: the samples, at s* -+ L (k / 14)^2.
+    // Second march: the same path again (the same steps), the samples at m* -+ M k / 14, each between the two steps
+    // that straddle it (a step is at most a twentieth of the distance to the centre: straight enough between).
     vec2 qIn[15];
     vec2 qOut[15];
     x4 = start;
     p4 = startP;
-    s = 0.0;
+    pathTurn = 0.0;
     vec2 q = pathSample(x4.xyz);
     for (int k = 0; k < 15; k += 1) {
         qIn[k] = q;
@@ -185,26 +203,17 @@ void main() {
     }
     int nextIn = 13; // samples in 14 .. 1 on the way in, 14 the start; then the closest approach (0); then out 1 .. 14
     int nextOut = 1;
+    m = 0.0;
+    vec3 previous = start.xyz;
     for (int n = 0; n < PATH_STEPS + 32 && nextOut <= 14; n += 1) {
-        // The next sample's arc length.
-        float target;
-        if (nextIn >= 0) {
-            float w = float(nextIn) / 14.0;
-            target = sClosest - sClosest * w * w;
-        } else {
-            float w = float(nextOut) / 14.0;
-            target = sClosest + (sEnd - sClosest) * w * w;
-        }
-        if (s >= sEnd && target > sEnd + 1e-3) break;
-        float ds = min(pathStep(x4), max(target - s, 1e-4));
-        if (target <= s + 1e-4) ds = 0.0;
-        if (ds > 0.0) {
-            pathAdvance(x4, p4, ds);
-            s += ds;
-        }
-        if (s + 1e-4 >= target) {
-            // On the sample (steps end on it, up to rounding).
-            q = pathSample(x4.xyz);
+        pathAdvance(x4, p4, pathStep(x4));
+        float next = m + pathChange(previous, x4.xyz);
+        // Every sample this step passed (the last one closes the path: on its end, wherever that is).
+        for (int guard = 0; guard < 29 && nextOut <= 14; guard += 1) {
+            float target = nextIn >= 0 ? mClosest * (1.0 - float(nextIn) / 14.0) : mClosest + (mEnd - mClosest) * float(nextOut) / 14.0;
+            if (target > next + 1e-6) break;
+            float f = clamp((target - m) / max(next - m, 1e-9), 0.0, 1.0);
+            q = pathSample(mix(previous, x4.xyz, f));
             if (nextIn >= 1) {
                 qIn[nextIn] = q;
                 nextIn -= 1;
@@ -217,6 +226,9 @@ void main() {
                 nextOut += 1;
             }
         }
+        m = next;
+        previous = x4.xyz;
+        if (m >= mEnd + 1e-6) break;
     }
     if (status == 1.0 && nextOut <= 14) status = 3.0;
     if (status == 2.0) {
@@ -224,9 +236,9 @@ void main() {
         for (int k = 0; k < 15; k += 1) qOut[k] = qIn[0];
     }
     if (Group == 0) {
-        // The head: the closest approach's distance along the path, and status and length together (lengths stay under
-        // 8192 blocks), for group 1; then the closest approach's sample.
-        Path0 = vec4(sClosest, 8192.0 * status + min(sEnd, 8191.0), qIn[0]);
+        // The head: the closest approach's m, and status and the whole path's m together (it stays far under 8192), for
+        // group 1; then the closest approach's sample.
+        Path0 = vec4(mClosest, 8192.0 * status + min(mEnd, 8191.0), qIn[0]);
         Path1 = vec4(qIn[1], qIn[2]);
         Path2 = vec4(qIn[3], qIn[4]);
         Path3 = vec4(qIn[5], qIn[6]);

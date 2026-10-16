@@ -18,6 +18,7 @@ import org.joml.Vector3d
  * it they stretch in proportion to how far the tide exceeds it, λ_target = 1 + (a/S − 1), easing toward that over
  * ~0.3 s. So stretch tracks how deep in the tides you are (back off and you recover) instead of running away.
  * λ = (L₀ + e)/L₀ is synced for the renderer and HUD; it hurts past 1.5 and kills at 4 (a = 4S).
+ * Players who can't be hurt (creative, spectator) aren't stretched at all.
  */
 object Spaghettification {
 	/** Identical damage types differing only in death message; one is picked at random. */
@@ -46,7 +47,7 @@ object Spaghettification {
 		val stretch = SpacetimeAttachments.bodyStretch
 		val lambda = stretch.get(entity)
 		val pull = tide * entity.bbHeight / RelativityConfig.Server.BlackHoles.bodyTolerance
-		val target = 1.0 + maxOf(0.0, pull - 1.0)
+		val target = if (unhurt(entity)) 1.0 else 1.0 + maxOf(0.0, pull - 1.0)
 		val next = lambda + (target - lambda) * (1.0 - kotlin.math.exp(-1.0 / (TICKS_PER_SECOND * RESPONSE_SECONDS)))
 		val settled = if (kotlin.math.abs(next - 1.0) < 1e-3 && target == 1.0) 1.0 else next
 		if (settled != lambda) stretch.set(entity, settled)
@@ -57,6 +58,12 @@ object Spaghettification {
 			entity.hurt(source(entity), ((settled - HURT_FROM) * 2.0).toFloat())
 		}
 	}
+
+	/**
+	 * Players who can't be hurt (creative, spectator). The black hole's damage types bypass invulnerability so nothing
+	 * else survives them (an Invulnerable-tagged mob, a totem), so players are spared here instead.
+	 */
+	fun unhurt(entity: net.minecraft.world.entity.Entity) = entity is net.minecraft.world.entity.player.Player && entity.abilities.invulnerable
 
 	private fun source(entity: LivingEntity) = DamageSource(
 		entity.level().registryAccess().registryOrThrow(Registries.DAMAGE_TYPE).getHolderOrThrow(DAMAGE.random())

@@ -87,10 +87,13 @@ object EntitySpacetime {
 				val longestFall = PI * hole.mass / c // seconds of proper time, horizon to singularity
 				if (SpacetimeField.atSingularity(level, center) != null || ticks / TICKS_PER_SECOND >= longestFall) {
 					ticksInside.remove(entity)
-					val velocity = Vector3d(entity.x - entity.xo, entity.y - entity.yo, entity.z - entity.zo).mul(TICKS_PER_SECOND)
-					Accretion.capture(level, hole, massOf(entity), center, velocity)
-					crush(entity)
-					return
+					// (A creative player passes through unharmed, and isn't swallowed.)
+					if (!Spaghettification.unhurt(entity)) {
+						val velocity = Vector3d(entity.x - entity.xo, entity.y - entity.yo, entity.z - entity.zo).mul(TICKS_PER_SECOND)
+						Accretion.capture(level, hole, massOf(entity), center, velocity)
+						crush(entity)
+						return
+					}
 				}
 			} else {
 				ticksInside.remove(entity)

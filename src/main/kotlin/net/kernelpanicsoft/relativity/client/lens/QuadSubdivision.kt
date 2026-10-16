@@ -15,6 +15,12 @@ import kotlin.math.sqrt
  * slab, and a face with one hidden corner disappears whole. While a chunk section near a hole is built, each quad its
  * blocks and fluids draw is split into n x n (attributes interpolated), n growing toward the hole: [levelAt].
  *
+ * The levels are measured, not guessed: each floor block of the ground test scene mapped through the lens tables, split
+ * until straight edges between its pieces' images stay within a pixel of where the light really appears. Most of the
+ * need lies by the camera-hole axis behind the hole (n ~ 24 blocks / distance from it, up to 32); round the hole itself
+ * only n = 2 out to ~8 r_s. The lens is the same at every size in units of r_s, so a block is smaller against a big
+ * hole's curves: a big hole needs less splitting, not more.
+ *
  * It depends on where the holes are, not the camera (rebuilding meshes as the camera moves would cost far too much),
  * which is where the bending changes fastest. Sections are rebuilt when a hole moves or grows enough to change theirs.
  *
@@ -24,11 +30,12 @@ import kotlin.math.sqrt
  * piece is small against its distance from the axis; the few sections the tube passes through are rebuilt as it moves.
  */
 object QuadSubdivision {
-	/** Quads are split into up to this many per side. */
-	const val MAX_LEVEL = 6
+	/** Quads are split into up to this many per side round the hole... */
+	const val MAX_LEVEL = 16
 
-	/** n = ceil(SCALE r_s / distance from the hole's centre): 6 at 1 r_s, 2 at 3 r_s, 1 past 6 r_s. */
-	private const val SCALE = 6.0
+	/** ...n = ceil(NEAR_SCALE / distance from the hole's centre (blocks)), within NEAR_REACH r_s of it. */
+	private const val NEAR_SCALE = 16.0
+	private const val NEAR_REACH = 8.0
 
 	/** The holes' centres and radii (x, y, z, r_s; world), as the chunk builder threads see them. */
 	@Volatile
@@ -41,21 +48,25 @@ object QuadSubdivision {
 	@JvmField
 	val split = java.util.concurrent.atomic.AtomicLong()
 
-	/** The axis tube: camera and hole centre (world), the hole's r_s; null when there's none. The chunk builders read it. */
+	/**
+	 * The axis tube: camera and hole centre (world), the hole's r_s, then its [AXIS_K]-scaled coefficient K (pieces a
+	 * side = K x edge / distance from the axis), radius and reach (blocks); null when there's none. The chunk builders
+	 * read it.
+	 */
 	@Volatile
 	private var axis: DoubleArray? = null
 	private var appliedAxis: DoubleArray? = null
 
-	/** How far behind the hole the tube reaches (blocks), and how wide it is. */
-	private const val AXIS_REACH = 64.0
-	private const val TUBE = 3.0
-	/** Each piece of a quad in the tube is at most this fraction of its distance from the axis... */
-	private const val AXIS_FRACTION = 0.3
-	/** ...down to this distance (blocks), and in at most this many pieces a side. */
-	private const val AXIS_NEAREST = 0.06
-	const val AXIS_MAX_LEVEL = 16
-	/** The tube's far end may move this far (blocks) before its sections are rebuilt. */
+	/**
+	 * K = AXIS_K sqrt(θ_E): what a piece must stay under scales with the Einstein ring's angular size θ_E = sqrt(2 r_s / D)
+	 * (camera distance D; the ring's arcs curve on its scale). 24 in the ground test (r_s 2, D 15).
+	 */
+	private const val AXIS_K = 33.0
+	/** At most this many pieces a side. */
+	const val AXIS_MAX_LEVEL = 32
+	/** The tube's far end, AXIS_PIVOT blocks behind the hole, may move this far (blocks) before its sections are rebuilt. */
 	private const val AXIS_TOLERANCE = 0.75
+	private const val AXIS_PIVOT = 64.0
 
 	/**
 	 * Pieces a side for a quad of edge [edge] centred at world point (x, y, z) in the axis tube: small against its
@@ -64,8 +75,8 @@ object QuadSubdivision {
 	fun axisLevel(x: Double, y: Double, z: Double, edge: Double): Int {
 		val a = axis ?: return 1
 		val distance = axisDistance(a, x, y, z) ?: return 1
-		if (distance > TUBE) return 1
-		return ceil(edge / (AXIS_FRACTION * maxOf(distance, AXIS_NEAREST))).toInt().coerceIn(1, AXIS_MAX_LEVEL)
+		if (distance > a[8]) return 1
+		return ceil(a[7] * edge / maxOf(distance, 1e-3)).toInt().coerceIn(1, AXIS_MAX_LEVEL)
 	}
 
 	/** Distance from world point (x, y, z) to the axis behind the hole (null if not beside that stretch of it). */
@@ -80,7 +91,7 @@ object QuadSubdivision {
 		val dy = y - a[4]
 		val dz = z - a[5]
 		val t = dx * ux + dy * uy + dz * uz
-		if (t < -TUBE || t > AXIS_REACH + TUBE) return null
+		if (t < -a[8] || t > a[9] + a[8]) return null
 		val px = dx - t * ux
 		val py = dy - t * uy
 		val pz = dz - t * uz
@@ -99,7 +110,7 @@ object QuadSubdivision {
 			val dy = y - hole[1]
 			val dz = z - hole[2]
 			val distance = sqrt(dx * dx + dy * dy + dz * dz)
-			level = maxOf(level, ceil(SCALE * hole[3] / maxOf(distance, 1e-3)).toInt())
+			if (distance < NEAR_REACH * hole[3]) level = maxOf(level, ceil(NEAR_SCALE / maxOf(distance, 1e-3)).toInt())
 		}
 		return level.coerceAtMost(MAX_LEVEL)
 	}
@@ -121,7 +132,7 @@ object QuadSubdivision {
 		val a = axis
 		if (!near && a != null) {
 			val distance = axisDistance(a, origin.x + 8.0, origin.y + 8.0, origin.z + 8.0)
-			if (distance != null && distance < TUBE + 13.9) near = true
+			if (distance != null && distance < a[8] + 13.9) near = true
 		}
 		if (!near) return target
 		return subdivider.get().also { it.begin(target, origin.x, origin.y, origin.z) }
@@ -139,8 +150,8 @@ object QuadSubdivision {
 		holes = now
 		val renderer = minecraft.levelRenderer
 		for (hole in applied + now) {
-			// Sections within reach of a level above 1: SCALE r_s.
-			val reach = SCALE * hole[3] + 1.0
+			// Sections within reach of a level above 1.
+			val reach = minOf(NEAR_REACH * hole[3], NEAR_SCALE) + 1.0
 			val lo = SectionPos.of(floor(hole[0] - reach).toInt() shr 4, floor(hole[1] - reach).toInt() shr 4, floor(hole[2] - reach).toInt() shr 4)
 			val hi = SectionPos.of(floor(hole[0] + reach).toInt() shr 4, floor(hole[1] + reach).toInt() shr 4, floor(hole[2] + reach).toInt() shr 4)
 			// (While a level is being swapped the renderer has no sections to mark; its next build is fresh anyway.)
@@ -159,26 +170,34 @@ object QuadSubdivision {
 	private fun updateAxis(minecraft: Minecraft, holesNow: List<DoubleArray>) {
 		val camera = minecraft.gameRenderer.mainCamera.position
 		val hole = holesNow.minByOrNull { (it[0] - camera.x) * (it[0] - camera.x) + (it[1] - camera.y) * (it[1] - camera.y) + (it[2] - camera.z) * (it[2] - camera.z) }
-		val now = hole?.let { doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3]) }
+		val now = hole?.let {
+			val distance = maxOf(sqrt((it[0] - camera.x) * (it[0] - camera.x) + (it[1] - camera.y) * (it[1] - camera.y) + (it[2] - camera.z) * (it[2] - camera.z)), it[3])
+			val k = AXIS_K * sqrt(sqrt(minOf(2.0 * it[3] / distance, 1.0)))
+			// Out to where n falls to 2, and to the render distance behind the hole.
+			val reach = minecraft.options.effectiveRenderDistance * 16.0 + 16.0
+			doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3], k, 0.5 * k, reach)
+		}
 		val old = appliedAxis
 		if (now == null && old == null) return
-		if (now != null && old != null && farEnd(now).zip(farEnd(old)).sumOf { (p, q) -> (p - q) * (p - q) } < AXIS_TOLERANCE * AXIS_TOLERANCE &&
+		if (now != null && old != null && (now[7] - old[7]).let { it * it } < 0.01 * old[7] * old[7] && (now[9] == old[9]) && farEnd(now).zip(farEnd(old)).sumOf { (p, q) -> (p - q) * (p - q) } < AXIS_TOLERANCE * AXIS_TOLERANCE &&
 			(0..2).sumOf { (now[3 + it] - old[3 + it]).let { d -> d * d } } < AXIS_TOLERANCE * AXIS_TOLERANCE) return
 		axis = now
 		appliedAxis = now
 		val renderer = minecraft.levelRenderer
 		val dirty = HashSet<Long>()
 		for (a in listOfNotNull(old, now)) {
-			// Sections along the tube: every few blocks along it, those within its reach.
-			val far = farEnd(a)
-			val steps = ceil(AXIS_REACH / 4.0).toInt()
+			// Sections along the tube: every few blocks along it, those within its radius.
+			val far = farEnd(a, a[9])
+			val steps = ceil(a[9] / 4.0).toInt()
+			val across = ceil(a[8] / 8.0).toInt()
 			for (k in 0..steps) {
 				val f = k.toDouble() / steps
 				val x = a[3] + f * (far[0] - a[3])
 				val y = a[4] + f * (far[1] - a[4])
 				val z = a[5] + f * (far[2] - a[5])
-				for (dx in -1..1) for (dy in -1..1) for (dz in -1..1) {
-					dirty += SectionPos.asLong(floor(x + dx * TUBE).toInt() shr 4, floor(y + dy * TUBE).toInt() shr 4, floor(z + dz * TUBE).toInt() shr 4)
+				for (dx in -across..across) for (dy in -across..across) for (dz in -across..across) {
+					val r = a[8] / across
+					dirty += SectionPos.asLong(floor(x + dx * r).toInt() shr 4, floor(y + dy * r).toInt() shr 4, floor(z + dz * r).toInt() shr 4)
 				}
 			}
 		}
@@ -188,13 +207,14 @@ object QuadSubdivision {
 		}
 	}
 
-	/** The far end of the tube (behind the hole, along the axis from the camera). */
-	private fun farEnd(a: DoubleArray): DoubleArray {
+	/** The point [reach] blocks behind the hole along the axis from the camera (by default the pivot the tolerance is
+	 * measured at). */
+	private fun farEnd(a: DoubleArray, reach: Double = AXIS_PIVOT): DoubleArray {
 		val ux = a[3] - a[0]
 		val uy = a[4] - a[1]
 		val uz = a[5] - a[2]
 		val length = maxOf(sqrt(ux * ux + uy * uy + uz * uz), 1e-6)
-		return doubleArrayOf(a[3] + ux / length * AXIS_REACH, a[4] + uy / length * AXIS_REACH, a[5] + uz / length * AXIS_REACH)
+		return doubleArrayOf(a[3] + ux / length * reach, a[4] + uy / length * reach, a[5] + uz / length * reach)
 	}
 
 	/** Whether [now] splits quads differently from what the built sections have: a hole added, gone, moved or resized. */

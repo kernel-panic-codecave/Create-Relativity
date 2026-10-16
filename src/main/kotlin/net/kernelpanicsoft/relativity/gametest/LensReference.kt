@@ -369,7 +369,10 @@ internal object LensReference {
 	 * same class across its 3×3 neighbourhood, so edges don't count). Also writes the reference and the mismatches
 	 * next to the screenshot.
 	 */
-	fun compare(reference: Array<Array<Kind?>>, screenshot: Path): Double {
+	fun compare(reference: Array<Array<Kind?>>, screenshot: Path, floorAsOne: Boolean = false): Double {
+		// (floorAsOne: white and blue count as one class, so a checkerboard squeezed finer than the grid (the Einstein
+		// ring's) is still compared, and what's measured is whether there's floor there at all: gaps.)
+		fun kind(k: Kind?) = if (floorAsOne && k == Kind.BLUE) Kind.WHITE else k
 		val rows = reference.size
 		val columns = reference[0].size
 		NativeImage.read(Files.newInputStream(screenshot)).use { image ->
@@ -377,14 +380,14 @@ internal object LensReference {
 				var compared = 0
 				var wrong = 0
 				for (row in 0 until rows) for (column in 0 until columns) {
-					val expected = reference[row][column]
+					val expected = kind(reference[row][column])
 					val px = ((column + 0.5) / columns * image.width).toInt()
 					val py = ((row + 0.5) / rows * image.height).toInt()
-					val seen = classify(image.getPixelRGBA(px, py))
+					val seen = kind(classify(image.getPixelRGBA(px, py)))
 					out.setPixelRGBA(column, row, expected?.color ?: 0xFF444444.toInt())
 					var uniform = expected != null
 					for (dy in -1..1) for (dx in -1..1) {
-						val neighbour = reference.getOrNull(row + dy)?.getOrNull(column + dx)
+						val neighbour = kind(reference.getOrNull(row + dy)?.getOrNull(column + dx))
 						if (neighbour != expected) uniform = false
 					}
 					var mark = 0xFF444444.toInt()
@@ -399,7 +402,7 @@ internal object LensReference {
 					}
 					out.setPixelRGBA(columns + column, row, mark)
 				}
-				out.writeToFile(screenshot.resolveSibling(screenshot.fileName.toString().removeSuffix(".png") + "_reference.png"))
+				out.writeToFile(screenshot.resolveSibling(screenshot.fileName.toString().removeSuffix(".png") + if (floorAsOne) "_gaps.png" else "_reference.png"))
 				return if (compared == 0) 1.0 else wrong.toDouble() / compared
 			}
 		}

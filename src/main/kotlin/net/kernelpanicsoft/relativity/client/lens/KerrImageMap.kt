@@ -26,10 +26,17 @@ object KerrImageMap : ImageMapSolver() {
 }
 
 /**
- * An image map and its solver state ([KerrImageMap] is the live one the world reads; the slot baker runs its own for
- * cameras elsewhere). The GL program is shared.
+ * The secondary-image map solved per frame the same way (the light the long way round the hole, by the Einstein ring:
+ * each search starts from the Schwarzschild secondary image, and stays on that side of the hole). Read while no baked
+ * slots blend one (KerrSlots).
  */
-open class ImageMapSolver {
+object KerrSecondImageMap : ImageMapSolver(second = true)
+
+/**
+ * An image map and its solver state ([KerrImageMap] is the live one the world reads; the slot baker runs its own for
+ * cameras elsewhere). The GL program is shared. [second]: secondary images instead of primary ones.
+ */
+open class ImageMapSolver(private val second: Boolean = false) {
 	/** The live map ([LIVE]) and a scratch one each layer is solved into before being copied back. */
 	private val textures = IntArray(2)
 
@@ -140,6 +147,8 @@ open class ImageMapSolver {
 			// Searches that failed against a table still catching up are tried again against the settled one.
 			GL20.glUniform1i(uniform("RetryAll"), if ((changed && !whole && !repair) || !retryHidden) 0 else 1)
 			GL20.glUniform1i(uniform("DebugMode"), debugMode)
+			GL20.glUniform1i(uniform("Second"), if (second) 1 else 0)
+			GL20.glUniform1i(uniform("SideCheck"), if (sideCheck) 1 else 0)
 			GL20.glUniform1i(uniform("SourceCount"), if (sources == null) 0 else sourceCount)
 			if (sources != null) {
 				val packed = stack.mallocFloat(4 * sources.size)
@@ -223,6 +232,10 @@ open class ImageMapSolver {
 	 */
 	@JvmField
 	var retryHidden = true
+
+	/** Whether primary images must lie on their point's own side of the hole (kerr_image_map.fsh ownSide()). */
+	@JvmField
+	var sideCheck = true
 
 	/** Whether a map that has caught up gets the repair pass (every failure searched again); the slot baker skips it. */
 	@JvmField

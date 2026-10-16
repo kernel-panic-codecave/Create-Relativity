@@ -274,12 +274,17 @@ object VertexLens {
 		KerrImageMap.ensureTexture()
 		if (!perspective) {
 			// (Switching between the blend and solving: the blend's grid reaches further, so the solver starts over.)
-			if (!kerr || centre?.key != mapHole || slotted != lastSlotted) KerrImageMap.invalidate()
+			if (!kerr || centre?.key != mapHole || slotted != lastSlotted) {
+				KerrImageMap.invalidate()
+				KerrSecondImageMap.invalidate()
+			}
 			mapHole = centre?.key
 			lastSlotted = slotted
 			if (kerr && !kerrSolveOff && !slotted) {
 				if (BlackHoleLens.timeGpu) mapTimer.begin()
 				KerrImageMap.draw(KerrPaths.changed, jump, sources, count)
+				// The secondary images too, for the second-image pass (a lone hole: they follow its light alone).
+				if (secondImages && secondTexture != 0 && loneHole) KerrSecondImageMap.draw(KerrPaths.changed, jump, sources, count)
 				if (BlackHoleLens.timeGpu) mapTimer.end()
 			}
 		}
@@ -288,10 +293,12 @@ object VertexLens {
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 4)
-		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrSlots.secondTexture)
+		val perFrameSecond = kerr && !kerrSolveOff && !slotted && loneHole
+		KerrSecondImageMap.ensureTexture()
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, if (perFrameSecond) KerrSecondImageMap.texture else KerrSlots.secondTexture)
 		GlStateManager._activeTexture(previous)
-		// Round a spinning hole only while the slots blend its secondary map (none solved per frame).
-		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || (slotted && KerrSlots.secondBlending))
+		// Round a spinning hole: its secondary map solved per frame, or the slots' blended one.
+		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || perFrameSecond || (slotted && KerrSlots.secondBlending))
 	}
 
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */

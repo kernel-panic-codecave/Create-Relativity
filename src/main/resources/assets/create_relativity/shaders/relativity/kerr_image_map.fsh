@@ -12,6 +12,8 @@ uniform int Layer;             // the radius layer drawn
 uniform int DebugMode;         // timing (GameTests): 1 stops after the Schwarzschild image, 2 skips the cold search
 uniform int RetryAll;          // 1 once the path table has settled: every earlier failure searches again
 uniform int Frame;             // counts frames: texels hidden last frame search again only every 8th, staggered
+uniform int SideCheck;         // 1: primary images must be on the point's own side of the hole (ownSide())
+uniform int Second;            // 1: secondary images (the light the long way round), from the Schwarzschild secondary
 
 layout(location = 0) out vec4 Result;
 layout(location = 1) out float PathPosition; // where along its path the image is, to start the next solve; 99 none
@@ -43,7 +45,26 @@ vec3 weakImage(vec3 game) {
     return dir;
 }
 
+// Whether a primary image of camera-relative point game (game axes) seen along dirGame is on the point's own side of
+// the hole: its angle round the hole on screen within SIDE_LIMIT of the point's own (both round the line from the
+// camera to the hole). A non-spinning hole's primary image is always exactly on that side; a spinning hole's is turned
+// a little by frame dragging. Near the axis behind the hole every point has images all round the Einstein ring, and a
+// solve that takes whichever it converges to puts neighbouring points on opposite sides: a triangle across the ring,
+// "vertex soup" that the pixel check can't catch (each fragment's point is imaged there, just on another branch).
+const float SIDE_LIMIT = 1.2; // radians
+// (A secondary image, the light the long way round, is on the far side: the same test against the opposite direction.)
+bool ownSide(vec3 dirGame, vec3 game) {
+    vec3 e = normalize(RelativityLensData[6].xyz);
+    vec3 imageSide = dirGame - dot(dirGame, e) * e;
+    vec3 pointSide = (game - RelativityLensData[6].xyz) - dot(game - RelativityLensData[6].xyz, e) * e;
+    // (Points almost on the axis, or images almost at the hole's centre: no side to keep.)
+    if (dot(imageSide, imageSide) < 1e-10 || dot(pointSide, pointSide) < 1e-6) return true;
+    float side = Second == 1 ? -1.0 : 1.0;
+    return acos(clamp(side * dot(normalize(imageSide), normalize(pointSide)), -1.0, 1.0)) < SIDE_LIMIT;
+}
+
 void main() {
+    relativityForceSecond = Second == 1;
     vec3 size = RELATIVITY_MAP_SIZE;
     ivec2 texel = ivec2(gl_FragCoord.xy);
     float azimuth = ((float(texel.x) + 0.5) / size.x - 0.5) * 6.28318530718;
@@ -109,7 +130,7 @@ void main() {
         warmV[count] = lastV;
         count += 1;
     }
-    if (image == 1 && SourceCount > 0) {
+    if (image == 1 && SourceCount > 0 && Second == 0) { // (the thin-lens guess is the primary image)
         seeds[count] = transpose(viewToGame) * weakImage(game);
         warmV[count] = 99.0;
         count += 1;
@@ -162,6 +183,7 @@ void main() {
     }
     if (RelativityLensData[1].w > 3.5 && RelativityLensData[1].w < 4.5 && found < 0 && image == 1) found = 0; // debug 4: failures at the Schwarzschild image
     if (RelativityLensData[1].w > 0.5 && RelativityLensData[1].w < 1.5 && found == 0) found = -1; // debug 1: only placed
+    if (found == 1 && SideCheck == 1 && !ownSide(viewToGame * kerr, game)) found = -1;
     if (found == 1) {
         Result = vec4((viewToGame * kerr - straight) / span, 1.0);
         PathPosition = v;

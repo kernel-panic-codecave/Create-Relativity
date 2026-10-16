@@ -39,6 +39,31 @@ class HoleDynamicsGameTest {
 	}
 
 	/**
+	 * A creative player held where the zombie above is spaghettified isn't stretched or hurt. (A FakePlayer driven
+	 * through the tidal step directly: a mock player joining the server trips another mod's login sync.)
+	 */
+	@GameTest(template = SMALL, batch = "relativity_creative", timeoutTicks = 140)
+	fun GameTestHelper.creativePlayerIsUnhurt() {
+		placeHole(Vec3(5.5, 3.0, 5.5), 2.0)
+		val player = net.neoforged.neoforge.common.util.FakePlayerFactory.get(level, com.mojang.authlib.GameProfile(java.util.UUID.randomUUID(), "relativity_creative"))
+		player.setGameMode(net.minecraft.world.level.GameType.CREATIVE)
+		val at = absoluteVec(Vec3(5.5, 3.0 - 0.975, 1.0)) // the zombie's spot: centre 4.5 blocks out
+		player.setPos(at)
+		var peak = 1.0
+		onEachTick {
+			player.setPos(at)
+			Spaghettification.tick(player, org.joml.Vector3d(at.x, at.y + player.bbHeight / 2.0, at.z))
+			peak = maxOf(peak, SpacetimeAttachments.bodyStretch.get(player))
+		}
+		runAfterDelay(100) {
+			assertTrue(player.isAlive && player.health == player.maxHealth) { "Creative player hurt (health ${player.health}, alive ${player.isAlive})" }
+			assertTrue(peak == 1.0) { "Creative player stretched (peak $peak)" }
+			clearHoles()
+			succeed()
+		}
+	}
+
+	/**
 	 * Regression for debris being flung out: loose debris launched on a circular orbit stays bound. Per-tick kicks
 	 * pumped energy into tight orbits; the sub-stepped integrator (plus disk drag) only lets it spiral inward.
 	 */

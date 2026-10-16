@@ -39,9 +39,9 @@ const vec3 RELATIVITY_MAP_SIZE = vec3(128.0, 64.0, 48.0); // KerrImageMap.WIDTH,
 // unrolled, and with the light steps and solves inlined into it the driver took tens of seconds to compile the programs
 // using them (35 s for the image map's).
 // Whether this draw places vertices at their secondary images ([11].y bit 2).
-bool relativitySecond() { return mod(RelativityLensData[11].y, 4.0) > 1.5; }
-
-
+// (Or relativityForceSecond: the image map solving secondary images, kerr_image_map.fsh.)
+bool relativityForceSecond = false;
+bool relativitySecond() { return relativityForceSecond || mod(RelativityLensData[11].y, 4.0) > 1.5; }
 
 int relativityRuntimeZero() { return int(min(RelativityLensData[1].w, 0.0)); }
 
@@ -163,7 +163,7 @@ vec2 relativityUnpackPair(float pair) {
 }
 
 // Path sample j (-14 .. 14: coming in, the closest approach at 0, going out) of the table's texel t: the angle round the
-// centre in its ray's plane, the offset out of it, the distance from the centre (unpacked: kerr_paths.fsh).
+// centre in its ray's plane, the elevation out of it (an angle), the distance from the centre (unpacked: kerr_paths.fsh).
 vec3 relativityPathSample(ivec2 t, int j) {
     vec2 raw;
     if (j == 0) {
@@ -186,29 +186,37 @@ vec3 relativityPathSample(ivec2 t, int j) {
     return vec3(raw.x, relativityUnpackPair(raw.y));
 }
 
+// A path sample (relativityPathSample) as a point (from the centre, game axes), in its ray's frame: e1 centre to camera,
+// side in the ray's plane, normal out of it.
+vec3 relativityPathPoint(vec3 s, vec3 e1, vec3 side, vec3 normal) {
+    return s.z * (cos(s.y) * (cos(s.x) * e1 + sin(s.x) * side) + sin(s.y) * normal);
+}
+
 // Texel t's path (kerr_paths.fsh) at position v (-14 .. 14 along its samples: coming in, the closest approach at 0,
-// going out): the angle round the centre in its ray's plane, the offset out of it and the distance from the centre
-// (Catmull-Rom). ok false where the texel has no usable path there.
-vec3 relativityPathAt(ivec2 t, float v, out bool ok) {
+// going out): the point (from the centre, game axes; Catmull-Rom through the samples as points: through the angles, the
+// pole of the ray's plane, where a spinning hole can swing light, would wrap them round). ok false where the texel has
+// no usable path there.
+vec3 relativityPathAt(ivec2 t, float v, vec3 e1, vec3 side, vec3 normal, out bool ok) {
     vec4 head = texelFetch(RelativityKerrPaths, ivec3(t, 0), 0);
     int status = int(floor(head.y / 8192.0));
     ok = status == 1 || (status == 2 && v <= 0.0);
     float base = clamp(floor(v), -14.0, 13.0);
     float f = v - base;
     int j = int(base);
-    vec3 p0 = relativityPathSample(t, max(j - 1, -14));
-    vec3 p1 = relativityPathSample(t, j);
-    vec3 p2 = relativityPathSample(t, j + 1);
-    vec3 p3 = relativityPathSample(t, min(j + 2, 14));
+    vec3 p0 = relativityPathPoint(relativityPathSample(t, max(j - 1, -14)), e1, side, normal);
+    vec3 p1 = relativityPathPoint(relativityPathSample(t, j), e1, side, normal);
+    vec3 p2 = relativityPathPoint(relativityPathSample(t, j + 1), e1, side, normal);
+    vec3 p3 = relativityPathPoint(relativityPathSample(t, min(j + 2, 14)), e1, side, normal);
     float f2 = f * f;
     float f3 = f2 * f;
     return 0.5 * (2.0 * p1 + (p2 - p0) * f + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * f2 + (3.0 * p1 - p0 - 3.0 * p2 + p3) * f3);
 }
 
-// How far texel t's path at v misses the point at direction n (from the hole, game axes) and radius rP: the angle round
-// the hole in its ray's plane (n's taken on the turn nearest the path's), the offset out of the plane, the radius / rP.
+// How far texel t's path at v misses the point at direction n (from the hole, game axes) and radius rP: the gap between
+// them in space, per unit of rP (game axes). (Not the radius and the angles round the hole apart: where the light passes
+// the point moving round the hole, its radius barely changes along it, and matching the radius first put the crossing a
+// tenth of a block or more along the path from a path only a hundredth of a block off: images ten pixels astray.)
 vec3 relativityPathMiss(ivec2 t, vec3 n, float rP, float v, out bool ok) {
-    vec3 path = relativityPathAt(t, v, ok);
     vec3 dir = relativityTableDir(vec2(t) + 0.5, RelativityLensData[7].zw, RelativityLensData[6].xyz, RelativityLensData[7].x);
     vec3 e1 = normalize(-RelativityLensData[6].xyz);
     vec3 normal = cross(e1, dir);
@@ -218,9 +226,8 @@ vec3 relativityPathMiss(ivec2 t, vec3 n, float rP, float v, out bool ok) {
     }
     normal = normalize(normal);
     vec3 side = cross(normal, e1);
-    float angle = atan(dot(n, side), dot(n, e1));
-    angle += 6.28318530718 * floor((path.x - angle) / 6.28318530718 + 0.5);
-    return vec3(path.x - angle, path.y - dot(n, normal), (path.z - rP) / rP);
+    vec3 at = relativityPathAt(t, v, e1, side, normal, ok);
+    return (at - rP * n) / rP;
 }
 
 // The miss at x = (table position in texels, path position v), bilinear between texels (wrapping round in azimuth).
@@ -295,17 +302,19 @@ bool relativityKerrSolve(inout vec3 x, vec3 n, float rP, out mat3 jacobian, out 
     return ok && dot(miss, miss) < 1e-6;
 }
 
+
 // The image's magnification at solution x (for the point at direction n, radius rP from the hole, camera distance
 // d): the point's area per texel squared unlensed over lensed. The solve's Jacobian, with the path position held to
 // the radius (the third residual), maps texels to directions round the hole; near a fold (where two images of the
 // ground meet and merge) it goes singular and the magnification blows up. 0 where it can't be measured.
 float relativityKerrMagnificationOf(mat3 jacobian, vec2 at, float rP, float d) {
-    // At the path's closest approach (v near 0) the radius barely moves with v, so it can't fix v: no measure (0).
-    if (abs(jacobian[2].z) < 1e-4) return 0.0;
-    // Column c, row r: d miss_r / d x_c. Eliminate x.z through the radius row.
-    vec2 cx = jacobian[0].xy - jacobian[2].xy * (jacobian[0].z / jacobian[2].z);
-    vec2 cy = jacobian[1].xy - jacobian[2].xy * (jacobian[1].z / jacobian[2].z);
-    float lensed = abs(cx.x * cy.y - cx.y * cy.x) * rP * rP;
+    // Column c: d miss / d x_c (the gap per unit of rP). The path position's column is the path's own direction at the
+    // point: the table position's columns, with that taken out, span the patch of space their texel's light covers there.
+    vec3 along = jacobian[2];
+    if (dot(along, along) < 1e-12) return 0.0;
+    vec3 cx = jacobian[0] - along * (dot(jacobian[0], along) / dot(along, along));
+    vec3 cy = jacobian[1] - along * (dot(jacobian[1], along) / dot(along, along));
+    float lensed = length(cross(cx, cy)) * rP * rP;
     // The texel's solid angle: its angle step times its azimuth step (both in radians).
     vec2 size = RelativityLensData[7].zw;
     float knee = relativityKneeAngle(RelativityLensData[6].xyz, RelativityLensData[7].x);
@@ -405,12 +414,36 @@ int relativityKerrImage(vec3 p, vec3 guess, float warmV, out vec3 seen, out floa
     return -1;
 }
 
+
+
 #endif
 
 // The Schwarzschild image of view-space point p: 1 with seen its view direction; 2 where there's nothing to bend
 // (no hole, too weak, or inside the radius: seen is p's own direction); -1 with no primary image (hidden behind the
 // hole). nearAxis: near the camera-hole line behind the hole (images round the Einstein ring at the azimuth of their
 // side of the line, so a triangle across it would be stretched over the whole ring).
+const float RELATIVITY_KERR_CUT_K = 0.12;
+
+// Whether view-space point p is within the axis cut of the camera-hole line (behindOnly: past the hole).
+bool relativityNearAxis(vec3 p, bool behindOnly) {
+    vec3 axis = RelativityLensData[0].xyz;
+    vec3 e1 = -normalize(axis); // hole to camera
+    vec3 from = p - axis;
+    float along = dot(from, e1);
+    if (behindOnly && along >= 0.0) return false;
+    float cut = relativityAxisCut();
+    // Round a spinning hole: a fraction of the Einstein radius at the point's distance behind the hole (where images
+    // are stretched more than about 1 / RELATIVITY_KERR_CUT_K times), the way the stretch grows: with the square root of
+    // the hole's size and of the distance behind it. (Not a fixed width: wider than needed by the hole, narrower far out.)
+    if (RelativityLensData[1].z > 0.5) {
+        float rc = length(RelativityLensData[0].xyz);
+        float behind = max(-along, 0.0);
+        float einstein = sqrt(2.0 * RelativityLensData[0].w * behind * rc / (rc + behind));
+        cut = max(0.25, RELATIVITY_KERR_CUT_K * einstein);
+    }
+    return length(from - along * e1) < cut;
+}
+
 int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
     seen = normalize(p);
     nearAxis = false;
@@ -437,7 +470,7 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
         // The secondary image: launched just outside the critical angle, toward the far side from p's, sweeping
         // 2 pi - phi. Near the camera-hole line on either side its images run all round the ring, as the primary's
         // do behind the hole.
-        nearAxis = rp * sideLength < relativityAxisCut();
+        nearAxis = relativityNearAxis(p, false);
         if (u0 >= 2.0 / 3.0) return -1; // inside the photon sphere: none tabled
         vec2 second = texture(RelativitySecondImages, (axes * (size - 1.0) + 0.5) / size).rg;
         if (second.g < 0.999) return -1;
@@ -448,7 +481,7 @@ int relativitySchwarzschildImage(vec3 p, out vec3 seen, out bool nearAxis) {
         return 1;
     }
     vec2 image = texture(RelativityImages, (axes * (size - 1.0) + 0.5) / size).rg;
-    nearAxis = cosPhi < 0.0 && rp * sideLength < relativityAxisCut();
+    nearAxis = relativityNearAxis(p, true);
     if (image.g < 0.5) return -1;
     float rcU = 1.0 / u0;
     float rpU = 1.0 / uP;
@@ -710,7 +743,10 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
         // render distance: far ones are slivers by the photon ring, cheap to draw; measured ~2 ms for all of them).
         float rp = length(p - hole);
         vec3 seen;
-        if (relativityFarImage(p, seen, false) != 1) {
+        // (Round a spinning hole, only what lies beyond the hole: nearer things' secondary images are slivers by the
+        // photon ring, under a pixel, and the per-frame map solves them poorly: a spray of shards round the shadow.)
+        bool spinNear = RelativityLensData[1].z > 0.5 && d < rc;
+        if (spinNear || relativityFarImage(p, seen, false) != 1) {
             vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
             hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
             return hidden;
