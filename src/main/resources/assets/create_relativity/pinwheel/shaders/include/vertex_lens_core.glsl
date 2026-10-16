@@ -589,7 +589,11 @@ int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
         }
     }
     float x = max(tan(min(alpha, 1.5)) / tan(alphaC), 1.15);
-    float tau = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(x, -(RELATIVITY_TWIST_FALLOFF.x + RELATIVITY_TWIST_FALLOFF.y * u0));
+    // (Both the twist and the pull onto the exact edge below were fitted to points behind the hole, whose light passes
+    // by it; a point on the camera's side of it, whose light doesn't, gets neither: they bent the base of the polar
+    // jets, which an exact render shows running straight into the shadow.)
+    float behind = smoothstep(-2.0 * rs, 2.0 * rs, dot(p - RelativityLensData[0].xyz, e));
+    float tau = -RELATIVITY_TWIST * spin * (-eGame.y) * pow(x, -(RELATIVITY_TWIST_FALLOFF.x + RELATIVITY_TWIST_FALLOFF.y * u0)) * behind;
     // (Rodrigues: seen turned by tau round e.)
     seen = normalize(seen * cos(tau) + cross(e, seen) * sin(tau) + e * dot(e, seen) * (1.0 - cos(tau)));
     // By the edge: the spinning shadow is flattened on its approaching side, the non-spinning one moved and turned is a
@@ -614,7 +618,7 @@ int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
             float own = uc + sqrt(max(uc * uc - dot(c, c) + r * r, 0.0));
             float here = rl / max(dot(seen, e), 1e-3);
             float q = here / own - 1.0;
-            float pull = exp(-max(q, 0.0) / RELATIVITY_EDGE_REACH);
+            float pull = exp(-max(q, 0.0) / RELATIVITY_EDGE_REACH) * behind;
             float moved = max(here + (tan(edge) - own) * pull, 0.0);
             seen = normalize(e + moved * radial);
         }

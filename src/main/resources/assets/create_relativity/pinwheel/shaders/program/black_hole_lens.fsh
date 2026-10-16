@@ -423,6 +423,10 @@ void main() {
     bool spinning = HoleCount > 0 && abs(HoleSpins[0].x) >= MIN_KERR_SPIN;
     if (!spinning && (ProfileFlags & 256) == 0) disk = diskSample(dir, sceneDist);
     if (DiskFillOnly == 1 && sceneDist < 1e29) disk = vec4(0.0);
+    // (Round a spinning hole the mesh is placed by the approximated lens and this by the coarse Kerr table: they don't
+    // meet, and what's filled here shows as speckle where rays graze the disk's plane and as arcs of images the mesh
+    // doesn't draw. While the mesh draws the disk this pass adds none of it there.)
+    if (DiskFillOnly == 1 && spinning) disk = vec4(0.0);
     // Alpha marks what this pass made (lens_aa.fsh smooths and sharpens just those): 1 where the world's own pixel stands.
     bool made = disk.a > 0.0 || (sceneDist >= 1e29 && hit.outcome != SCENE_UNBENT && hit.outcome != 0) || scene != original.rgb;
     fragColor = vec4(mix(scene, disk.rgb, disk.a), made ? 0.5 : 1.0);
