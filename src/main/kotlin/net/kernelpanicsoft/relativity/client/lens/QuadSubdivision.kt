@@ -114,7 +114,7 @@ object QuadSubdivision {
 	/** At most this many pieces a side. */
 	const val AXIS_MAX_LEVEL = 32
 	/** The tube's far end, AXIS_PIVOT blocks behind the hole, may move this far (blocks) before its sections are rebuilt. */
-	private const val AXIS_TOLERANCE = 0.75
+	private const val AXIS_TOLERANCE = 0.2
 	private const val AXIS_PIVOT = 64.0
 
 	/**
@@ -142,6 +142,18 @@ object QuadSubdivision {
 	 * whose chord strays from the ring by R (1 - cos(pi / 64)): about a pixel for a ring of 800 px.
 	 */
 	const val POLAR_REACH = 0.75
+
+	/** Of the Einstein radius at a point's distance along the axis, how far round the axis it's split polar (at least
+	 * [POLAR_REACH]): the region stretched too hard for a grid grows with that radius. vertex_lens_core.glsl's
+	 * relativityPolarReach. */
+	const val POLAR_EINSTEIN = 0.15
+
+	/** How far round [a]'s axis (blocks) faces are split polar, at [along] blocks from the hole along it (either way). */
+	fun polarReach(a: DoubleArray, rc: Double, along: Double): Double {
+		val d = kotlin.math.abs(along)
+		val einstein = sqrt(2.0 * a[6] * d * rc / (rc + d))
+		return maxOf(POLAR_REACH, POLAR_EINSTEIN * einstein)
+	}
 	const val POLAR_SLICES = 64
 	const val POLAR_INNER = 0.004
 
@@ -499,7 +511,8 @@ class QuadSubdivider : VertexConsumer {
 		val area = kotlin.math.abs(det)
 		// (A face nearly along the axis: its pieces wouldn't be small round it anyway.)
 		if (area < 1e-4 * (sx * sx + sy * sy + tx * tx + ty * ty)) return false
-		if (distanceToOrigin(across) > QuadSubdivision.POLAR_REACH) return false
+		val reach = QuadSubdivision.polarReach(a, length, behind)
+		if (distanceToOrigin(across) > reach) return false
 		// Edges whose face across (the next face in the plane) is split on a grid, not round the axis: the cells'
 		// points on them go to that grid's ([edgeLevels]), so the two meet without T-junctions. (Between two faces split
 		// round the axis the cells' points on the shared edge are the same already.)
@@ -507,7 +520,7 @@ class QuadSubdivider : VertexConsumer {
 		val shifts = arrayOf(doubleArrayOf(-sx, -sy), doubleArrayOf(tx, ty), doubleArrayOf(sx, sy), doubleArrayOf(-tx, -ty))
 		for (e in 0..3) {
 			val shifted = DoubleArray(8) { across[it] + shifts[e][it % 2] }
-			snapEdges[e] = if (distanceToOrigin(shifted) > QuadSubdivision.POLAR_REACH) levels[e] else 0
+			snapEdges[e] = if (distanceToOrigin(shifted) > reach) levels[e] else 0
 		}
 		var outer = 0.0
 		for (k in 0..3) outer = maxOf(outer, sqrt(across[k * 2] * across[k * 2] + across[k * 2 + 1] * across[k * 2 + 1]))

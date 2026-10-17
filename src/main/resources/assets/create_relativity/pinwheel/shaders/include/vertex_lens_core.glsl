@@ -1409,7 +1409,9 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
             hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
             return hidden;
         }
-        return proj * vec4(seen * (rc + rp), 1.0);
+        // (Plus the way round, ~2 r_s: for points by the axis behind the hole rc + rp is their straight distance too, the
+        // primary image's depth, and where the two overlap by the Einstein ring they fought: flickering as the camera moved.)
+        return proj * vec4(seen * (rc + rp + 2.0 * RelativityLensData[0].w), 1.0);
     }
     bool holeCentre = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 0.5;
     float nearness = holeCentre ? smoothstep(RELATIVITY_NEAR * rc, RELATIVITY_NEAR_BLEND * rc, d) : 1.0;
@@ -1453,6 +1455,15 @@ vec4 relativityLens(vec4 clip, mat4 proj) {
 // march) and the check is skipped: too costly per pixel, and not needed there.
 const float RELATIVITY_PIXEL_SLACK = 6.0;
 const float RELATIVITY_POLAR_REACH = 0.75; // QuadSubdivision.POLAR_REACH
+const float RELATIVITY_POLAR_EINSTEIN = 0.15; // QuadSubdivision.POLAR_EINSTEIN
+// How far round the axis (blocks) faces by p are split polar (QuadSubdivision.polarReach): at least
+// RELATIVITY_POLAR_REACH, more with the Einstein radius at p's distance along the axis.
+float relativityPolarReach(vec3 p) {
+    vec3 hole = RelativityLensData[0].xyz;
+    float rc = length(hole);
+    float d = abs(dot(p - hole, normalize(hole)));
+    return max(RELATIVITY_POLAR_REACH, RELATIVITY_POLAR_EINSTEIN * sqrt(2.0 * RelativityLensData[0].w * d * rc / (rc + d)));
+}
 const float RELATIVITY_AXIS_SLACK = 40.0;
 
 // Whether the lens bends draws made with projection proj (the level's, with lensing on): those carry the check.
@@ -1476,7 +1487,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // loosely, which still catches a face straddling the axis (with the camera moving, before the split catches up):
     // drawn straight across the ring, off by hundreds of pixels.
     bool schwarzschildLike = RelativityLensData[1].z < 0.5 || RelativityLensData[7].y > 2.5;
-    float slack = schwarzschildLike && !relativitySecond() && relativityByAxis(unbent, RELATIVITY_POLAR_REACH) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
+    float slack = schwarzschildLike && !relativitySecond() && relativityByAxis(unbent, relativityPolarReach(unbent)) ? RELATIVITY_AXIS_SLACK : RELATIVITY_PIXEL_SLACK;
     vec3 seen;
     int image = relativityFarImage(unbent, seen, false);
     if (image == 2) return false;
