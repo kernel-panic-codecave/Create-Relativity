@@ -128,6 +128,8 @@ class LensClientGameTest {
 				"side" to "-14.5 -54 0.5 -90 10",      // level with the hole, looking at it
 				"above" to "-9.5 -46 0.5 -90 45",      // above and to the side, looking down at it
 				"offscreen" to "-4.5 -48 8.5 -160 75", // looking down with the hole just off-screen
+				"offaxis" to "-8.586 -54 2.658 -142.6 7.5", // close, past the hole's side: the Einstein ring off-axis
+				"under" to "-17.651 -50.12229 4.946 -81.9 32.7", // above, a pillar under the hole in front of its shadow
 			)
 			for (spin in listOf(0.0, 0.9)) for ((pose, at) in plain) lensPose("${pose}_spin$spin", spin, at, failures)
 			// A busier world: more surfaces off screen and behind others, where the voxel grid answers.

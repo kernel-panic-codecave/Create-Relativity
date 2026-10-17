@@ -37,20 +37,38 @@ object QuadSubdivision {
 	private const val NEAR_SCALE = 48.0
 	private const val NEAR_REACH = 8.0
 
-	/** vertex_lens_core.glsl's RELATIVITY_CAUSTIC_SHIFT: how far (in shifts) an approximated spinning hole's lens is moved by its ring. */
-	private const val CAUSTIC_SHIFT = 1.2
+	/** vertex_lens_core.glsl's RELATIVITY_SHIFT_GROWTH. */
+	private const val SHIFT_GROWTH = 0.65
 
-	/** Where [hole]'s Einstein-ring axis runs through, seen from the camera: its centre, moved for an approximated spinning hole. */
-	private fun causticCentre(hole: DoubleArray, camX: Double, camY: Double, camZ: Double): Triple<Double, Double, Double> {
+	/**
+	 * The approximated spinning hole's lens shift, -a (up x e) (world; zeros for a hole without spin or exactly lensed):
+	 * relativityCausticCentre moves the centre by (1 + grow) of it, grow from the point's Einstein angle ([centreAt]).
+	 */
+	private fun shiftOf(hole: DoubleArray, camX: Double, camY: Double, camZ: Double): DoubleArray {
 		val spin = hole.getOrElse(4) { 0.0 }
-		if (spin == 0.0 || !VertexLens.kerrApprox) return Triple(hole[0], hole[1], hole[2])
+		if (spin == 0.0 || !VertexLens.kerrApprox) return DoubleArray(3)
 		var ex = hole[0] - camX
 		var ez = hole[2] - camZ
 		val n = sqrt(ex * ex + (hole[1] - camY) * (hole[1] - camY) + ez * ez).coerceAtLeast(1e-9)
 		ex /= n; ez /= n
-		// -a (up x e), a = spin M = spin r_s / 2; up x e = (e.z, 0, -e.x).
 		val a = spin * 0.5 * hole[3]
-		return Triple(hole[0] - CAUSTIC_SHIFT * a * ez, hole[1], hole[2] + CAUSTIC_SHIFT * a * ex)
+		return doubleArrayOf(-a * ez, 0.0, a * ex)
+	}
+
+	/** Where the axis tube [a]'s Einstein-ring axis runs through for world point (x, y, z): vertex_lens_core.glsl's
+	 * relativityCausticCentre. */
+	fun centreAt(a: DoubleArray, x: Double, y: Double, z: Double): DoubleArray {
+		if (a[10] == 0.0 && a[12] == 0.0) return doubleArrayOf(a[3], a[4], a[5])
+		val ux = a[3] - a[0]; val uy = a[4] - a[1]; val uz = a[5] - a[2]
+		val rc = sqrt(ux * ux + uy * uy + uz * uz).coerceAtLeast(1e-9)
+		val behind = maxOf(((x - a[3]) * ux + (y - a[4]) * uy + (z - a[5]) * uz) / rc, 1e-3)
+		val rs = a[6]
+		val u0 = minOf(rs / rc, 0.999)
+		val critical = kotlin.math.asin(minOf(2.59807621 * u0 * sqrt(1 - u0), 1.0))
+		val alphaC = kotlin.math.atan2(kotlin.math.sin(critical), kotlin.math.cos(critical) * sqrt(1 - u0))
+		val einstein = sqrt(2 * rs * behind / (rc * (rc + behind)))
+		val grow = SHIFT_GROWTH * Math.pow(alphaC / maxOf(einstein, alphaC), 1.5 + 9 * u0)
+		return DoubleArray(3) { a[3 + it] + (1 + grow) * a[10 + it] }
 	}
 
 	/**
@@ -129,15 +147,16 @@ object QuadSubdivision {
 
 	/** Distance from world point (x, y, z) to the axis behind the hole (null if not beside that stretch of it). */
 	private fun axisDistance(a: DoubleArray, x: Double, y: Double, z: Double): Double? {
-		var ux = a[3] - a[0]
-		var uy = a[4] - a[1]
-		var uz = a[5] - a[2]
+		val c = centreAt(a, x, y, z)
+		var ux = c[0] - a[0]
+		var uy = c[1] - a[1]
+		var uz = c[2] - a[2]
 		val length = sqrt(ux * ux + uy * uy + uz * uz)
 		if (length < 1e-6) return null
 		ux /= length; uy /= length; uz /= length
-		val dx = x - a[3]
-		val dy = y - a[4]
-		val dz = z - a[5]
+		val dx = x - c[0]
+		val dy = y - c[1]
+		val dz = z - c[2]
 		val t = dx * ux + dy * uy + dz * uz
 		// (Both ways: behind the hole, the primary images' Einstein ring; through the camera and on behind it, the
 		// secondary images' one.)
@@ -239,10 +258,10 @@ object QuadSubdivision {
 			val k = AXIS_K * sqrt(sqrt(minOf(2.0 * it[3] / distance, 1.0)))
 			// Out to where n falls to 2, and to the render distance behind the hole.
 			val reach = minecraft.options.effectiveRenderDistance * 16.0 + 16.0
-			// (Round an approximated spinning hole, the axis of the moved centre it's lensed round there:
-			// vertex_lens_core.glsl relativityCausticCentre.)
-			val (cx, cy, cz) = causticCentre(it, camera.x, camera.y, camera.z)
-			doubleArrayOf(camera.x, camera.y, camera.z, cx, cy, cz, it[3], k, 0.5 * k, reach)
+			// (Round an approximated spinning hole, the axis of the moved centre it's lensed round there, per point:
+			// [centreAt], from the shift kept at 10..12.)
+			val shift = shiftOf(it, camera.x, camera.y, camera.z)
+			doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3], k, 0.5 * k, reach, shift[0], shift[1], shift[2])
 		}
 		val old = appliedAxis
 		if (now == null && old == null) return
@@ -441,9 +460,12 @@ class QuadSubdivider : VertexConsumer {
 	 */
 	private fun polar(): Boolean {
 		val a = QuadSubdivision.polarAxis() ?: return false
-		var ux = a[3] - a[0]
-		var uy = a[4] - a[1]
-		var uz = a[5] - a[2]
+		// (The axis through the centre the quad's own points are lensed round: QuadSubdivision.centreAt.)
+		val c = QuadSubdivision.centreAt(a, originX + (position[0] + position[3] + position[6] + position[9]) / 4.0,
+			originY + (position[1] + position[4] + position[7] + position[10]) / 4.0, originZ + (position[2] + position[5] + position[8] + position[11]) / 4.0)
+		var ux = c[0] - a[0]
+		var uy = c[1] - a[1]
+		var uz = c[2] - a[2]
 		val length = sqrt(ux * ux + uy * uy + uz * uz)
 		if (length < 1e-6) return false
 		ux /= length; uy /= length; uz /= length
@@ -460,9 +482,9 @@ class QuadSubdivider : VertexConsumer {
 		val across = DoubleArray(8)
 		var behind = 0.0
 		for (k in 0..3) {
-			val dx = originX + position[k * 3] - a[3]
-			val dy = originY + position[k * 3 + 1] - a[4]
-			val dz = originZ + position[k * 3 + 2] - a[5]
+			val dx = originX + position[k * 3] - c[0]
+			val dy = originY + position[k * 3 + 1] - c[1]
+			val dz = originZ + position[k * 3 + 2] - c[2]
 			behind += (dx * ux + dy * uy + dz * uz) / 4.0
 			across[k * 2] = dx * ax + dy * ay + dz * az
 			across[k * 2 + 1] = dx * cx + dy * cy + dz * cz

@@ -17,6 +17,7 @@ object RelativityCommands {
 		event.dispatcher.register(
 			Commands.literal("relativity").requires { it.hasPermission(2) }
 				.then(blackHole())
+			.then(testScene())
 				.then(Commands.literal("clock")
 					.then(Commands.argument("pos", net.minecraft.commands.arguments.coordinates.BlockPosArgument.blockPos())
 						.executes(::clock)))
@@ -60,6 +61,35 @@ object RelativityCommands {
 				ctx.source.sendSuccess({ Component.translatable("commands.create_relativity.bh.cleared", removed) }, true)
 				removed
 			})
+
+	/**
+	 * The lens tests' scenes built where they are in the tests, to look round by hand: `ground` is groundAroundHole's
+	 * (a superflat world's ground at y -61: a white and blue checkerboard of 2-block squares 65 blocks across, red pillars
+	 * every 8 blocks, a hole of r_s 2 and the given spin at (0.5, -54, 0.5)). The player is put at its side pose.
+	 */
+	private fun testScene(): LiteralArgumentBuilder<CommandSourceStack> =
+		Commands.literal("testscene").requires { it.hasPermission(2) }
+			.then(Commands.literal("ground")
+				.executes { groundScene(it, 0.9) }
+				.then(Commands.argument("spin", DoubleArgumentType.doubleArg(-BlackHole.MAX_SPIN, BlackHole.MAX_SPIN))
+					.executes { groundScene(it, DoubleArgumentType.getDouble(it, "spin")) }))
+
+	private fun groundScene(ctx: CommandContext<CommandSourceStack>, spin: Double): Int {
+		val level = ctx.source.level
+		val white = net.minecraft.world.level.block.Blocks.WHITE_CONCRETE.defaultBlockState()
+		val blue = net.minecraft.world.level.block.Blocks.BLUE_CONCRETE.defaultBlockState()
+		val red = net.minecraft.world.level.block.Blocks.RED_CONCRETE.defaultBlockState()
+		for (x in -32..32) for (z in -32..32) {
+			val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) white else blue
+			level.setBlock(net.minecraft.core.BlockPos(x, -61, z), block, 2)
+		}
+		for (x in -24..24 step 8) for (z in -24..24 step 8) for (y in -60..-58) level.setBlock(net.minecraft.core.BlockPos(x, y, z), red, 2)
+		SpacetimeField.removeBlackHoles(level) { true }
+		SpacetimeField.addBlackHole(level, BlackHole(x = 0.5, y = -54.0, z = 0.5, schwarzschildRadius = 2.0, spin = spin))
+		ctx.source.player?.teleportTo(level, -14.5, -54.0, 0.5, -90f, 10f)
+		ctx.source.sendSuccess({ Component.literal("Ground test scene built (spin %s)".format(fmt(spin))) }, true)
+		return 1
+	}
 
 	private fun create(ctx: CommandContext<CommandSourceStack>, spin: Double): Int {
 		val pos = Vec3Argument.getVec3(ctx, "pos")

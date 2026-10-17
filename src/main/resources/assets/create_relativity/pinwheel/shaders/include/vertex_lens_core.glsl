@@ -449,22 +449,31 @@ bool relativityNearAxis(vec3 p, bool behindOnly, vec3 hole) {
     return length(from - along * e1) < cut;
 }
 
-// Where the lens's Einstein-ring axis runs through: the hole, or round an approximated spinning hole the centre it's
-// lensed round there (relativityKerrApprox: moved by shift, grown by about RELATIVITY_CAUSTIC_SHIFT by the ring).
-const float RELATIVITY_CAUSTIC_SHIFT = 1.2; // QuadSubdivision.CAUSTIC_SHIFT
-vec3 relativityCausticCentre() {
+// Where the lens's Einstein-ring axis runs through for view-space point p: the hole, or round an approximated spinning
+// hole the centre relativityKerrApprox lenses p round: moved by (1 + grow) shift, grow its growth at p's Einstein
+// angle (where p's images sit when it's by the axis: sqrt(2 r_s D / (r_c (r_c + D))), D p's distance behind the hole).
+const float RELATIVITY_SHIFT_GROWTH_AXIS = 0.65; // RELATIVITY_SHIFT_GROWTH (declared further down)
+vec3 relativityCausticCentre(vec3 p) {
     vec3 hole = RelativityLensData[0].xyz;
     if (RelativityLensData[1].z < 0.5 || RelativityLensData[7].y < 2.5) return hole;
     mat3 viewToGame = mat3(RelativityLensData[8].xyz, RelativityLensData[9].xyz, RelativityLensData[10].xyz);
     vec3 eGame = normalize(RelativityLensData[6].xyz);
-    vec3 shift = transpose(viewToGame) * (-RelativityLensData[6].w * 0.5 * RelativityLensData[0].w * cross(vec3(0.0, 1.0, 0.0), eGame));
-    return hole + RELATIVITY_CAUSTIC_SHIFT * shift;
+    float rs = RelativityLensData[0].w;
+    float rc = length(hole);
+    vec3 shift = transpose(viewToGame) * (-RelativityLensData[6].w * 0.5 * rs * cross(vec3(0.0, 1.0, 0.0), eGame));
+    float behind = max(dot(p - hole, normalize(hole)), 0.0);
+    float u0 = min(rs / rc, 0.999);
+    float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+    float alphaC = atan(sin(critical), cos(critical) * sqrt(1.0 - u0));
+    float einstein = sqrt(2.0 * rs * max(behind, 1e-3) / (rc * (rc + behind)));
+    float grow = RELATIVITY_SHIFT_GROWTH_AXIS * pow(alphaC / max(einstein, alphaC), 1.5 + 9.0 * u0);
+    return hole + (1.0 + grow) * shift;
 }
 
 // Whether view-space point p lies within reach (blocks) of the Einstein-ring axis behind the hole (either way for
 // secondary images).
 bool relativityByAxis(vec3 p, float reach) {
-    vec3 centre = relativityCausticCentre();
+    vec3 centre = relativityCausticCentre(p);
     vec3 e1 = -normalize(centre);
     vec3 from = p - centre;
     float along = dot(from, e1);
@@ -573,12 +582,16 @@ int relativityKerrApprox(vec3 p, out vec3 seen, out bool nearAxis) {
     float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
     float alphaC = atan(sin(critical), cos(critical) * sqrt(1.0 - u0));
     float alpha = acos(clamp(dot(seen, e), -1.0, 1.0));
+    // (The growth's angle measured from the moved lens's centre, round which a point by the axis is imaged as a ring:
+    // from the hole's own direction it differed round that ring, and so did the displacement: the ring had no one axis
+    // for the polar split to centre on (QuadSubdivision.centreAt, relativityCausticCentre, which assume this).)
+    float alphaLens = acos(clamp(dot(seen, normalize(RelativityLensData[0].xyz + shift)), -1.0, 1.0));
     // Toward the ring the displacement grows (the spinning shadow sits about 2 a sin i over, twice the far-field lens's):
     // 1 + 0.65 (alpha_c / alpha)^n, n = 1.5 + 9 r_s / r_c: fitted to the best displacement per band against the exact
     // images over spins 0.3-0.9, camera distances 4-20 r_s and view angles 0.7-1.5 rad (0.65 the same for all of them;
     // the fall-off slower the farther the camera); the image once more with it.
     float falloff = 1.5 + 9.0 * rs / length(RelativityLensData[0].xyz);
-    float grow = RELATIVITY_SHIFT_GROWTH * pow(alphaC / max(alpha, alphaC), falloff);
+    float grow = RELATIVITY_SHIFT_GROWTH * pow(alphaC / max(alphaLens, alphaC), falloff);
     if (grow > 0.01) {
         vec3 again;
         bool nearAgain;

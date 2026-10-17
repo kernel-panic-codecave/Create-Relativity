@@ -65,14 +65,18 @@ object HorizonMesh {
 		try {
 			val consumer = buffers.getBuffer(RenderType.beaconBeam(TEXTURE, false))
 			val pose = PoseStack().last()
-			// A fan of quads from the hole's centre (each a degenerate quad: centre, two outline points, centre).
+			// A fan of quads from the hole's centre (each a degenerate quad: centre, two outline points, centre), set back
+			// [SHADOW_BEHIND] r_s past the hole's centre: light falling in passes things on its way that lie a little
+			// beyond the centre (a block under the hole), which must stay in front of the shadow, as they are.
 			val cx = (-rx).toFloat()
 			val cy = (-ry).toFloat()
 			val cz = (-rz).toFloat()
+			val depth = rc + SHADOW_BEHIND * hole.schwarzschildRadius
+			val back = (depth / rc).toFloat()
 			for (k in directions.indices) {
 				val d0 = directions[k]
 				val d1 = directions[(k + 1) % directions.size]
-				val quad = listOf(Triple(cx, cy, cz), Triple(d0[0] * rc, d0[1] * rc, d0[2] * rc), Triple(d1[0] * rc, d1[1] * rc, d1[2] * rc), Triple(cx, cy, cz))
+				val quad = listOf(Triple(cx * back, cy * back, cz * back), Triple(d0[0] * depth, d0[1] * depth, d0[2] * depth), Triple(d1[0] * depth, d1[1] * depth, d1[2] * depth), Triple(cx * back, cy * back, cz * back))
 				// (Both windings: whichever way the render type culls.)
 				for ((x, y, z) in quad + quad.reversed()) {
 					consumer.addVertex(pose, x.toFloat(), y.toFloat(), z.toFloat()).setColor(0, 0, 0, 255).setUv(0f, 0f).setLight(0xF000F0).setNormal(0f, 1f, 0f)
@@ -87,6 +91,9 @@ object HorizonMesh {
 			com.mojang.blaze3d.systems.RenderSystem.applyModelViewMatrix()
 		}
 	}
+
+	/** How far behind the hole's centre (r_s) the shadow is drawn. */
+	private const val SHADOW_BEHIND = 2.0
 
 	/** Draws the photon ring round the shadow. */
 	@JvmField
@@ -136,7 +143,7 @@ object HorizonMesh {
 				val along = d[0] * e[0] + d[1] * e[1] + d[2] * e[2]
 				val v = DoubleArray(3) { e[it] + (d[it] / along - e[it]) * (1 + offset) }
 				val n = sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
-				return DoubleArray(3) { v[it] / n * rc }
+				return DoubleArray(3) { v[it] / n * (rc + SHADOW_BEHIND * hole.schwarzschildRadius) } // (behind what's in front of the shadow, as it)
 			}
 			for (band in 0 until RING_OFFSETS.size - 1) {
 				val quad = listOf(0 to band, 1 to band, 1 to band + 1, 0 to band + 1)
