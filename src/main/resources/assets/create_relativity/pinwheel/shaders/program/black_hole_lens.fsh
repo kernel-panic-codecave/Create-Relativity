@@ -404,6 +404,24 @@ void main() {
         return;
     }
     float sceneDist = sceneDistance(texCoord);
+    // Sources the field lens has modules for (vertex_lens_core.glsl), any number: the geometry is already where its
+    // light appears; the sky the light leaving each sky pixel ends on, or the shadow where a source captures it (exact
+    // to the horizon: it closes round a camera falling in). Nothing marched, no tables built.
+    if (relativityFieldCount() >= 1) {
+        vec3 scene = original.rgb;
+        if (sceneDist >= 1e29) {
+            vec3 escape;
+            vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
+            if (relativityFieldSky(viewDir, escape)) scene = skyAt(normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz));
+            else scene = vec3(0.0);
+        }
+        // (The nearest hole's disk as before, for now.)
+        vec4 fieldDisk = vec4(0.0);
+        if (HoleCount > 0 && (ProfileFlags & 256) == 0) fieldDisk = diskSample(dir, sceneDist);
+        if (DiskFillOnly == 1 && sceneDist < 1e29) fieldDisk = vec4(0.0);
+        fragColor = vec4(mix(scene, fieldDisk.rgb, fieldDisk.a), fieldDisk.a > 0.0 || scene != original.rgb ? 0.5 : 1.0);
+        return;
+    }
     // (timing: 2048 leaves drawn pixels as drawn, 4096 sky pixels)
     if ((sceneDist < 1e29 && (ProfileFlags & 2048) != 0) || (sceneDist >= 1e29 && (ProfileFlags & 4096) != 0)) {
         fragColor = original;

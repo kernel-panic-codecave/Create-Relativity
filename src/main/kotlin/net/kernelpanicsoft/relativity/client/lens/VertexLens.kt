@@ -62,6 +62,13 @@ object VertexLens {
 	/** Whether this frame's sources are composed in the shaders (the field lens): several, of the kinds it has modules for. */
 	var composed = false
 		private set
+
+	/**
+	 * Whether the post pass draws this frame's sky and shadows by the field lens (sources it has modules for, any
+	 * number): the shadow then closes round a camera falling in, and HorizonMesh stands down.
+	 */
+	var fieldSky = false
+		private set
 	private const val KERR_SAMPLER = "RelativityKerrPaths"
 
 	/** The Kerr image map's sampler (KerrImageMap), on the unit below the path table's. */
@@ -210,7 +217,7 @@ object VertexLens {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
 			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame) {
-				HorizonMesh.draw(hole, event.modelViewMatrix)
+				if (!fieldSky) HorizonMesh.draw(hole, event.modelViewMatrix)
 				DiskMesh.draw(hole, event.modelViewMatrix)
 				JetMesh.draw(hole, event.modelViewMatrix)
 			}
@@ -268,10 +275,12 @@ object VertexLens {
 		val (count, general) = BlackHoleLens.packSources(holes, others, camera, sources)
 		// Several sources the field lens has modules for (non-spinning holes, masses): composed in the shaders, with
 		// nothing traced or solved per frame.
-		val fieldWanted = holes.size + others.size > 1 && holes.all { abs(it.spin) < MIN_KERR_SPIN } &&
+		val fieldCapable = holes.size + others.size >= 1 && holes.all { abs(it.spin) < MIN_KERR_SPIN } &&
 			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass } && fieldLens
+		val fieldWanted = fieldCapable && holes.size + others.size > 1
 		if (!perspective) {
 			composed = fieldWanted
+			fieldSky = fieldCapable
 			fieldSources = (holes + others).sortedBy { s ->
 				when (s) {
 					is BlackHole -> s.center.distanceToSqr(camera)
@@ -578,11 +587,11 @@ object VertexLens {
 	}
 
 	/**
-	 * [28..44]: the field lens's sources (vertex_lens_core.glsl's relativityFieldCount and on), when [composed]: each
+	 * [28..44]: the field lens's sources (vertex_lens_core.glsl's relativityFieldCount and on), when [fieldSky]: each
 	 * centre in view space and its type (1 hole, 2 mass), then its parameters (hole: r_s; mass: mass, softening).
 	 */
 	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
-		val sources = if (composed) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
+		val sources = if (fieldSky) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
 		data.put(sources.size.toFloat()).put(FIELD_EVALUATIONS.toFloat()).put(0f).put(0f)
 		for (source in sources) {
 			val (centre, type, params) = when (source) {

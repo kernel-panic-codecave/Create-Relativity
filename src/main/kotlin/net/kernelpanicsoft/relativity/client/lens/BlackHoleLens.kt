@@ -344,7 +344,7 @@ object BlackHoleLens {
 		uploadDisk(::uniform, level, holes.firstOrNull(), minecraft)
 		uniform("HoleCount") { setInt(holes.size) }
 		// A lone hole's shadow is drawn as geometry (HorizonMesh, exact, following the camera): this pass leaves it be.
-		uniform("ShadowDrawn") { setInt(if (HorizonMesh.enabled && VertexLens.loneHole && holes.isNotEmpty()) 1 else 0) }
+		uniform("ShadowDrawn") { setInt(if (HorizonMesh.enabled && VertexLens.loneHole && holes.isNotEmpty() && !VertexLens.fieldSky) 1 else 0) }
 		uniform("Holes") { setVectors(*holeUniforms) }
 		uniform("HoleSpins") { setVectors(*spinUniforms) }
 		val (sourceCount, general) = packSources(holes, visibleSources(level), camera, sourceUniforms)
@@ -414,6 +414,8 @@ object BlackHoleLens {
 			it.setTexture("RelativityKerrPaths", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
 			KerrImageMap.ensureTexture()
 			it.setTexture("RelativityKerrMap", GL12.GL_TEXTURE_3D, KerrImageMap.texture)
+			// (The field lens's holes: the escape table, here as the vertex shaders read it.)
+			escapeTexture().takeIf { id -> id != 0 }?.let { id -> it.setTexture("RelativityEscape", GL11.GL_TEXTURE_2D, id) }
 			// (Every 3D sampler it declares needs a 3D texture, even unread: one left on unit 0, with the block atlas
 			// there, invalidates the draw, and the frame shows the atlas.)
 			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
