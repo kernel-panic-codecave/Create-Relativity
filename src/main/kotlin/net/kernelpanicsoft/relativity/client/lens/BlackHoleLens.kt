@@ -254,6 +254,9 @@ object BlackHoleLens {
 		timerFrame += 1
 	}
 
+	/** The escape table's texture (GL_TEXTURE_2D: SchwarzschildLens.buildTable), or 0 until it's built. */
+	fun escapeTexture(): Int = if (textureReady) Minecraft.getInstance().textureManager.getTexture(LOOKUP_TEXTURE).id else 0
+
 	/** Holes close enough to bend light noticeably as seen from the camera. */
 	fun visibleHoles(level: Level): List<BlackHole> {
 		val camera = Minecraft.getInstance().gameRenderer.mainCamera.position

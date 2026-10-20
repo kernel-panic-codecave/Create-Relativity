@@ -16,8 +16,9 @@
 //      radius (blocks)
 // [12..27] an approximated lone spinning hole's exact shadow edge (HorizonMesh.edges): its angle from the hole at 64
 //      azimuths round it (relativityShadowEdge), all 0 when there's none
+// [28..44] the field lens's sources (relativityFieldCount and on)
 layout(std140) uniform RelativityLens {
-    vec4 RelativityLensData[28];
+    vec4 RelativityLensData[45];
 };
 uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sqrt u0, sqrt uP, phi / pi): r the
                                     // launch-angle correction, g whether there's an image (interpolated)
@@ -28,6 +29,8 @@ uniform sampler2DArray RelativityKerrPaths; // KerrPaths' table (kerr_paths.fsh)
                                             // spinning hole, as seen from the hole
 uniform sampler3D RelativityKerrSecondMap; // KerrSlots' secondary-image map (as RelativityKerrMap: the light the long way
                                            // round), for spinning holes' secondary images
+uniform sampler2D RelativityEscape; // SchwarzschildLens' escape table (BlackHoleLens's LUT): (sqrt u0, sqrt(psi / pi)) to
+                                    // the escape angle and whether the light falls in; the field lens's holes
 uniform sampler3D RelativityKerrMap; // KerrImageMap (kerr_image_map.fsh): per point round a spinning hole, how its image
                                      // is turned from the straight line of sight per block of its distance (rgb, game
                                      // axes), a 1 where it has one
@@ -1300,6 +1303,289 @@ const float RELATIVITY_NEAR_BLEND = 0.35;
 // near its axis, or at a fold).
 // probe: also hide p where its image moves far faster than it (the stretch cut, three more map lookups: per vertex; the
 // pixel check, per pixel, leaves it out).
+// ---- The field lens: every source composed along the light (physics-core's FieldLens, which this mirrors) ----
+// Light runs straight between sources. Each source is a module: passed exactly from the stretch where the light
+// reaches it (a hole: its orbit, from the escape table RelativityEscape), and acting weakly (closed form) on the
+// stretches before; when a later source turns the light, those already passed have their weak tails moved onto the
+// new line. A point's image: Newton's method on that composition, the point's nearest source aiming the last stretch
+// exactly (a hole: its image tables). No marching, nothing built per frame. View space; directions are coordinate
+// tangents of the light's path (the camera's own directions, as the rest of the lens takes them).
+// [28] x: how many sources, y: how many misses relativityFieldImage may evaluate (VertexLens.FIELD_EVALUATIONS); [29 + 2k]: source k's centre (view space) and type (1 hole, 2 mass); [30 + 2k]: its
+// parameters (hole: x r_s; mass: x mass, y softening). VertexLens.uploadField.
+const int RELATIVITY_MAX_FIELD = 8; // VertexLens.MAX_FIELD_SOURCES
+const float RELATIVITY_FAR = 1e7;   // blocks: "out past everything"
+const float RELATIVITY_FIELD_TOLERANCE = 2e-5; // radians: an image this close is found (a few hundredths of a pixel)
+
+int relativityFieldCount() { return min(int(RelativityLensData[28].x + 0.5), RELATIVITY_MAX_FIELD); }
+vec3 relativityFieldCentre(int k) { return RelativityLensData[29 + 2 * k].xyz; }
+bool relativityFieldHole(int k) { return RelativityLensData[29 + 2 * k].w < 1.5; }
+vec4 relativityFieldParams(int k) { return RelativityLensData[30 + 2 * k]; }
+float relativityFieldScale(int k) { return relativityFieldHole(k) ? relativityFieldParams(k).x : max(2.0 * abs(relativityFieldParams(k).x), 1e-9); }
+
+// The weak field of a mass m at c softened by s (Plummer: over a whole line 4 m b / (b^2 + s^2)) on light running
+// straight from a to b: adds its turn of the light's direction, and its move of the light at b, both toward c.
+// (No bare `return;` in void functions: Veil's GLSL processor crashes on one, and every vanilla shader then goes unlensed.)
+void relativityPointField(vec3 c, float m, float s, vec3 a, vec3 b, inout vec3 turn, inout vec3 move) {
+    vec3 span = b - a;
+    float len = max(length(span), 1e-6);
+    vec3 d = span / len;
+    float tc = dot(c - a, d);
+    vec3 offset = a + d * tc - c;
+    // (A line through the centre, or none: nothing.)
+    float impact = length(offset);
+    float k = impact < 1e-6 || length(span) < 1e-6 ? 0.0 : 2.0 * m * impact;
+    impact = max(impact, 1e-6);
+    float q = impact * impact + s * s;
+    float u0 = -tc;
+    float u1 = len - tc;
+    float r0 = sqrt(u0 * u0 + q);
+    float r1 = sqrt(u1 * u1 + q);
+    vec3 toward = -offset / impact;
+    turn += toward * (k / q * (u1 / r1 - u0 / r0));
+    // (The turn at each point times the way left to b.)
+    move += toward * (k * ((len - tc) / q * (u1 / r1 - u0 / r0) + 1.0 / r1 - 1.0 / r0));
+}
+
+void relativityFieldWeak(int k, vec3 a, vec3 b, inout vec3 turn, inout vec3 move) {
+    // (One call either way: each call site is inlined whole.)
+    vec4 params = relativityFieldParams(k);
+    bool hole = relativityFieldHole(k);
+    relativityPointField(relativityFieldCentre(k), hole ? 0.5 * params.x : params.x, hole ? 0.0 : params.y, a, b, turn, move);
+}
+
+// Where light coming along (oi, di) and leaving along (oo, dOut) turned: the point of the outgoing line nearest the
+// incoming one, no earlier than oi.
+vec3 relativityMeet(vec3 oi, vec3 di, vec3 oo, vec3 dOut) {
+    vec3 w = oo - oi;
+    float b = dot(di, dOut);
+    float denom = 1.0 - b * b;
+    if (denom < 1e-9) return oo;
+    float d = dot(di, w);
+    float e = dot(dOut, w);
+    float s = (d - b * e) / denom;
+    float t = (b * d - e) / denom;
+    return s < 0.0 ? oo + dOut * dot(oi - oo, dOut) : oo + dOut * t;
+}
+
+// A hole of r_s rs at c passing light from o along (coordinate) d: the line it leaves on (from where it turned), or
+// false if it falls in. Exact: the escape angle of its orbit (SchwarzschildLens's table, as the post pass reads it).
+bool relativityHolePass(vec3 c, float rs, inout vec3 o, inout vec3 d) {
+    vec3 rel = o - c;
+    float r = length(rel);
+    if (r <= rs) return false;
+    vec3 e1 = rel / r;
+    float u0 = rs / r;
+    // A static observer's direction there (radial lengths stretched by 1 / sqrt(1 - u0)).
+    float radial = dot(d, e1);
+    vec3 seen = normalize(d + e1 * (radial * (1.0 / sqrt(1.0 - u0) - 1.0)));
+    float inward = -dot(seen, e1);
+    vec3 side = seen + e1 * inward;
+    if (length(side) < 1e-6) return inward <= 0.0;
+    vec3 e2 = normalize(side);
+    float psi = acos(clamp(inward, -1.0, 1.0));
+    vec2 lutSize = vec2(textureSize(RelativityEscape, 0));
+    vec2 at = vec2(sqrt(u0), sqrt(psi / 3.14159265));
+    vec2 escape = texture(RelativityEscape, (at * (lutSize - 1.0) + 0.5) / lutSize).rg;
+    if (escape.g > 0.5) return false;
+    vec3 out_ = e1 * cos(escape.r) + e2 * sin(escape.r);
+    float b = r * sin(psi) / sqrt(1.0 - u0);
+    vec3 nearest = c + (e1 * sin(escape.r) - e2 * cos(escape.r)) * b;
+    o = relativityMeet(o, d, nearest, out_);
+    d = out_;
+    return true;
+}
+
+// A source passing light from o along d (see relativityHolePass); a mass turns it once, where the line comes nearest,
+// by its whole deflection from o on.
+bool relativityFieldPass(int k, inout vec3 o, inout vec3 d) {
+    vec3 c = relativityFieldCentre(k);
+    if (relativityFieldHole(k)) return relativityHolePass(c, relativityFieldParams(k).x, o, d);
+    float tc = dot(c - o, d);
+    vec3 turn = vec3(0.0);
+    vec3 move = vec3(0.0);
+    relativityFieldWeak(k, o, o + d * (max(tc, 0.0) + RELATIVITY_FAR), turn, move);
+    if (tc > 0.0) o += d * tc;
+    d = normalize(d + turn);
+    return true;
+}
+
+// The direction light must leave `from` along (a coordinate tangent) to reach `target`, through the hole of r_s rs at
+// c alone: its primary image or, with `secondary`, its secondary one (the image tables, as relativitySchwarzschildImageAt
+// reads them from the camera); false if there's none.
+bool relativityHoleAim(vec3 from, vec3 c, float rs, vec3 target, bool secondary, out vec3 d) {
+    vec3 h = c - from;
+    float rc = length(h);
+    vec3 fromHole = target - c;
+    float rp = length(fromHole);
+    d = normalize(target - from);
+    if (rc <= rs || rp <= rs) return false;
+    float u0 = max(rs / rc, 1e-4);
+    float uP = max(rs / rp, 1e-4);
+    vec3 e1 = -h / rc;
+    vec3 radial = fromHole / rp;
+    float cosPhi = clamp(dot(radial, e1), -1.0, 1.0);
+    vec3 side = radial - cosPhi * e1;
+    vec3 e2 = side / max(length(side), 1e-6);
+    float phi = acos(cosPhi);
+    vec3 size = vec3(64.0, 64.0, 128.0);
+    vec3 axes = vec3(sqrt(u0), sqrt(uP), phi / 3.14159265);
+    if (secondary) {
+        if (u0 >= 2.0 / 3.0) return false;
+        vec2 second = texture(RelativitySecondImages, (axes * (size - 1.0) + 0.5) / size).rg;
+        if (second.g < 0.999) return false;
+        float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+        float launch = critical + exp(second.r);
+        float psi2 = atan(sin(launch), cos(launch) * sqrt(1.0 - u0));
+        d = -cos(psi2) * e1 - sin(psi2) * e2;
+        return true;
+    }
+    vec2 image = texture(RelativityImages, (axes * (size - 1.0) + 0.5) / size).rg;
+    if (image.g < 0.5) return false;
+    float rcU = 1.0 / u0;
+    float rpU = 1.0 / uP;
+    float local = atan(rpU * sin(phi), rcU - rpU * cos(phi)) + image.r;
+    float psi = atan(sin(local), cos(local) * sqrt(1.0 - u0));
+    d = -cos(psi) * e1 + sin(psi) * e2;
+    return true;
+}
+
+// The weak fields of the sources in `mask` (bit k: source k) on the line (o, d) up to `until` along: the line the
+// light is on there, turned, and through where they've moved it to.
+void relativityFieldWeakly(inout vec3 o, inout vec3 d, float until, int mask) {
+    if (until > 0.0) {
+        vec3 end = o + d * until;
+        vec3 turn = vec3(0.0);
+        vec3 move = vec3(0.0);
+        for (int k = 0; k < relativityFieldCount(); k += 1) {
+            if ((mask & (1 << k)) != 0) relativityFieldWeak(k, o, end, turn, move);
+        }
+        d = normalize(d + turn);
+        o = end + move - d * until;
+    }
+}
+
+// Light along (o, d) past the sources in the order it meets them (FieldLens.propagate): false if one captures it.
+// With `stop`, only those met before it comes level with stopAt, and the line then carried on weakly to there; with a
+// `terminal` source too, only those met before it, it not passed, and its weak field left off the last stretch.
+bool relativityFieldPropagate(inout vec3 o, inout vec3 d, bool stop, vec3 stopAt, int terminal) {
+    int n = relativityFieldCount();
+    int left = (1 << n) - 1;
+    if (terminal >= 0) left &= ~(1 << terminal);
+    int passed = 0;
+    // (Bounded by the uniform count, not a constant: a constant bound is unrolled, and this is inlined at every call.)
+    for (int i = 0; i < n; i += 1) {
+        int next = -1;
+        float nextAt = 1e30;
+        for (int k = 0; k < n; k += 1) {
+            if ((left & (1 << k)) == 0) continue;
+            float t = dot(relativityFieldCentre(k) - o, d);
+            if (t < nextAt) { nextAt = t; next = k; }
+        }
+        if (next < 0) break;
+        if (stop && nextAt > dot(stopAt - o, d)) break;
+        if (terminal >= 0 && nextAt > dot(relativityFieldCentre(terminal) - o, d)) break;
+        left &= ~(1 << next);
+        // The others' fields up to level with it (and the terminal's), then it exactly from there on.
+        relativityFieldWeakly(o, d, nextAt, terminal >= 0 ? left | (1 << terminal) : left);
+        vec3 before = d;
+        if (!relativityFieldPass(next, o, d)) return false;
+        // Those already passed counted their tails along the old line: from the turn on, the light runs along the new.
+        // (Both tails at one call site: each is inlined whole.)
+        vec3 tails = vec3(0.0);
+        for (int j = 0; j < 2 * n; j += 1) {
+            int k = j / 2;
+            if ((passed & (1 << k)) == 0) continue;
+            bool old = j - 2 * k == 1;
+            vec3 tail = vec3(0.0);
+            vec3 unused = vec3(0.0);
+            relativityFieldWeak(k, o, o + (old ? before : d) * RELATIVITY_FAR, tail, unused);
+            tails += old ? -tail : tail;
+        }
+        d = normalize(d + tails);
+        passed |= 1 << next;
+    }
+    if (stop) relativityFieldWeakly(o, d, dot(stopAt - o, d), left);
+    return true;
+}
+
+// Where the light leaving the camera along d ends (FieldLens.sky): false if it's captured.
+bool relativityFieldSky(vec3 d, out vec3 escape) {
+    vec3 o = vec3(0.0);
+    escape = d;
+    if (!relativityFieldPropagate(o, escape, false, vec3(0.0), -1)) return false;
+    return true;
+}
+
+// For a launch direction: how far the light is from what the target needs (FieldLens.image's miss).
+bool relativityFieldMiss(vec3 dir, vec3 target, bool secondary, int terminal, out vec3 miss) {
+    vec3 o = vec3(0.0);
+    vec3 d = dir;
+    miss = vec3(0.0);
+    if (!relativityFieldPropagate(o, d, true, target, terminal)) return false;
+    if (terminal >= 0) {
+        vec3 wanted;
+        if (!relativityHoleAim(o, relativityFieldCentre(terminal), relativityFieldParams(terminal).x, target, secondary, wanted)) return false;
+        miss = d - wanted;
+        return true;
+    }
+    if (secondary) return false;
+    miss = (o + d * dot(target - o, d) - target) / length(target);
+    return true;
+}
+
+// Where the camera sees `target` (FieldLens.image): its primary image or, with `secondary`, its secondary one; false
+// if there's none. Its nearest source (relative to its size), if a hole, aims the last stretch exactly: alone on the
+// way, that is the answer.
+bool relativityFieldImage(vec3 target, bool secondary, out vec3 seen) {
+    int n = relativityFieldCount();
+    int nearest = -1;
+    float best = 1e30;
+    for (int k = 0; k < n; k += 1) {
+        float x = length(target - relativityFieldCentre(k)) / relativityFieldScale(k);
+        if (x < best) { best = x; nearest = k; }
+    }
+    int terminal = -1;
+    seen = normalize(target);
+    if (nearest >= 0 && relativityFieldHole(nearest)) {
+        vec3 aimed;
+        if (relativityHoleAim(vec3(0.0), relativityFieldCentre(nearest), relativityFieldParams(nearest).x, target, secondary, aimed)) {
+            terminal = nearest;
+            seen = aimed;
+        } else if (secondary) return false;
+    } else if (secondary) return false;
+    if (n <= 1 && terminal >= 0) return true;
+    // Broyden's method in the plane across the seed (offsets x along e1, e2): the Jacobian starts as the identity (the
+    // miss is about the direction's own error, other sources being weaker where the terminal one aims) and learns from
+    // each step; one evaluation a round, at one call site, in a loop bounded by a uniform ([28].y): inlined more often,
+    // or unrolled, the lens made every world shader take seconds to compile.
+    vec3 seed = seen;
+    vec3 helper = abs(seed.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 e1 = normalize(cross(seed, helper));
+    vec3 e2 = cross(seed, e1);
+    mat2 jacobian = mat2(1.0);
+    vec2 x = vec2(0.0);
+    vec2 dx = vec2(0.0);
+    vec2 previous = vec2(0.0);
+    int evaluations = int(RelativityLensData[28].y + 0.5);
+    for (int i = 0; i < evaluations; i += 1) {
+        vec3 dir = normalize(seed + e1 * x.x + e2 * x.y);
+        vec3 r;
+        if (!relativityFieldMiss(dir, target, secondary, terminal, r)) return false;
+        vec2 miss = vec2(dot(r, e1), dot(r, e2));
+        if (length(miss) < RELATIVITY_FIELD_TOLERANCE) {
+            seen = dir;
+            return true;
+        }
+        if (i > 0) jacobian += outerProduct(miss - previous - jacobian * dx, dx) / max(dot(dx, dx), 1e-30);
+        float det = determinant(jacobian);
+        if (abs(det) < 1e-12) return false;
+        dx = -(inverse(jacobian) * miss);
+        previous = miss;
+        x += dx;
+    }
+    return false;
+}
+
 int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
     seen = normalize(p);
     relativityLastCorrection = vec3(0.0);
@@ -1394,6 +1680,22 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     float d = length(p);
     vec3 hole = RelativityLensData[0].xyz;
     float rc = length(hole);
+    // Several sources: composed along the light (the field lens), primary and secondary images alike. (Called from
+    // here alone: each call is inlined whole, and programs that never bend vertices drop it.)
+    if (relativityFieldCount() > 1) {
+        vec3 seen;
+        bool longWay = relativitySecond();
+        if (!relativityFieldImage(p, longWay, seen)) {
+            vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
+            hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
+            return hidden;
+        }
+        // (A secondary image behind the primaries along the same ray: its light went the long way round.)
+        // (Not a ?: inside the constructor: Veil's GLSL processor writes that one back wrong.)
+        float depth = d;
+        if (longWay) depth += 4.0 * RelativityLensData[0].w;
+        return proj * vec4(seen * depth, 1.0);
+    }
     if (relativitySecond()) {
         // The secondary image at the length of the light's way round (at least the way via the hole), so the primary
         // image of whatever is in front along the same ray wins the depth test. Every point drawn has one (out to the
@@ -1473,6 +1775,8 @@ bool relativityLensed(mat4 proj) {
 
 // For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
+    // (Composed, each pixel would solve its own image: not checked, for now.)
+    if (relativityFieldCount() > 1) return false;
     if (mod(RelativityLensData[11].y, 2.0) > 0.5) return false;
     float d = length(unbent);
     vec3 hole = RelativityLensData[0].xyz;

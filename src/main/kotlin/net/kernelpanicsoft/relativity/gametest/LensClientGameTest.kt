@@ -1853,6 +1853,82 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * Two non-spinning holes over the ground test's checkerboard and pillars, composed in the shaders (the field lens,
+	 * VertexLens.fieldLens) and with the per-frame tracer it replaces, against the CPU trace through both
+	 * ([LensReference.traceField]): accuracy and the GPU's cost, per view. Logged; fails if the field lens is worse
+	 * than the tracer by more than a little.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.twoHoles() {
+		if (!ClientTestInput.selected("twoHoles")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.fovEffectScale().set(0.0)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -32..48) for (z in -32..32) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+				for (x in -32..48 step 8) for (z in -32..32 step 8) {
+					for (y in -60..-58) level.setBlock(BlockPos(x, y, z), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+				}
+			}
+			command("relativity bh clear")
+			command("relativity bh create 0.5 -54 0.5 2 0")
+			command("relativity bh create 16.5 -54 -6.5 1.5 0")
+			command("tick freeze")
+			val failures = ArrayList<String>()
+			for ((name, at) in listOf("side" to "-14.5 -54 0.5 -90 10", "above" to "-9.5 -46 0.5 -90 45", "between" to "8.5 -54 6.5 -150 5")) {
+				command("tp @a $at")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				waitTicks(40)
+				val columns = 120
+				val rows = computeOnClient { columns * it.window.height / it.window.width }
+				val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+				for (first in 0 until rows step 8) {
+					val part = computeOnClient { minecraft -> LensReference.traceField(minecraft, columns, rows, 200.0, 60.0, first until minOf(first + 8, rows)) }
+					for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+				}
+				val wrong = HashMap<Boolean, Double>()
+				// The field lens with the post pass (shadow and sky), alone (vertex lens only), and the tracer it replaces.
+				for ((field, weak) in listOf(true to false, true to true, false to false)) {
+					runOnClient { VertexLens.fieldLens = field; BlackHoleLens.rawFrame = weak;  BlackHoleLens.timeGpu = true; KerrImageMap.invalidate() }
+					// (The tracer catches up over many frames.)
+					waitTicks(if (field) 20 else 200)
+					command("tp @a $at")
+					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+					waitTicks(20)
+					val fps = computeOnClient { it.fps }
+					val millis = (0 until 20).map { waitTick(); computeOnClient { BlackHoleLens.gpuMillis } }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] }
+					val composed = computeOnClient { VertexLens.composed }
+					val label = if (field) (if (weak) "field_vertex_only" else "field") else "tracer"
+					val shot = takeScreenshot("two_holes_${name}_$label")
+					if (!weak) wrong[field] = LensReference.compare(reference, shot)
+					CreateRelativity.LOGGER.info("Two holes, {} ({}{}): {}% of pixels in the wrong class, {}% counting white and blue as one; GPU lens {} ms, {} fps",
+						name, label, if (field && !composed) ", NOT composed" else "", "%.1f".format(LensReference.compare(reference, shot) * 100),
+						"%.1f".format(LensReference.compare(reference, shot, floorAsOne = true) * 100), "%.2f".format(millis), fps)
+				}
+				if (wrong[true]!! > wrong[false]!! + 0.02) failures += "$name: field lens ${"%.1f".format(wrong[true]!! * 100)}% wrong, tracer ${"%.1f".format(wrong[false]!! * 100)}%"
+			}
+			runOnClient { VertexLens.fieldLens = true; BlackHoleLens.rawFrame = false; BlackHoleLens.timeGpu = false }
+			command("tick unfreeze")
+			if (failures.isNotEmpty()) throw AssertionError(failures.joinToString("; "))
+		}
+	}
+
+	/**
 	 * One view of a hole (r_s 2, [spin]) at (0.5, -54, 0.5) from [at] ("x y z yaw pitch"), traced on the CPU and drawn by
 	 * the lens, with each source for what the sky's bent paths meet (voxels, the default; nothing). Logs accuracy and
 	 * the post pass's cost (medians over 20 frames); adds the default's misses to [failures].

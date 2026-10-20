@@ -45,7 +45,23 @@ object VertexLens {
 	private val TEXTURE_UNIT: Int by lazy { GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - 1 }
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
-	private const val BLOCK_BYTES = 448 // 28 vec4s: see vertex_lens_core.glsl's RelativityLensData
+	private const val BLOCK_BYTES = 720 // 45 vec4s: see vertex_lens_core.glsl's RelativityLensData
+
+	/** The field lens's sources (vertex_lens_core.glsl's RELATIVITY_MAX_FIELD), nearest first. */
+	const val MAX_FIELD_SOURCES = 8
+
+	/** How many misses the field lens may evaluate per image (Broyden: one a round). */
+	private const val FIELD_EVALUATIONS = 8
+
+	/** The escape table's sampler (BlackHoleLens's LUT) for the field lens's holes, on the unit below the others'. */
+	private const val ESCAPE_SAMPLER = "RelativityEscape"
+
+	/** This frame's sources for the field lens (camera-relative positions are taken at upload). */
+	private var fieldSources: List<net.kernelpanicsoft.relativity.spacetime.FieldSource> = emptyList()
+
+	/** Whether this frame's sources are composed in the shaders (the field lens): several, of the kinds it has modules for. */
+	var composed = false
+		private set
 	private const val KERR_SAMPLER = "RelativityKerrPaths"
 
 	/** The Kerr image map's sampler (KerrImageMap), on the unit below the path table's. */
@@ -250,6 +266,20 @@ object VertexLens {
 		// A spinning hole or anything but holes: this frame's path table through every source, which the image map
 		// inverts. (Non-spinning holes alone keep the Schwarzschild image table.)
 		val (count, general) = BlackHoleLens.packSources(holes, others, camera, sources)
+		// Several sources the field lens has modules for (non-spinning holes, masses): composed in the shaders, with
+		// nothing traced or solved per frame.
+		val fieldWanted = holes.size + others.size > 1 && holes.all { abs(it.spin) < MIN_KERR_SPIN } &&
+			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass } && fieldLens
+		if (!perspective) {
+			composed = fieldWanted
+			fieldSources = (holes + others).sortedBy { s ->
+				when (s) {
+					is BlackHole -> s.center.distanceToSqr(camera)
+					is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> s.center.distanceSquared(camera.x, camera.y, camera.z)
+					else -> Double.MAX_VALUE
+				}
+			}
+		}
 		// A lone spinning hole: the live map from baked camera slots when they're ready (KerrSlots), no solving.
 		val lone = centre?.hole
 		val loneKerr = lone != null && holes.size == 1 && others.isEmpty() && abs(lone.spin) >= MIN_KERR_SPIN && !kerrOff
@@ -257,7 +287,7 @@ object VertexLens {
 		val approximated = loneKerr && kerrApprox
 		val slotted = !perspective && loneKerr && !approximated && !kerrSolveOff && KerrSlots.update(lone!!, camera)
 		var kerr = approximated
-		if (centre != null && general && !slotted && !approximated && !(kerrOff && others.isEmpty())) {
+		if (centre != null && general && !fieldWanted && !slotted && !approximated && !(kerrOff && others.isEmpty())) {
 			val holeGame = Vector3f((centre.x - camera.x).toFloat(), (centre.y - camera.y).toFloat(), (centre.z - camera.z).toFloat())
 			// A jump (a teleport, a fast flight) redraws the tables whole; walking catches them up a slice a frame.
 			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
@@ -270,6 +300,7 @@ object VertexLens {
 			if (BlackHoleLens.timeGpu) pathsTimer.end()
 		}
 		if (slotted) kerr = true
+		if (fieldWanted) kerr = false
 		if (!perspective) loneHole = holes.size == 1 && others.isEmpty()
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null, kerr && !kerrSolveOff, if (slotted) KerrSlots.outer(lone!!) else null)
 
@@ -301,6 +332,8 @@ object VertexLens {
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrImageMap.texture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 5)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, BlackHoleLens.escapeTexture())
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 4)
 		val perFrameSecond = kerr && !kerrSolveOff && !slotted && !approximated && loneHole
 		KerrSecondImageMap.ensureTexture()
@@ -309,6 +342,10 @@ object VertexLens {
 		// Round a spinning hole: its secondary map solved per frame, or the slots' blended one.
 		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || approximated || perFrameSecond || (slotted && KerrSlots.secondBlending))
 	}
+
+	/** Several sources composed in the shaders (the field lens) where it has modules for them; off, the per-frame tracer. */
+	@JvmField
+	var fieldLens = true
 
 	/**
 	 * A lone spinning hole's images approximated from the non-spinning one (vertex_lens_core.glsl relativityKerrApprox:
@@ -531,12 +568,33 @@ object VertexLens {
 				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
 				repeat(HorizonMesh.EDGE_SAMPLES) { data.put(0f) }
 			}
+			uploadField(data, camX, camY, camZ, view)
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, target)
 			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0L, data)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
 		}
 		GL30.glBindBufferBase(GL31.GL_UNIFORM_BUFFER, binding, target)
+	}
+
+	/**
+	 * [28..44]: the field lens's sources (vertex_lens_core.glsl's relativityFieldCount and on), when [composed]: each
+	 * centre in view space and its type (1 hole, 2 mass), then its parameters (hole: r_s; mass: mass, softening).
+	 */
+	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
+		val sources = if (composed) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
+		data.put(sources.size.toFloat()).put(FIELD_EVALUATIONS.toFloat()).put(0f).put(0f)
+		for (source in sources) {
+			val (centre, type, params) = when (source) {
+				is BlackHole -> Triple(source.center.let { org.joml.Vector3d(it.x, it.y, it.z) }, 1f, floatArrayOf(source.schwarzschildRadius.toFloat(), 0f))
+				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> Triple(org.joml.Vector3d(source.center), 2f, floatArrayOf(source.mass.toFloat(), source.softening.toFloat()))
+				else -> continue
+			}
+			val at = view.transform(Vector3f((centre.x - camX).toFloat(), (centre.y - camY).toFloat(), (centre.z - camZ).toFloat()))
+			data.put(at.x).put(at.y).put(at.z).put(type)
+			data.put(params[0]).put(params[1]).put(0f).put(0f)
+		}
+		repeat(MAX_FIELD_SOURCES - sources.size) { repeat(8) { data.put(0f) } }
 	}
 
 	/** Creates the buffer and, once the table is built, its texture. False until both exist. */
@@ -603,7 +661,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, "RelativityKerrSecondMap" to TEXTURE_UNIT - 4)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, "RelativityKerrSecondMap" to TEXTURE_UNIT - 4, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {
