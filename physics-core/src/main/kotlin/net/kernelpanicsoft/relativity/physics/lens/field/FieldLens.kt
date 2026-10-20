@@ -66,11 +66,11 @@ interface LensModule {
 
 /**
  * Lensing through any number of sources by composing their [LensModule]s along the light (multi-plane lensing): no
- * marching, no tables built per frame. [sky] follows light from the camera out; [image] finds where a point is seen
- * (the vertex lens: the inverse, by Newton's method on the composition, with the source the point is nearest aiming
- * the last stretch exactly). The camera is a static observer; its directions are its own.
+ * marching, no tables built per frame. [sky] follows light from the camera out (the post pass); [image] finds where
+ * a point is seen (the vertex lens), each source's exact single-source image chained back toward the camera, nothing
+ * solved. The camera is a static observer; its directions are its own.
  *
- * Sources are passed in the order the light meets them. Each acts exactly from the stretch where the light reaches it
+ * [sky]: sources are passed in the order the light meets them. Each acts exactly from the stretch where the light reaches it
  * ([LensModule.pass], out to infinity along that line), and weakly ([LensModule.field]) on every stretch before, as the
  * light goes: so a source farther on still sees, and a strong one magnifies, what a weak one did first. When a later
  * source turns the light, each source already passed has its weak tail moved from the old line to the new one.
@@ -80,48 +80,38 @@ class FieldLens(val modules: List<LensModule>) {
 	 * Light leaving [camera] along unit [direction] (as the camera sees it): the line it ends on once past every source,
 	 * or null if a source captures it.
 	 */
-	fun sky(camera: V3, direction: V3): LightLine? = propagate(LightLine(camera, coordinate(camera, direction)), null, null)
+	fun sky(camera: V3, direction: V3): LightLine? = propagate(LightLine(camera, coordinate(camera, direction)))
 
 	/**
-	 * The direction from [camera] in which [target] is seen (primary image, or [secondary]), or null if it isn't.
+	 * The direction from [camera] in which [target] is seen (primary image, or [secondary]), or null if a hole hides it:
+	 * each source's own exact image, chained back toward the camera. The source the light
+	 * meets last (farthest along the line of sight to [target]) images the target; the point as that makes it appear
+	 * (at the same distance, along its image) is imaged by the next source back; and so on to the camera. Exact for one
+	 * source; for several, as if each saw the light come straight from the camera (against light followed exactly, it's
+	 * as close as solving the composition by Newton's method, or closer, at a fraction of the cost: FieldLensTest).
 	 */
 	fun image(camera: V3, target: V3, secondary: Boolean = false): V3? {
-		// (A source that doesn't aim, a weak one, is passed like any other; the target is then found by where the light
-		// comes level with it.)
-		val seed = modules.minByOrNull { (target - it.centre).length / it.scale }?.let { it to it.aim(camera, target, secondary) }
-		val terminal = seed?.takeIf { it.second != null }?.first
+		val line = (target - camera).normalized()
+		val order = modules.sortedByDescending { (it.centre - camera) dot line }
+		// (The secondary image is the target's own nearest hole's; the rest image it as a primary.)
+		val terminal = modules.minByOrNull { (target - it.centre).length / it.scale }
+		var point = target
+		var direction = (target - camera).normalized()
 		val distance = (target - camera).length
-		// For a launch tangent: what the light heads along where the terminal source takes over (its last stretch),
-		// against what the terminal source wants there; or, where it doesn't aim, where the light comes level with the
-		// target against it.
-		fun miss(direction: V3): V3? {
-			val line = propagate(LightLine(camera, direction), target, terminal) ?: return null
-			val wanted = terminal?.aim(line.origin, target, secondary)
-			if (wanted != null) return line.direction - wanted
-			if (secondary) return null
-			return (line.at(line.along(target)) - target) * (1.0 / distance)
+		for (m in order) {
+			val aimed = m.aim(camera, point, secondary && m === terminal)
+			direction = when {
+				aimed != null -> aimed
+				m is MassModule -> {
+					// A source that doesn't aim (weak): the light it bends toward itself reaches the point from a
+					// direction as far the other way as it moves the light there.
+					val move = m.field(camera, point).second
+					(direction - move * (1.0 / distance)).normalized()
+				}
+				else -> return null
+			}
+			point = camera + direction * distance
 		}
-		var direction = seed?.second ?: (target - camera).normalized()
-		var solved = false
-		for (round in 0 until NEWTON_ROUNDS) {
-			val r = miss(direction) ?: return null
-			if (r.length < TOLERANCE) { solved = true; break }
-			val (e1, e2) = tangents(direction)
-			val r1 = miss((direction + e1 * STEP).normalized()) ?: return null
-			val r2 = miss((direction + e2 * STEP).normalized()) ?: return null
-			val j1 = (r1 - r) * (1.0 / STEP)
-			val j2 = (r2 - r) * (1.0 / STEP)
-			// Least squares: [j1 j2] (a, b) = -r.
-			val a11 = j1 dot j1
-			val a12 = j1 dot j2
-			val a22 = j2 dot j2
-			val b1 = -(j1 dot r)
-			val b2 = -(j2 dot r)
-			val det = a11 * a22 - a12 * a12
-			if (abs(det) < 1e-30) return null
-			direction = (direction + e1 * ((b1 * a22 - b2 * a12) / det) + e2 * ((a11 * b2 - a12 * b1) / det)).normalized()
-		}
-		if (!solved && (miss(direction)?.length ?: 1.0) >= CONVERGED) return null
 		return observed(camera, direction)
 	}
 
@@ -130,21 +120,16 @@ class FieldLens(val modules: List<LensModule>) {
 
 	private fun observed(camera: V3, d: V3): V3 = modules.asReversed().fold(d) { v, m -> m.toObserved(camera, v) }
 
-	/**
-	 * Light along [start] past every source in turn: the line it ends on. With [stopAt], only the sources it meets
-	 * before coming level with it, and the line from its last turn with the weak fields of the rest up to there; with
-	 * [terminal] too, only those met before it, that source not passed (the caller aims from there through it) and its
-	 * weak field not counted on the last stretch. Null if a source captures it.
-	 */
-	private fun propagate(start: LightLine, stopAt: V3?, terminal: LensModule?): LightLine? {
+	/** Light along [start] past every source in turn: the line it ends on, or null if a source captures it. */
+	private fun propagate(start: LightLine): LightLine? {
 		var line = start
-		val left = modules.filter { it !== terminal }.toMutableList()
+		val left = modules.toMutableList()
 		val passed = ArrayList<LensModule>()
-		// The weak fields of the sources not yet passed (and [terminal], if [withTerminal]) on the line up to [until]
+		// The weak fields of the sources not yet passed on the line up to [until]
 		// along: the line the light is on there, turned, and through where they've moved it to (so it arrives where
 		// it should, heading as it should; turning the whole stretch about its start would move it by the full turn
 		// times the stretch, not by what the turn on the way adds up to).
-		fun weakly(until: Double, withTerminal: Boolean): LightLine {
+		fun weakly(until: Double): LightLine {
 			if (until <= 0.0) return line
 			val end = line.at(until)
 			var heading = line.direction
@@ -155,19 +140,14 @@ class FieldLens(val modules: List<LensModule>) {
 				arrival += move
 			}
 			for (m in left) add(m)
-			if (withTerminal && terminal != null) add(terminal)
 			val h = heading.normalized()
 			return LightLine(arrival - h * until, h)
 		}
 		while (left.isNotEmpty()) {
 			val next = left.minBy { line.along(it.centre) }
-			if (stopAt != null && line.along(next.centre) > line.along(stopAt)) break
-			// (Nor any past the terminal source: the light meets it first, and its aim from here covers the way to the
-			// target; those beyond act on that last stretch weakly.)
-			if (terminal != null && line.along(next.centre) > line.along(terminal.centre)) break
 			left.remove(next)
 			// The other sources' fields up to level with this one, then this one exactly from there on.
-			val arriving = weakly(line.along(next.centre), true)
+			val arriving = weakly(line.along(next.centre))
 			val out = next.pass(arriving) ?: return null
 			// The sources already passed counted their weak tails along the old line, out to infinity: from the turn on
 			// the light runs along the new one instead.
@@ -179,16 +159,10 @@ class FieldLens(val modules: List<LensModule>) {
 			passed += next
 			line = LightLine(out.origin, heading.normalized())
 		}
-		// (The last stretch without the terminal source's field: its aim from the stretch's start covers it.)
-		if (stopAt != null) line = weakly(line.along(stopAt), false)
 		return line
 	}
 
 	companion object {
-		private const val NEWTON_ROUNDS = 10
-		private const val STEP = 1e-6
-		private const val TOLERANCE = 1e-10
-		private const val CONVERGED = 1e-6
 		/** "Out past everything" (blocks): weak fields' remaining turn beyond is negligible. */
 		private const val FAR = 1e8
 

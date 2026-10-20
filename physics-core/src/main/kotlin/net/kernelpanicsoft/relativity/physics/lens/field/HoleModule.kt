@@ -118,6 +118,7 @@ class HoleModule(override val centre: V3, val rs: Double) : LensModule {
 	}
 
 	companion object {
+
 		private const val N0 = 32
 		private const val NP = 32
 		private const val NPHI = 64

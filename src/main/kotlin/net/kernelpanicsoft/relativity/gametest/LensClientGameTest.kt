@@ -1853,6 +1853,23 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * Waits for the client thread directly, at length, and logs how long it took: the first frames after a change of
+	 * lens compile programs (the terrain's, the tracer's) that can take longer than a harness call allows.
+	 */
+	private fun settleClient(label: String) {
+		val start = System.nanoTime()
+		val ready = java.util.concurrent.CompletableFuture<Unit>()
+		repeat(3) {
+			val frame = java.util.concurrent.CompletableFuture<Unit>()
+			net.minecraft.client.Minecraft.getInstance().execute { frame.complete(Unit) }
+			frame.get(300, java.util.concurrent.TimeUnit.SECONDS)
+			Thread.sleep(200)
+		}
+		ready.complete(Unit)
+		CreateRelativity.LOGGER.info("{}: client settled after {} ms", label, (System.nanoTime() - start) / 1_000_000)
+	}
+
+	/**
 	 * Two non-spinning holes over the ground test's checkerboard and pillars, composed in the shaders (the field lens,
 	 * VertexLens.fieldLens) and with the per-frame tracer it replaces, against the CPU trace through both
 	 * ([LensReference.traceField]): accuracy and the GPU's cost, per view. Logged; fails if the field lens is worse
@@ -1892,19 +1909,22 @@ class LensClientGameTest {
 			val failures = ArrayList<String>()
 			for ((name, at) in listOf("side" to "-14.5 -54 0.5 -90 10", "above" to "-9.5 -46 0.5 -90 45", "between" to "8.5 -54 6.5 -150 5")) {
 				command("tp @a $at")
+				settleClient("Two holes, $name")
 				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
 				waitTicks(40)
 				val columns = 120
 				val rows = computeOnClient { columns * it.window.height / it.window.width }
 				val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
-				for (first in 0 until rows step 8) {
-					val part = computeOnClient { minecraft -> LensReference.traceField(minecraft, columns, rows, 200.0, 60.0, first until minOf(first + 8, rows)) }
-					for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+				// (Two rows a call: the trace through both holes is slow, and each call has a time limit.)
+				for (first in 0 until rows step 2) {
+					val part = computeOnClient { minecraft -> LensReference.traceField(minecraft, columns, rows, 200.0, 60.0, first until minOf(first + 2, rows)) }
+					for (row in first until minOf(first + 2, rows)) reference[row] = part[row]
 				}
 				val wrong = HashMap<Boolean, Double>()
 				// The field lens with the post pass (shadow and sky), alone (vertex lens only), and the tracer it replaces.
 				for ((field, weak) in listOf(true to false, true to true, false to false)) {
 					runOnClient { VertexLens.fieldLens = field; BlackHoleLens.rawFrame = weak;  BlackHoleLens.timeGpu = true; KerrImageMap.invalidate() }
+					settleClient("Two holes, $name, ${if (field) "field" else "tracer"}")
 					// (The tracer catches up over many frames.)
 					waitTicks(if (field) 20 else 200)
 					command("tp @a $at")

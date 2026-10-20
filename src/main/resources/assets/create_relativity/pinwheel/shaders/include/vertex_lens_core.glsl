@@ -1310,13 +1310,14 @@ const float RELATIVITY_NEAR_BLEND = 0.35;
 // new line. A point's image: Newton's method on that composition, the point's nearest source aiming the last stretch
 // exactly (a hole: its image tables). No marching, nothing built per frame. View space; directions are coordinate
 // tangents of the light's path (the camera's own directions, as the rest of the lens takes them).
-// [28] x: how many sources, y: how many misses relativityFieldImage may evaluate (VertexLens.FIELD_EVALUATIONS); [29 + 2k]: source k's centre (view space) and type (1 hole, 2 mass); [30 + 2k]: its
+// [28] x: how many sources; [29 + 2k]: source k's centre (view space) and type (1 hole, 2 mass); [30 + 2k]: its
 // parameters (hole: x r_s; mass: x mass, y softening). VertexLens.uploadField.
 const int RELATIVITY_MAX_FIELD = 8; // VertexLens.MAX_FIELD_SOURCES
 const float RELATIVITY_FAR = 1e7;   // blocks: "out past everything"
-const float RELATIVITY_FIELD_TOLERANCE = 2e-5; // radians: an image this close is found (a few hundredths of a pixel)
 
-int relativityFieldCount() { return min(int(RelativityLensData[28].x + 0.5), RELATIVITY_MAX_FIELD); }
+// (Not clamped to RELATIVITY_MAX_FIELD here, VertexLens never uploads more: with the bound known, the compiler unrolled
+// every loop over the sources, nested ones included, and the world's shaders took tens of seconds to compile.)
+int relativityFieldCount() { return int(RelativityLensData[28].x + 0.5); }
 vec3 relativityFieldCentre(int k) { return RelativityLensData[29 + 2 * k].xyz; }
 bool relativityFieldHole(int k) { return RelativityLensData[29 + 2 * k].w < 1.5; }
 vec4 relativityFieldParams(int k) { return RelativityLensData[30 + 2 * k]; }
@@ -1516,74 +1517,58 @@ bool relativityFieldSky(vec3 d, out vec3 escape) {
     return true;
 }
 
-// For a launch direction: how far the light is from what the target needs (FieldLens.image's miss).
-bool relativityFieldMiss(vec3 dir, vec3 target, bool secondary, int terminal, out vec3 miss) {
-    vec3 o = vec3(0.0);
-    vec3 d = dir;
-    miss = vec3(0.0);
-    if (!relativityFieldPropagate(o, d, true, target, terminal)) return false;
-    if (terminal >= 0) {
-        vec3 wanted;
-        if (!relativityHoleAim(o, relativityFieldCentre(terminal), relativityFieldParams(terminal).x, target, secondary, wanted)) return false;
-        miss = d - wanted;
-        return true;
-    }
-    if (secondary) return false;
-    miss = (o + d * dot(target - o, d) - target) / length(target);
-    return true;
-}
+// How far (a fraction of its distance) the light found for a point may pass it, checked forward.
+const float RELATIVITY_FIELD_CHECK = 0.3;
 
 // Where the camera sees `target` (FieldLens.image): its primary image or, with `secondary`, its secondary one; false
-// if there's none. Its nearest source (relative to its size), if a hole, aims the last stretch exactly: alone on the
-// way, that is the answer.
+// if a hole hides it. Each source's own exact image, chained back toward the camera: the source the light meets last
+// (farthest along the line of sight) images the target, the point as that makes it appear (at the same distance)
+// is imaged by the next source back, and so on. Nothing solved: a lookup per source. (Exact for one source; for
+// several as close as solving the composition, or closer: FieldLensTest.) The secondary image is the target's own
+// nearest hole's; the rest image it as a primary. A mass, which doesn't aim, moves it the other way as far as it
+// moves the light there.
 bool relativityFieldImage(vec3 target, bool secondary, out vec3 seen) {
     int n = relativityFieldCount();
-    int nearest = -1;
+    int terminal = -1;
     float best = 1e30;
     for (int k = 0; k < n; k += 1) {
         float x = length(target - relativityFieldCentre(k)) / relativityFieldScale(k);
-        if (x < best) { best = x; nearest = k; }
+        if (x < best) { best = x; terminal = k; }
     }
-    int terminal = -1;
-    seen = normalize(target);
-    if (nearest >= 0 && relativityFieldHole(nearest)) {
-        vec3 aimed;
-        if (relativityHoleAim(vec3(0.0), relativityFieldCentre(nearest), relativityFieldParams(nearest).x, target, secondary, aimed)) {
-            terminal = nearest;
-            seen = aimed;
-        } else if (secondary) return false;
-    } else if (secondary) return false;
-    if (n <= 1 && terminal >= 0) return true;
-    // Broyden's method in the plane across the seed (offsets x along e1, e2): the Jacobian starts as the identity (the
-    // miss is about the direction's own error, other sources being weaker where the terminal one aims) and learns from
-    // each step; one evaluation a round, at one call site, in a loop bounded by a uniform ([28].y): inlined more often,
-    // or unrolled, the lens made every world shader take seconds to compile.
-    vec3 seed = seen;
-    vec3 helper = abs(seed.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
-    vec3 e1 = normalize(cross(seed, helper));
-    vec3 e2 = cross(seed, e1);
-    mat2 jacobian = mat2(1.0);
-    vec2 x = vec2(0.0);
-    vec2 dx = vec2(0.0);
-    vec2 previous = vec2(0.0);
-    int evaluations = int(RelativityLensData[28].y + 0.5);
-    for (int i = 0; i < evaluations; i += 1) {
-        vec3 dir = normalize(seed + e1 * x.x + e2 * x.y);
-        vec3 r;
-        if (!relativityFieldMiss(dir, target, secondary, terminal, r)) return false;
-        vec2 miss = vec2(dot(r, e1), dot(r, e2));
-        if (length(miss) < RELATIVITY_FIELD_TOLERANCE) {
-            seen = dir;
-            return true;
+    if (secondary && (terminal < 0 || !relativityFieldHole(terminal))) return false;
+    float distance = length(target);
+    vec3 line = target / distance;
+    vec3 point = target;
+    seen = line;
+    int done = 0;
+    for (int i = 0; i < n; i += 1) {
+        int next = -1;
+        float farthest = -1e30;
+        for (int k = 0; k < n; k += 1) {
+            if ((done & (1 << k)) != 0) continue;
+            float along = dot(relativityFieldCentre(k), line);
+            if (along > farthest) { farthest = along; next = k; }
         }
-        if (i > 0) jacobian += outerProduct(miss - previous - jacobian * dx, dx) / max(dot(dx, dx), 1e-30);
-        float det = determinant(jacobian);
-        if (abs(det) < 1e-12) return false;
-        dx = -(inverse(jacobian) * miss);
-        previous = miss;
-        x += dx;
+        done |= 1 << next;
+        if (relativityFieldHole(next)) {
+            vec3 aimed;
+            if (!relativityHoleAim(vec3(0.0), relativityFieldCentre(next), relativityFieldParams(next).x, point, secondary && next == terminal, aimed)) return false;
+            seen = aimed;
+        } else {
+            vec3 turn = vec3(0.0);
+            vec3 move = vec3(0.0);
+            relativityFieldWeak(next, vec3(0.0), point, turn, move);
+            seen = normalize(seen - move / distance);
+        }
+        point = seen * distance;
     }
-    return false;
+    // Checked once, forward: the light leaving along it, followed past the sources (as the sky's is), must come by
+    // the target. Where the chain's sources couple too strongly for it (light round two holes in turn), its answer
+    // can be light that really falls in or goes elsewhere: the world's underside drawn over the sky.
+    vec3 o = vec3(0.0);
+    vec3 d = seen;
+    if (!relativityFieldPropagate(o, d, true, target, -1)) return false;
+    return length(o + d * dot(target - o, d) - target) < RELATIVITY_FIELD_CHECK * distance;
 }
 
 int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
@@ -1775,7 +1760,7 @@ bool relativityLensed(mat4 proj) {
 
 // For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
-    // Composed: the pixel's own image, solved (from the nearest hole's aim: a round or two), against where it's drawn.
+    // Composed: the pixel's own image (a lookup per source) against where it's drawn.
     if (relativityFieldCount() > 1) {
         vec3 own;
         if (!relativityFieldImage(unbent, relativitySecond(), own)) return true;

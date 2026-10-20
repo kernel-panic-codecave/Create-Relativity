@@ -50,9 +50,6 @@ object VertexLens {
 	/** The field lens's sources (vertex_lens_core.glsl's RELATIVITY_MAX_FIELD), nearest first. */
 	const val MAX_FIELD_SOURCES = 8
 
-	/** How many misses the field lens may evaluate per image (Broyden: one a round). */
-	private const val FIELD_EVALUATIONS = 8
-
 	/** The escape table's sampler (BlackHoleLens's LUT) for the field lens's holes, on the unit below the others'. */
 	private const val ESCAPE_SAMPLER = "RelativityEscape"
 
@@ -216,8 +213,10 @@ object VertexLens {
 		when (event.stage) {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
-			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame) {
-				if (!fieldSky) HorizonMesh.draw(hole, event.modelViewMatrix)
+			// (Where the post pass draws the field lens's sky, the hole's own meshes stand down: shadow, disk and jets
+			// move to the post pass.)
+			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame && !fieldSky) {
+				HorizonMesh.draw(hole, event.modelViewMatrix)
 				DiskMesh.draw(hole, event.modelViewMatrix)
 				JetMesh.draw(hole, event.modelViewMatrix)
 			}
@@ -592,7 +591,7 @@ object VertexLens {
 	 */
 	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val sources = if (fieldSky) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
-		data.put(sources.size.toFloat()).put(FIELD_EVALUATIONS.toFloat()).put(0f).put(0f)
+		data.put(sources.size.toFloat()).put(0f).put(0f).put(0f)
 		for (source in sources) {
 			val (centre, type, params) = when (source) {
 				is BlackHole -> Triple(source.center.let { org.joml.Vector3d(it.x, it.y, it.z) }, 1f, floatArrayOf(source.schwarzschildRadius.toFloat(), 0f))
