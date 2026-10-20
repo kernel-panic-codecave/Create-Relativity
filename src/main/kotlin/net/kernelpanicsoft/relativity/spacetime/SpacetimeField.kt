@@ -100,6 +100,9 @@ object SpacetimeField {
 	/** Whether nothing curves spacetime in [level]: no holes, no other sources. */
 	fun isFlat(level: Level): Boolean = blackHoles(level).isEmpty() && fieldSources(level).isEmpty()
 
+	/** Every source in [level]: its holes first, then the rest ([fieldSources]). */
+	fun sources(level: Level): List<FieldSource> = blackHoles(level) + fieldSources(level)
+
 	/** Every non-hole source in [level]. */
 	fun fieldSources(level: Level): List<FieldSource> =
 		if (providers.isEmpty()) emptyList() else providers.flatMap { it.sources(level) }

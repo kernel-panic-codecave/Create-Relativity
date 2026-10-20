@@ -75,6 +75,7 @@ object VertexLens {
 			when (source) {
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> 2.0 * abs(source.mass) / maxOf(source.center.distance(at), 1.0)
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble -> source.speed * source.radius / maxOf(source.center.distance(at), 1.0)
+				is BlackHole -> source.schwarzschildRadius / maxOf(source.center.distanceTo(camera), 1.0)
 			}
 		} ?: return null
 		return when (strongest) {
@@ -86,6 +87,7 @@ object VertexLens {
 				val c = strongest.center
 				Centre(c.x(), c.y(), c.z(), strongest.radius / 10.0, 0.05, null, strongest.javaClass)
 			}
+			is BlackHole -> centreOf(strongest, emptyList(), camera)
 		}
 	}
 

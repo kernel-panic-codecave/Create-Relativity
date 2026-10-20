@@ -25,7 +25,7 @@ data class BlackHole(
 	val spin: Double = 0.0,
 	val accretionRate: Double = 0.0,
 	val feedRate: Double = 0.0,
-) {
+) : FieldSource {
 	init {
 		require(schwarzschildRadius > 0.0) { "Schwarzschild radius must be positive" }
 		require(spin in -MAX_SPIN..MAX_SPIN) { "spin must be within ±$MAX_SPIN (Thorne limit)" }
@@ -58,6 +58,15 @@ data class BlackHole(
 	}
 
 	fun equatorialExtent(r: Double): Double = kotlin.math.sqrt(r * r + (spin * mass) * (spin * mass))
+
+	override fun toPhysics(origin: org.joml.Vector3dc): net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource {
+		val p = DoubleArray(3)
+		GameFrame.toPhysics(org.joml.Vector3d(x, y, z).sub(origin), p)
+		return net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource(p[0], p[1], p[2], mass, spin * mass)
+	}
+
+	override fun strengthAt(position: org.joml.Vector3dc): Double =
+		mass / maxOf(position.distanceSquared(x, y, z), schwarzschildRadius * schwarzschildRadius)
 
 	companion object {
 		/** Thorne's limit: photons from the disk swallowed with the wrong angular momentum stop spin-up here. */

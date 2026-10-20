@@ -8,9 +8,10 @@ import org.joml.Vector3d
 import org.joml.Vector3dc
 
 /**
- * Something other than a black hole that curves spacetime in a level, in game terms (block coordinates, game axes).
- * Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from [SpacetimeField.addProvider]
- * (gravity generators, warp drives, tests). Every system that asks [SpacetimeField] sees them: free fall, clocks, the lens.
+ * Something that curves spacetime in a level, in game terms (block coordinates, game axes): a [BlackHole], a [Mass] or a
+ * [Bubble]. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
+ * [SpacetimeField.addProvider] (gravity generators, warp drives, tests); [SpacetimeField.sources] gives both. Every
+ * system that asks [SpacetimeField] sees them: free fall, clocks, the lens.
  */
 sealed interface FieldSource {
 	/** The physics-core source, centred relative to [origin] on physics axes (see [GameFrame]). */
