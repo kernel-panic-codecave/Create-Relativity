@@ -1775,8 +1775,12 @@ bool relativityLensed(mat4 proj) {
 
 // For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
-    // (Composed, each pixel would solve its own image: not checked, for now.)
-    if (relativityFieldCount() > 1) return false;
+    // Composed: the pixel's own image, solved (from the nearest hole's aim: a round or two), against where it's drawn.
+    if (relativityFieldCount() > 1) {
+        vec3 own;
+        if (!relativityFieldImage(unbent, relativitySecond(), own)) return true;
+        return acos(clamp(dot(own, normalize(bent)), -1.0, 1.0)) > RELATIVITY_PIXEL_SLACK * RelativityLensData[11].x;
+    }
     if (mod(RelativityLensData[11].y, 2.0) > 0.5) return false;
     float d = length(unbent);
     vec3 hole = RelativityLensData[0].xyz;
