@@ -370,10 +370,9 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   to encompass the whole ship, and a static one has a configurable extent.
 - **Falling out of a superluminal bubble** is fatal, with Star Trek flavoured death messages ("... was disassembled at
   the subatomic level by a collapsing warp field", "... experienced a warp core breach", ...).
-- **Warp trains**: a Warp Field Generator on a Create train carriage. The train runs its track at superluminal speed,
-  the bubble carried along the rails; the route is the course set before engaging, which suits the no-steering rule
-  below. Stations make the stop points, and the arrival hazard (below) makes station design matter: arriving
-  nose-first into a platform blasts it.
+- **Warp trains** are not a drive aboard: trains go faster than light on **Krasnikov tube track** (§8c), once the
+  particle accelerator and its two fuels exist. Until then, the interim warp drive on maglev trains stands in (a drive
+  on a carriage raising its top speed, a warp tube bent along the track); it's removed when the tube track lands.
 - **No steering from inside at superluminal speed**: the front wall is causally cut off from the crew (a horizon).
   Course and stop point are set before engaging. That's real physics, and it's a good gameplay constraint.
 - **The arrival hazard** (McMonigal, Lewis & O'Byrne 2012): particles swept up at the front wall pile up as
@@ -386,6 +385,34 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
 - From inside, starlight piles up ahead and is strongly blueshifted, the view behind goes dark and red, and the
   bubble wall shimmers. That's the lensing post pass driven by the Alcubierre metric (ray-marched, like Kerr in M9).
 - From outside, the ship appears and vanishes abruptly, since its light reaches observers in a burst.
+
+## 8c. Krasnikov tube track
+
+Fixed faster-than-light lanes for trains: the tube is part of the route, not carried by the train. A Krasnikov tube
+(Krasnikov 1995; Everett & Roman 1997) is a static region along a path where light cones tip toward one direction:
+`ds² = −dt² + (1 − k) dx dt + k dx²` (plus the transverse shape), k = 1 outside and −1 + δ inside, so both edges of
+the cone point down the tube and anything in it can cover distance arbitrarily fast that way while never locally
+outrunning light.
+
+### Gameplay
+- **Krasnikov track**: a maglev track variant whose guideway carries the tube, placed facing its fast direction (one
+  way, like a one-way rail). Two-way lines are two tracks side by side, opposed (spaced so their walls don't overlap,
+  as maglev troughs refuse to sit wall in wall).
+- **Fuelled by plumbing**: field pylons beside the line, fed by ordinary pipes from fixed tanks of Exotic Matter
+  (Degenerate Matter too, if the wall needs a positive layer), each powering the tube near it; the drain scales with
+  the powered length. This is why the tube suits trains: nothing aboard needs fuel.
+- **Building it**: a train runs the new line once at normal maglev speed to lay the tube; after that, runs in its
+  fast direction are near-instant.
+- **The train** runs at its ordinary speed in its own frame and needs no drive; it covers the outside distance as fast
+  as the tube allows, with a config minimum of ticks per distance so a trip still takes game time.
+- **Visuals**: the tilted cones lens one way along the guideway (a lens module of its own, from the warp tube's: thin
+  walls, refraction at them).
+
+### No time travel
+A single tube, or opposed pairs at rest together, can't reach the past: the cone tips at most to flat (instant), never
+past it. Loops (closed timelike curves) need tubes in relative motion or cones tipped past flat, so: tube track only on
+static ground (never on Sable ships or contraptions), and the tilt is capped at instant (no overdrive). Warp 10 stays
+unreachable.
 
 ## 8b. Binary black holes, mergers and gravitational waves
 
@@ -617,7 +644,8 @@ fraction of c (or deliberately not, for a relativistic orbit as a feature). To b
   - *Tidal Gauge*: redstone output proportional to tidal acceleration.
   - *Lorentz Drive*: an Aeronautics thruster that burns exotic matter/Neutronium to reach high β.
   - *Gravitic Press*, *Casimir Cavity*, *Containment Field Projector*, *Wormhole Anchor*.
-  - *Particle Accelerator*: the multiblock making the two fuels, Degenerate and Exotic Matter (§8).
+  - *Particle Accelerator*: the multiblock making the two fuels, Degenerate and Exotic Matter (§8); prerequisite for
+    Krasnikov tube track (§8c).
   - *Gravity Generator*: turns energy (Create rotational power: speed sets strength, stress pays for it) and fuel
     (Degenerate Matter for positive gravity, Exotic Matter for negative) into gravity.
     It warps spacetime in selectable shapes (a point mass, a flat artificial-gravity field, ...) through the sampled metric
