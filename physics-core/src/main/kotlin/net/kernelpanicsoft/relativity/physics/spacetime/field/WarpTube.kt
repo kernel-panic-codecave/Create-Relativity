@@ -58,6 +58,17 @@ class WarpTube(
 	 * to the next across each joint's plane over a wall's thickness (as the walls rise).
 	 */
 	fun push(x: Double, y: Double, z: Double, out: DoubleArray): Double {
+		val frame = DoubleArray(4)
+		val rho = frame(x, y, z, frame)
+		out[0] = frame[0] * frame[1]; out[1] = frame[0] * frame[2]; out[2] = frame[0] * frame[3]
+		return rho
+	}
+
+	/**
+	 * The tube's shape and direction at (x, y, z): [out] = (f, t̂x, t̂y, t̂z), f(ρ) 1 inside and 0 outside, t̂ the spine's
+	 * direction there (turning across each joint's plane over a wall's thickness); returns ρ, the distance to the spine.
+	 */
+	fun frame(x: Double, y: Double, z: Double, out: DoubleArray): Double {
 		var best = Double.MAX_VALUE
 		for (k in 0 until points - 1) {
 			val ax = spine[3 * k]; val ay = spine[3 * k + 1]; val az = spine[3 * k + 2]
@@ -79,7 +90,7 @@ class WarpTube(
 			tx += (nx - tx) * w; ty += (ny - ty) * w; tz += (nz - tz) * w
 		}
 		val l = sqrt(tx * tx + ty * ty + tz * tz).takeIf { it > 1e-12 } ?: 1.0
-		out[0] = f * tx / l; out[1] = f * ty / l; out[2] = f * tz / l
+		out[0] = f; out[1] = tx / l; out[2] = ty / l; out[3] = tz / l
 		return rho
 	}
 

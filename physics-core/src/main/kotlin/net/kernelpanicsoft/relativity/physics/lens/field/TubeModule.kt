@@ -4,19 +4,59 @@ import kotlin.math.abs
 import kotlin.math.sqrt
 
 /**
- * A warp tube ([net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube]): a field of radius [radius] round the
- * polyline [spine] pushing at [speed] (times c) along it, its walls thin. Light runs straight everywhere but the walls
- * (and the joints between segments, where the push turns), and at a wall keeps what the wall can't change: its energy
+ * A tube-shaped field of radius [radius] round the polyline [spine], uniform inside ([interior]: a warp tube's push, a
+ * Krasnikov tube's tipped light cones), its walls thin. Light runs straight everywhere but the walls (and the joints
+ * between segments, where the field turns with the spine), and at a wall keeps what the wall can't change: its energy
  * at infinity (p_t: the field is stationary) and its momentum along the wall; the momentum across it is what makes it
- * null on the other side. So a wall refracts like the face of a moving medium, or reflects (no such momentum: light
- * running along a slow tube's wall, or out of a fast one); faster than light, the light ahead of a rider can't get out
- * at all, and light can't get in going too far forward: a horizon, captured.
+ * null on the other side. So a wall refracts like the face of a moving medium, or reflects (no such momentum); light the
+ * interior won't let out (a warp tube faster than light: the light ahead of a rider) can't leave at all: a horizon,
+ * captured.
  *
- * Inside, with push `v t̂`, light's coordinate velocity is `m̂ + v t̂`: m̂ its direction as a rider sees it (the field's
- * Eulerian observers ride with it; time and space are flat for them). Directions of light inside are m̂ throughout
- * ([LensModule]'s lines, [aim]'s answer), not coordinate tangents: those can't tell light faster than light apart.
+ * Directions of light inside are the ones the interior's observers see ([Interior.start]), throughout ([LensModule]'s
+ * lines, [aim]'s answer), not coordinate tangents: faster than light, those can't tell light apart.
  */
-class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : LensModule {
+class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double) : LensModule {
+	/** A warp tube ([net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube]) pushing at [speed] times c. */
+	constructor(spine: List<V3>, speed: Double, radius: Double) : this(spine, Interior.Warp(speed), radius)
+
+	/**
+	 * The inside's inverse metric along the spine's direction t̂: g^tt = [a], g^ts = [b], g^ss = [c] (s along t̂), flat
+	 * across; and who looks out from inside.
+	 */
+	sealed class Interior(val a: Double, val b: Double, val c: Double) {
+		/** Light seen going along unit [m] (by this interior's observers, spine direction [t]): its momentum and p_t. */
+		abstract fun start(m: V3, t: V3): Pair<V3, Double>
+
+		/**
+		 * A warp tube's push at [speed] times c along t̂ ([net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube]):
+		 * its observers ride it (Eulerian: time and space flat for them), light's coordinate velocity m̂ + v t̂.
+		 */
+		class Warp(val speed: Double) : Interior(-1.0, -speed, 1.0 - speed * speed) {
+			override fun start(m: V3, t: V3): Pair<V3, Double> = m to (-1.0 - speed * (t dot m))
+		}
+
+		/**
+		 * A Krasnikov tube's inside ([net.kernelpanicsoft.relativity.physics.spacetime.field.KrasnikovTube]), k in (0, 1]:
+		 * light runs along t̂ at 1 / k, back at 1. Its observers stand still (g_tt is −1: they always can).
+		 */
+		class Krasnikov(val k: Double) : Interior(-4 * k / ((1 + k) * (1 + k)), -2 * (1 - k) / ((1 + k) * (1 + k)), 4 / ((1 + k) * (1 + k))) {
+			override fun start(m: V3, t: V3): Pair<V3, Double> {
+				// The static observer's frame: along t̂ the unit vector orthogonal to ∂_t is (g_ts, t̂) 2 / (1 + k).
+				val gts = -(1 - k) / 2
+				val ms = m dot t
+				val kt = 1 + ms * gts * 2 / (1 + k)
+				val ks = ms * 2 / (1 + k)
+				val pt = -kt + gts * ks
+				val ps = gts * kt + k * ks
+				return (m - t * ms + t * ps) to pt
+			}
+		}
+
+		/** Flat: outside. */
+		object Flat : Interior(-1.0, 0.0, 1.0) {
+			override fun start(m: V3, t: V3): Pair<V3, Double> = m to -1.0
+		}
+	}
 	init {
 		require(spine.size >= 2) { "the spine needs at least two points" }
 	}
@@ -33,13 +73,23 @@ class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : L
 	/** Light's state: where, its momentum p (spatial, covariant) and energy at infinity p_t, and its region (-1: outside). */
 	private class Ray(var x: V3, var p: V3, val pt: Double, var region: Int)
 
-	private fun pushOf(region: Int): V3 = if (region < 0) V3.ZERO else directions[region] * speed
+	private fun interiorOf(region: Int): Interior = if (region < 0) Interior.Flat else interior
 
-	/** Energy as the field's riders measure it: −p_t + β·p (β = −push); light's is positive. */
-	private fun energy(pt: Double, p: V3, region: Int): Double = -pt - (pushOf(region) dot p)
+	private fun axisOf(region: Int): V3 = if (region < 0) V3(1.0, 0.0, 0.0) else directions[region]
 
-	/** Coordinate velocity per unit coordinate time: p / E + push. */
-	private fun velocity(r: Ray): V3 = r.p * (1.0 / energy(r.pt, r.p, r.region)) + pushOf(r.region)
+	/** dt/dλ: g^tt p_t + g^ts p_s (light's is positive: future-directed). */
+	private fun tDot(pt: Double, p: V3, region: Int): Double {
+		val f = interiorOf(region)
+		return f.a * pt + f.b * (p dot axisOf(region))
+	}
+
+	/** Coordinate velocity per unit coordinate time: (p + ((g^ss − 1) p_s + g^ts p_t) t̂) / ṫ. */
+	private fun velocity(r: Ray): V3 {
+		val f = interiorOf(r.region)
+		val t = axisOf(r.region)
+		val ps = r.p dot t
+		return (r.p + t * ((f.c - 1) * ps + f.b * r.pt)) * (1.0 / tDot(r.pt, r.p, r.region))
+	}
 
 	/** The nearest segment within the tube's radius of [x] (thin walls), or -1. */
 	private fun regionOf(x: V3): Int {
@@ -129,23 +179,27 @@ class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : L
 	 * [region], going along n ([sense] 1) or against it (-1): null if there's none (or none with positive energy).
 	 */
 	private fun solve(pt: Double, pT: V3, n: V3, region: Int, sense: Double): Double? {
-		val push = pushOf(region)
-		// E = a − b q; null: |pT|² + q² = E².
-		val a = -pt - (push dot pT)
-		val b = push dot n
-		val qa = 1 - b * b
-		val qb = 2 * a * b
-		val qc = (pT dot pT) - a * a
-		val roots = if (abs(qa) < 1e-12) listOf(-qc / qb) else {
+		val f = interiorOf(region)
+		val t = axisOf(region)
+		// p = pT + q n, p_s = a0 + b0 q; null: g^tt p_t² + 2 g^ts p_t p_s + g^ss p_s² + |p|² − p_s² = 0.
+		val a0 = pT dot t
+		val b0 = n dot t
+		val qa = 1 + (f.c - 1) * b0 * b0
+		val qb = 2 * (f.c - 1) * a0 * b0 + 2 * f.b * pt * b0
+		val qc = (f.c - 1) * a0 * a0 + 2 * f.b * pt * a0 + f.a * pt * pt + (pT dot pT)
+		val roots = if (abs(qa) < 1e-12) (if (abs(qb) < 1e-14) emptyList() else listOf(-qc / qb)) else {
 			val disc = qb * qb - 4 * qa * qc
 			if (disc < 0) return null
 			val s = sqrt(disc)
 			listOf((-qb - s) / (2 * qa), (-qb + s) / (2 * qa))
 		}
 		return roots.filter { q ->
-			val e = a - b * q
-			// Positive energy, and going the right way across (its velocity's normal part: q / E + push·n).
-			e > 1e-12 && (q / e + b) * sense > 0
+			val p = pT + n * q
+			val td = tDot(pt, p, region)
+			// Future-directed, and going the right way across (its velocity's normal part).
+			val ps = p dot t
+			val vn = (q + (n dot t) * ((f.c - 1) * ps + f.b * pt)) / td
+			td > 1e-12 && vn * sense > 0
 		}.minByOrNull { abs(it) }
 	}
 
@@ -163,11 +217,12 @@ class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : L
 		return null
 	}
 
-	/** Light at [x] heading along [d] (inside, the way a rider sees it): its state (p = d; inside, E = 1). */
+	/** Light at [x] heading along [d] (inside, the way the interior's observers see it): its state. */
 	private fun start(x: V3, d: V3): Ray {
 		val region = regionOf(x)
 		if (region < 0) return Ray(x, d, -1.0, -1)
-		return Ray(x, d, -1.0 - (pushOf(region) dot d), region)
+		val (p, pt) = interior.start(d, directions[region])
+		return Ray(x, p, pt, region)
 	}
 
 	override fun aim(from: V3, target: V3, secondary: Boolean): V3? {
@@ -194,7 +249,7 @@ class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : L
 			val m = miss(sa, sb) ?: continue
 			if (m.length < r.length) { a = sa; b = sb; r = m }
 		}
-		if (r.length >= 1e9) return straight
+		if (r.length >= 1e9) return null
 		repeat(30) {
 			if (r.length < 1e-6 * maxOf(distance, 1.0)) return direction(a, b)
 			val h = 1e-6
@@ -222,8 +277,8 @@ class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : L
 			}
 			if (!stepped) return@repeat
 		}
-		// (Not reached exactly: the nearest it came, if near; otherwise there's no such light.)
-		return if (r.length < 0.02 * maxOf(distance, 1.0)) direction(a, b) else straight
+		// (Not reached exactly: the nearest it came, if near; otherwise no light from here reaches it: hidden.)
+		return if (r.length < 0.02 * maxOf(distance, 1.0)) direction(a, b) else null
 	}
 
 	/**
@@ -332,9 +387,9 @@ class TubeModule(val spine: List<V3>, val speed: Double, val radius: Double) : L
 
 	override fun field(a: V3, b: V3): Pair<V3, V3> = V3.ZERO to V3.ZERO
 
-	// Inside, light's direction is the one its riders see (its momentum's): faster than light, two of them share a
-	// coordinate direction (one a rider sends back still runs forward), so a coordinate direction can't tell them apart.
-	// Outside they're the same. So no conversion either way.
+	// Inside, light's direction is the one the interior's observers see: faster than light, two of them can share a
+	// coordinate direction (one a warp rider sends back still runs forward), so a coordinate direction can't tell them
+	// apart. Outside they're the same. So no conversion either way.
 	override fun toCoordinate(at: V3, d: V3): V3 = d
 
 	override fun toObserved(at: V3, d: V3): V3 = d
