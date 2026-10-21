@@ -1517,8 +1517,13 @@ bool relativityFieldSky(vec3 d, out vec3 escape) {
     return true;
 }
 
-// How far (a fraction of its distance) the light found for a point may pass it, checked forward.
-const float RELATIVITY_FIELD_CHECK = 0.3;
+// Images this far into a hole's shadow (a fraction of its angular radius) are hidden: a little short of its edge, where
+// the camera's directions (coordinate tangents) and the critical angle's (a static observer's) differ.
+const float RELATIVITY_SHADOW_MARGIN = 0.97;
+
+// How far either side of the flip in the chain's order (a fraction of the two sources' distance apart, along the line
+// of sight) its two orders are blended.
+const float RELATIVITY_FIELD_BLEND = 0.3;
 
 // Where the camera sees `target` (FieldLens.image): its primary image or, with `secondary`, its secondary one; false
 // if a hole hides it. Each source's own exact image, chained back toward the camera: the source the light meets last
@@ -1538,37 +1543,79 @@ bool relativityFieldImage(vec3 target, bool secondary, out vec3 seen) {
     if (secondary && (terminal < 0 || !relativityFieldHole(terminal))) return false;
     float distance = length(target);
     vec3 line = target / distance;
-    vec3 point = target;
-    seen = line;
-    int done = 0;
-    for (int i = 0; i < n; i += 1) {
-        int next = -1;
-        float farthest = -1e30;
-        for (int k = 0; k < n; k += 1) {
-            if ((done & (1 << k)) != 0) continue;
-            float along = dot(relativityFieldCentre(k), line);
-            if (along > farthest) { farthest = along; next = k; }
+    // The order the chain takes the sources in flips where two of them are equally far along the line of sight (a
+    // plane through the camera, between two holes it stands between): images jumped there, a seam. So near the
+    // flip the chain is taken both ways (that pair swapped the second time) and the two blended, evenly at the flip.
+    int pairA = -1;
+    int pairB = -1;
+    float pairGap = 1e30;
+    for (int a = 0; a < n; a += 1) {
+        for (int b = a + 1; b < n; b += 1) {
+            float gap = abs(dot(relativityFieldCentre(a) - relativityFieldCentre(b), line));
+            if (gap < pairGap) { pairGap = gap; pairA = a; pairB = b; }
         }
-        done |= 1 << next;
-        if (relativityFieldHole(next)) {
-            vec3 aimed;
-            if (!relativityHoleAim(vec3(0.0), relativityFieldCentre(next), relativityFieldParams(next).x, point, secondary && next == terminal, aimed)) return false;
-            seen = aimed;
-        } else {
-            vec3 turn = vec3(0.0);
-            vec3 move = vec3(0.0);
-            relativityFieldWeak(next, vec3(0.0), point, turn, move);
-            seen = normalize(seen - move / distance);
-        }
-        point = seen * distance;
     }
-    // Checked once, forward: the light leaving along it, followed past the sources (as the sky's is), must come by
-    // the target. Where the chain's sources couple too strongly for it (light round two holes in turn), its answer
-    // can be light that really falls in or goes elsewhere: the world's underside drawn over the sky.
+    float width = pairA >= 0 ? RELATIVITY_FIELD_BLEND * length(relativityFieldCentre(pairA) - relativityFieldCentre(pairB)) : 0.0;
+    float keep = pairA >= 0 ? 0.5 + 0.5 * smoothstep(0.0, width, pairGap) : 1.0;
+    int passes = keep < 0.999 ? 2 : 1;
+    vec3 blended = vec3(0.0);
+    float weights = 0.0;
+    for (int pass = 0; pass < passes; pass += 1) {
+        vec3 point = target;
+        vec3 chained = line;
+        bool found = true;
+        int done = 0;
+        for (int i = 0; i < n && found; i += 1) {
+            int next = -1;
+            float farthest = -1e30;
+            for (int k = 0; k < n; k += 1) {
+                if ((done & (1 << k)) != 0) continue;
+                // (The second pass swaps the pair's places in the order.)
+                int key = pass == 1 && k == pairA ? pairB : pass == 1 && k == pairB ? pairA : k;
+                float along = dot(relativityFieldCentre(key), line);
+                if (along > farthest) { farthest = along; next = k; }
+            }
+            done |= 1 << next;
+            if (relativityFieldHole(next)) {
+                vec3 aimed;
+                found = relativityHoleAim(vec3(0.0), relativityFieldCentre(next), relativityFieldParams(next).x, point, secondary && next == terminal, aimed);
+                chained = aimed;
+            } else {
+                vec3 turn = vec3(0.0);
+                vec3 move = vec3(0.0);
+                relativityFieldWeak(next, vec3(0.0), point, turn, move);
+                chained = normalize(chained - move / distance);
+            }
+            point = chained * distance;
+        }
+        float weight = pass == 0 ? keep : 1.0 - keep;
+        if (found) {
+            blended += chained * weight;
+            weights += weight;
+        }
+    }
+    // (One way hidden, the other found: that one, not a hole at the flip.)
+    if (weights <= 0.0) return false;
+    seen = normalize(blended);
+    // Where the chain's sources couple too strongly for it (light round two holes in turn), its answer can be light
+    // that really falls in: never seen inside a hole's shadow (from the camera, the critical angle round it; past 90
+    // degrees inside its photon sphere), unless nearer than the hole (in front of it). (Not where the light passes the
+    // target, checked forward: by an Einstein ring the map stretches without bound, and that hid the floor behind a hole
+    // seen head-on.)
+    for (int k = 0; k < n; k += 1) {
+        if (!relativityFieldHole(k)) continue;
+        vec3 c = relativityFieldCentre(k);
+        float rc = length(c);
+        float u0 = relativityFieldParams(k).x / rc;
+        if (u0 >= 1.0 || distance <= rc) continue;
+        float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+        float shadow = u0 > 2.0 / 3.0 ? 3.14159265 - critical : critical;
+        if (acos(clamp(dot(seen, c / rc), -1.0, 1.0)) < RELATIVITY_SHADOW_MARGIN * shadow) return false;
+    }
+    // And once forward: light that a source captures isn't seen at all.
     vec3 o = vec3(0.0);
     vec3 d = seen;
-    if (!relativityFieldPropagate(o, d, true, target, -1)) return false;
-    return length(o + d * dot(target - o, d) - target) < RELATIVITY_FIELD_CHECK * distance;
+    return relativityFieldPropagate(o, d, false, target, -1);
 }
 
 int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
