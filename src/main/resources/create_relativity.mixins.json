@@ -50,6 +50,7 @@
     "create.KineticNetworkMixin",
     "create.TorquePropagatorAccessor",
     "create.TrackBlockMixin",
-    "create.TrackPlacementMixin"
+    "create.TrackPlacementMixin",
+    "create.TrackBlockBogeyMixin"
   ]
 }

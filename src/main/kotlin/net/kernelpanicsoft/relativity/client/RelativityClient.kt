@@ -1,5 +1,8 @@
 package net.kernelpanicsoft.relativity.client
 
+import com.simibubi.create.content.trains.bogey.BogeyBlockEntityRenderer
+import com.simibubi.create.content.trains.bogey.BogeyBlockEntityVisual
+import dev.engine_room.flywheel.lib.visualization.SimpleBlockEntityVisualizer
 import dev.nyon.klf.MOD_BUS
 import net.kernelpanicsoft.relativity.client.deform.NoodleRenderer
 import net.kernelpanicsoft.relativity.client.light.LightDelay
@@ -26,9 +29,14 @@ object RelativityClient {
 		ReferenceShot.init()
 		MOD_BUS.addListener(net.neoforged.neoforge.client.event.RegisterPresetEditorsEvent::class.java, PonderflatScreen::onRegisterEditors)
 		MOD_BUS.addListener(net.neoforged.neoforge.client.event.ModelEvent.ModifyBakingResult::class.java, net.kernelpanicsoft.relativity.client.maglev.MaglevTrackModel::onModifyBakingResult)
+		MOD_BUS.addListener(net.neoforged.neoforge.client.event.ModelEvent.ModifyBakingResult::class.java, net.kernelpanicsoft.relativity.client.maglev.MaglevBogeyRender::onModifyBakingResult)
 		MOD_BUS.addListener(EntityRenderersEvent.RegisterRenderers::class.java) {
 			// Holes draw nothing themselves: the lens and disk passes show them.
 			it.registerEntityRenderer(RelativityEntities.BLACK_HOLE.get(), ::NoopRenderer)
+			// Maglev bogeys as Create's: its renderer, or its Flywheel visual where that's on.
+			val bogey = net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_BOGEY_ENTITY.get()
+			it.registerBlockEntityRenderer(bogey) { context -> BogeyBlockEntityRenderer<net.kernelpanicsoft.relativity.content.MaglevBogeyBlockEntity>(context) }
+			SimpleBlockEntityVisualizer.builder(bogey).factory { context, entity, partialTick -> BogeyBlockEntityVisual(context, entity, partialTick) }.skipVanillaRender { false }.apply()
 		}
 	}
 }

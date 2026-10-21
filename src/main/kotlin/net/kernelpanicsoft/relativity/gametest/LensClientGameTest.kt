@@ -1873,6 +1873,10 @@ class LensClientGameTest {
 					level.setBlock(BlockPos(0, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
 					level.setBlock(BlockPos(4, -60, z), track, 2)
 				}
+				// A bogey on the straight, laid as a train casing lays one.
+				val under = BlockPos(0, -60, -3)
+				val anchor = (maglev.block as com.simibubi.create.content.trains.track.TrackBlock).getBogeyAnchor(level, under, level.getBlockState(under))
+				level.setBlock(under.above(), anchor, 3)
 				// A slope up and on, and a diagonal.
 				for (k in 0..3) level.setBlock(BlockPos(-4, -60 + k, k), shaped(com.simibubi.create.content.trains.track.TrackShape.AS), 2)
 				for (z in -6..-1) level.setBlock(BlockPos(-4, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
@@ -1969,6 +1973,9 @@ class LensClientGameTest {
 			command("tp @a 20.5 -56.5 -3.5 0 35")
 			waitTicks(30)
 			takeScreenshot("maglev_junction_low")
+			command("tp @a 2.6 -58.3 -5.4 45 20")
+			waitTicks(30)
+			takeScreenshot("maglev_bogey")
 			command("tp @a 18.6 -55.5 1.4 0 90")
 			waitTicks(30)
 			takeScreenshot("maglev_close_v")

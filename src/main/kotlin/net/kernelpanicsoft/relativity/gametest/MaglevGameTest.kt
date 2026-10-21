@@ -59,4 +59,23 @@ class MaglevGameTest {
 		assertTrue(Maglev.refuseConnection(level, maglev, stack) == null) { "A maglev curve to maglev was refused" }
 		succeed()
 	}
+
+	/** A train casing on maglev track lays a maglev bogey (on Create's, Create's), and it runs only on maglev track. */
+	@GameTest(template = MEDIUM, batch = "relativity_maglev", timeoutTicks = 20)
+	fun GameTestHelper.maglevBogey() {
+		val maglev = RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState()
+		val standard = BuiltInRegistries.BLOCK.get(ResourceLocation.parse("create:track")).defaultBlockState()
+		setBlock(BlockPos(2, 1, 2), maglev)
+		setBlock(BlockPos(5, 1, 2), standard)
+		val onMaglev = (maglev.block as TrackBlock).getBogeyAnchor(level, absolutePos(BlockPos(2, 1, 2)), maglev)
+		val onStandard = (standard.block as TrackBlock).getBogeyAnchor(level, absolutePos(BlockPos(5, 1, 2)), standard)
+		assertTrue(onMaglev.`is`(RelativityBlocks.MAGLEV_BOGEY.get())) { "Maglev track anchors ${onMaglev.block}, not a maglev bogey" }
+		assertTrue(onStandard.`is`(com.simibubi.create.AllBlocks.SMALL_BOGEY.get())) { "Create's track anchors ${onStandard.block}, not its small bogey" }
+		val bogey = RelativityBlocks.MAGLEV_BOGEY.get()
+		assertTrue(bogey.getTrackType(bogey.defaultStyle) === Maglev.TRACK_TYPE) { "The maglev bogey runs on ${bogey.getTrackType(bogey.defaultStyle)}" }
+		setBlock(BlockPos(2, 2, 2), onMaglev)
+		val entity = getBlockEntity<com.simibubi.create.content.trains.bogey.AbstractBogeyBlockEntity>(BlockPos(2, 2, 2))
+		assertTrue(entity.style === net.kernelpanicsoft.relativity.content.MaglevBogey.STYLE) { "The maglev bogey's style is ${entity.style.id}" }
+		succeed()
+	}
 }
