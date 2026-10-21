@@ -52,6 +52,8 @@ object CreateRelativity {
 		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityLeave)
 		RelativityForceGroups.register()
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onPrePhysicsTick)
+		net.kernelpanicsoft.relativity.sable.ShipWarp.init()
+		NeoForge.EVENT_BUS.addListener(net.kernelpanicsoft.relativity.sable.ShipWarp::onPrePhysicsTick)
 		NeoForge.EVENT_BUS.addListener(SableSpacetimeForces::onLevelTick)
 		NeoForge.EVENT_BUS.addListener(EntitySpacetime::onEntityTick)
 		NeoForge.EVENT_BUS.addListener(LocalClocks::onLevelLoad)

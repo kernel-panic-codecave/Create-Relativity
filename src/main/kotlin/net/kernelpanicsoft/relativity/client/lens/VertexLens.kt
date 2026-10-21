@@ -92,12 +92,12 @@ object VertexLens {
 		}
 		val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
 		// (Tubes aren't drawn by this lens: the field lens's tube module.)
-		val strongest = others.filter { it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube }.maxByOrNull { source ->
+		val strongest = others.filter { it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube && it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid }.maxByOrNull { source ->
 			when (source) {
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> 2.0 * abs(source.mass) / maxOf(source.center.distance(at), 1.0)
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble -> source.speed * source.radius / maxOf(source.center.distance(at), 1.0)
 				is BlackHole -> source.schwarzschildRadius / maxOf(source.center.distanceTo(camera), 1.0)
-				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> 0.0
+				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid -> 0.0
 			}
 		} ?: return null
 		return when (strongest) {
@@ -110,7 +110,7 @@ object VertexLens {
 				Centre(c.x(), c.y(), c.z(), strongest.radius / 10.0, 0.05, null, strongest.javaClass)
 			}
 			is BlackHole -> centreOf(strongest, emptyList(), camera)
-			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> null
+			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid -> null
 		}
 	}
 

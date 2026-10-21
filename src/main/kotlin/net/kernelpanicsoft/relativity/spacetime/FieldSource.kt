@@ -3,6 +3,7 @@ package net.kernelpanicsoft.relativity.spacetime
 import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
+import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpEllipsoid
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube
 import net.minecraft.world.level.Level
 import org.joml.Vector3d
@@ -10,7 +11,7 @@ import org.joml.Vector3dc
 
 /**
  * Something that curves spacetime in a level, in game terms (block coordinates, game axes): a [BlackHole], a [Mass], a
- * [Bubble] or a [Tube]. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
+ * [Bubble], a [Tube] or an [Ellipsoid]. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
  * [SpacetimeField.addProvider] (gravity generators, warp drives, tests); [SpacetimeField.sources] gives both. Every
  * system that asks [SpacetimeField] sees them: free fall, clocks, the lens.
  */
@@ -103,6 +104,44 @@ sealed interface FieldSource {
 		// As a bubble's: of order speed / radius within a wall's reach of it, nothing past.
 		override fun strengthAt(position: Vector3dc): Double =
 			if (distance(position) < 1.5 * radius) kotlin.math.abs(speed) / radius else 0.0
+	}
+
+	/**
+	 * A warp bubble with an ellipsoidal wall ([WarpEllipsoid]): a warp-driven ship's, round its bounds. Centred at
+	 * [center], its three semi-axis vectors [axes] (game axes, their lengths the semi-axes), moving along unit game
+	 * [direction] at [speed] times c.
+	 */
+	data class Ellipsoid(val center: Vector3dc, val axes: List<Vector3dc>, val direction: Vector3dc, val speed: Double) : FieldSource {
+		override fun toPhysics(origin: Vector3dc): MetricSource {
+			val p = DoubleArray(3)
+			val n = DoubleArray(3)
+			GameFrame.toPhysics(Vector3d(center).sub(origin), p)
+			GameFrame.toPhysics(Vector3d(direction).normalize(), n)
+			val flat = DoubleArray(9)
+			val a = DoubleArray(3)
+			for ((i, axis) in axes.withIndex()) {
+				GameFrame.toPhysics(Vector3d(axis), a)
+				flat[3 * i] = a[0]; flat[3 * i + 1] = a[1]; flat[3 * i + 2] = a[2]
+			}
+			return WarpEllipsoid(p[0], p[1], p[2], flat, n, speed)
+		}
+
+		/** The ellipsoidal radius of [position] (1 on the wall). */
+		fun radius(position: Vector3dc): Double {
+			val rel = Vector3d(position).sub(center)
+			var s2 = 0.0
+			for (axis in axes) {
+				val u = rel.dot(axis) / axis.lengthSquared()
+				s2 += u * u
+			}
+			return kotlin.math.sqrt(s2)
+		}
+
+		/** Its longest semi-axis. */
+		val reach: Double get() = axes.maxOf { it.length() }
+
+		// As a bubble's: of order speed over its size within a wall's reach of it, nothing past.
+		override fun strengthAt(position: Vector3dc): Double = if (radius(position) < 1.5) kotlin.math.abs(speed) / reach else 0.0
 	}
 
 	/** Supplies a level's sources each time they're asked for (cheap: called per query). */

@@ -39,6 +39,22 @@ object WarpDrive {
 	fun shell(core: BlockPos): List<BlockPos> =
 		BlockPos.betweenClosed(core.offset(-1, -1, -1), core.offset(1, 1, 1)).map { it.immutable() }.filter { it != core }
 
+	/** Every loaded core, by level (for ships: theirs are found among them). */
+	private val loaded = java.util.WeakHashMap<Level, MutableSet<BlockPos>>()
+
+	@Synchronized
+	fun loaded(level: Level): List<BlockPos> = loaded[level]?.toList() ?: emptyList()
+
+	@Synchronized
+	internal fun load(level: Level, pos: BlockPos) {
+		loaded.getOrPut(level) { HashSet() } += pos.immutable()
+	}
+
+	@Synchronized
+	internal fun unload(level: Level, pos: BlockPos) {
+		loaded[level]?.remove(pos)
+	}
+
 	/** The highest warp factor a drive may be set to (the config's, kept below 10), in tenths. */
 	fun maxTenths(): Int = (RelativityConfig.Server.Trains.maxWarp.coerceIn(0.0, 9.99) * 10).toInt()
 }
@@ -101,6 +117,22 @@ class WarpCoreBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
 
 	/** [warp] as a multiple of c. */
 	val speed: Double get() = WarpScale.speed(warp)
+
+	// (Known as soon as it's loaded: on a ship just made, its first tick can be a while coming.)
+	override fun onLoad() {
+		super.onLoad()
+		level?.let { WarpDrive.load(it, worldPosition) }
+	}
+
+	override fun initialize() {
+		super.initialize()
+		level?.let { WarpDrive.load(it, worldPosition) }
+	}
+
+	override fun remove() {
+		super.remove()
+		level?.let { WarpDrive.unload(it, worldPosition) }
+	}
 
 	override fun lazyTick() {
 		super.lazyTick()
