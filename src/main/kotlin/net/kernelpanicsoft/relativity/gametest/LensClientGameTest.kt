@@ -2049,13 +2049,23 @@ class LensClientGameTest {
 					for (k in 1..6) level.setBlock(BlockPos(x, -58, 0).relative(dir, k), net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:railway_casing")).defaultBlockState(), 3)
 					val controls = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:controls")).defaultBlockState()
 					level.setBlock(BlockPos(x, -57, 0).relative(dir, 1), controls.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, dir), 3)
+					// The maglev train carries a warp drive on its deck, set to warp 2.
+					val warp = track.block === net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get()
+					if (warp) {
+						val core = BlockPos(x, -56, 0).relative(dir, 4)
+						level.setBlock(core, net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_CORE.get().defaultBlockState()
+							.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, dir), 3)
+						for (pos in net.kernelpanicsoft.relativity.content.WarpDrive.shell(core)) level.setBlock(pos, net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_COIL.get().defaultBlockState(), 3)
+						(level.getBlockEntity(core.relative(dir)) as net.kernelpanicsoft.relativity.content.WarpCoilBlockEntity).setting.value = 20
+					}
 					// Glued together, as a player glues a train (only what's on a bogey sticks to it unglued).
-					val from = BlockPos(x, -59, 0).relative(dir, 1)
-					val to = BlockPos(x, -57, 0).relative(dir, 6)
+					val from = BlockPos(x - if (warp) 1 else 0, -59, 0).relative(dir, 1)
+					val to = BlockPos(x + if (warp) 1 else 0, if (warp) -55 else -57, 0).relative(dir, 6)
 					level.addFreshEntity(com.simibubi.create.content.contraptions.glue.SuperGlueEntity(level, net.minecraft.world.phys.AABB.encapsulatingFullBlocks(from, to)))
 				}
 			}
-			waitTicks(10)
+			// (The drive forms.)
+			waitTicks(30)
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
 				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
@@ -2072,18 +2082,22 @@ class LensClientGameTest {
 			server.runOnServer { minecraft ->
 				val carriages = minecraft.overworld().getEntities(com.simibubi.create.AllEntityTypes.CARRIAGE_CONTRAPTION.get()) { true }
 				CreateRelativity.LOGGER.info("Train test: {} carriage(s) at {}", carriages.size, carriages.map { it.position() })
-				// The maglev train (wholly on maglev bogeys) is faster and has less friction than Create's, by the config.
+				// The maglev train (wholly on maglev bogeys) takes curves faster than Create's, by the config; carrying a warp
+				// drive, it runs at its warp and accelerates to get there.
 				val trains = com.simibubi.create.Create.RAILWAYS.trains.values
 				val maglev = trains.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
 				val standard = trains.single { !net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
 				val config = net.kernelpanicsoft.relativity.config.RelativityConfig.Server.Trains
+				val drive = net.kernelpanicsoft.relativity.content.MaglevWarp.drive(maglev)
+				assertTrue(drive == 2.0) { "The maglev train's drive reads warp $drive, set to 2" }
+				val warpTop = net.kernelpanicsoft.relativity.physics.WarpScale.speed(2.0) * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(minecraft.overworld().dimension()) / 20.0
 				for ((what, ratio, expected) in listOf(
-					Triple("top speed", maglev.maxSpeed() / standard.maxSpeed(), config.maglevTopSpeed),
-					Triple("turning speed", maglev.maxTurnSpeed() / standard.maxTurnSpeed(), config.maglevTurningSpeed),
-					Triple("acceleration", maglev.acceleration() / standard.acceleration(), config.maglevAcceleration),
+					Triple("top speed", maglev.maxSpeed() / warpTop, 1.0),
+					Triple("turning speed", (maglev.maxTurnSpeed() / standard.maxTurnSpeed()).toDouble(), config.maglevTurningSpeed),
+					Triple("acceleration", maglev.acceleration() / (warpTop / 200.0), 1.0),
 				)) {
 					CreateRelativity.LOGGER.info("Train test: maglev {} x{}", what, "%.2f".format(ratio))
-					assertTrue(kotlin.math.abs(ratio - expected) < 1e-3) { "Maglev $what is x$ratio Create's, expected x$expected" }
+					assertTrue(kotlin.math.abs(ratio - expected) < 1e-3) { "Maglev $what is x$ratio, expected x$expected" }
 				}
 			}
 			// Under way, the maglev train carries a warp tube round its carriages; Create's doesn't.
