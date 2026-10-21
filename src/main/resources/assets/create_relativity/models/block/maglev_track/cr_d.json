@@ -2,6 +2,5 @@
   "parent": "create_relativity:block/maglev_track/obj_track",
   "loader": "neoforge:obj",
   "flip_v": true,
-  "model": "create:models/block/track/cross_d1_xo.obj",
-  "render_type": "minecraft:cutout_mipped"
+  "model": "create_relativity:models/block/maglev_track/cr_d.obj"
 }

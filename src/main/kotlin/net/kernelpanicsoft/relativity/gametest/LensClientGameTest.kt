@@ -1852,7 +1852,7 @@ class LensClientGameTest {
 		}
 	}
 
-	/** Maglev track beside Create's own, straight, for a look (screenshot, nothing asserted). */
+	/** Maglev track: straight beside Create's own, a slope, a diagonal, crossings and curves, for a look (screenshots, nothing asserted). */
 	@ClientGameTest
 	fun ClientGameTestContext.maglevTrack() {
 		if (!ClientTestInput.selected("maglevTrack")) return
@@ -1867,15 +1867,88 @@ class LensClientGameTest {
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
 				val maglev = net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState()
+				fun shaped(shape: com.simibubi.create.content.trains.track.TrackShape) = maglev.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, shape)
 				val track = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:track")).defaultBlockState()
 				for (z in -6..6) {
-					level.setBlock(BlockPos(0, -60, z), maglev, 2)
-					level.setBlock(BlockPos(3, -60, z), track, 2)
+					level.setBlock(BlockPos(0, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
+					level.setBlock(BlockPos(4, -60, z), track, 2)
 				}
+				// A slope up and on, and a diagonal.
+				for (k in 0..3) level.setBlock(BlockPos(-4, -60 + k, k), shaped(com.simibubi.create.content.trains.track.TrackShape.AS), 2)
+				for (z in -6..-1) level.setBlock(BlockPos(-4, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
+				for (k in 0..5) level.setBlock(BlockPos(-14 + k, -60, -12 + k), shaped(com.simibubi.create.content.trains.track.TrackShape.PD), 2)
+				// Crossings, arms out each way: square, and diagonal.
+				for (k in -3..3) {
+					level.setBlock(BlockPos(-10, -60, 8 + k), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
+					level.setBlock(BlockPos(-10 + k, -60, 8), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					level.setBlock(BlockPos(-18 + k, -60, 8 + k), shaped(com.simibubi.create.content.trains.track.TrackShape.PD), 2)
+					level.setBlock(BlockPos(-18 - k, -60, 8 + k), shaped(com.simibubi.create.content.trains.track.TrackShape.ND), 2)
+				}
+				level.setBlock(BlockPos(-10, -60, 8), shaped(com.simibubi.create.content.trains.track.TrackShape.CR_O), 2)
+				level.setBlock(BlockPos(-18, -60, 8), shaped(com.simibubi.create.content.trains.track.TrackShape.CR_D), 2)
+				// The diagonal-over-straight ones, in a row further on.
+				for ((i, crossing) in listOf("cr_pdx", "cr_pdz", "cr_ndx", "cr_ndz").withIndex()) {
+					val c = BlockPos(-34 + 9 * i, -60, 26)
+					val shape = com.simibubi.create.content.trains.track.TrackShape.valueOf(crossing.uppercase())
+					val diagonal = if (crossing.startsWith("cr_pd")) com.simibubi.create.content.trains.track.TrackShape.PD else com.simibubi.create.content.trains.track.TrackShape.ND
+					val straight = if (crossing.endsWith("x")) com.simibubi.create.content.trains.track.TrackShape.XO else com.simibubi.create.content.trains.track.TrackShape.ZO
+					for (k in -3..3) {
+						level.setBlock(if (diagonal == com.simibubi.create.content.trains.track.TrackShape.PD) c.offset(k, 0, k) else c.offset(-k, 0, k), shaped(diagonal), 2)
+						level.setBlock(if (straight == com.simibubi.create.content.trains.track.TrackShape.XO) c.offset(k, 0, 0) else c.offset(0, 0, k), shaped(straight), 2)
+					}
+					level.setBlock(c, shaped(shape), 2)
+				}
+				// Curves: from each straight's far end round to a track along x (as Create's placement leaves them), maglev's
+				// and Create's.
+				fun curve(state: net.minecraft.world.level.block.state.BlockState, x: Int, material: com.simibubi.create.content.trains.track.TrackMaterial) {
+					val withBe = state.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.ZO).setValue(com.simibubi.create.content.trains.track.TrackBlock.HAS_BE, true)
+					val endA = BlockPos(x, -60, 6)
+					val endB = BlockPos(x + 6, -60, 13)
+					level.setBlock(endA, withBe, 2)
+					level.setBlock(endB, withBe.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					level.setBlock(endB.east(), state.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					val block = state.block as com.simibubi.create.content.trains.track.TrackBlock
+					val axisA = net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0)
+					val axisB = net.minecraft.world.phys.Vec3(-1.0, 0.0, 0.0)
+					val up = net.minecraft.world.phys.Vec3(0.0, 1.0, 0.0)
+					val connection = com.simibubi.create.content.trains.track.BezierConnection(
+						net.createmod.catnip.data.Couple.create(endA, endB),
+						net.createmod.catnip.data.Couple.create(block.getCurveStart(level, endA, level.getBlockState(endA), axisA), block.getCurveStart(level, endB, level.getBlockState(endB), axisB)),
+						net.createmod.catnip.data.Couple.create(axisA, axisB),
+						net.createmod.catnip.data.Couple.create(up, up),
+						true, false, material,
+					)
+					for ((end, c) in listOf(endA to connection, endB to connection.secondary())) {
+						val entity = level.getBlockEntity(end) as com.simibubi.create.content.trains.track.TrackBlockEntity
+						entity.addConnection(c)
+						entity.notifyUpdate()
+					}
+				}
+				curve(maglev, 0, net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+				curve(track, 4, com.simibubi.create.content.trains.track.TrackMaterial.ANDESITE)
 			}
-			command("tp @a 1.5 -57.5 -8.5 0 30")
+			waitTicks(5)
+			// (Again, now each end has its half: a client drops a curve whose other end hasn't got it yet.)
+			server.runOnServer { minecraft ->
+				for (x in intArrayOf(0, 4, 6, 10)) for (z in intArrayOf(6, 13))
+					(minecraft.overworld().getBlockEntity(BlockPos(x, -60, z)) as? com.simibubi.create.content.trains.track.TrackBlockEntity)?.notifyUpdate()
+			}
+			waitTicks(20)
+			command("tp @a 2.5 -57.5 -10.5 0 25")
 			waitTicks(40)
 			takeScreenshot("maglev_track")
+			command("tp @a 3.5 -50.5 20.5 180 50")
+			waitTicks(30)
+			takeScreenshot("maglev_curve")
+			command("tp @a -13.5 -52.5 1.5 0 50")
+			waitTicks(30)
+			takeScreenshot("maglev_crossings")
+			command("tp @a -20.5 -44.5 13.5 0 55")
+			waitTicks(30)
+			takeScreenshot("maglev_crossings_diagonal")
+			command("tp @a -3.5 -58.6 -9.5 0 5")
+			waitTicks(30)
+			takeScreenshot("maglev_profile")
 		}
 	}
 

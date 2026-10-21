@@ -28,6 +28,7 @@
     "client.flywheel.VisualizationManagerImplMixin",
     "client.flywheel.CompilationMixin",
     "client.flywheel.ProgramLinkerMixin",
+    "client.flywheel.LightDataCollectorMixin",
     "client.LightTextureAccessor",
     "client.MouseHandlerMixin",
     "client.ShaderInstanceMixin",

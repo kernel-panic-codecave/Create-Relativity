@@ -1,10 +1,9 @@
 {
+  "parent": "block/block",
   "ambientocclusion": false,
+  "render_type": "minecraft:cutout_mipped",
   "textures": {
     "0": "create_relativity:block/maglev_track",
-    "1": "create_relativity:block/maglev_track_mip",
-    "2": "create_relativity:block/maglev_track_crossing",
     "particle": "create_relativity:block/maglev_track"
-  },
-  "render_type": "minecraft:cutout_mipped"
+  }
 }
