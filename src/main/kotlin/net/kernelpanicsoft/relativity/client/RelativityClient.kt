@@ -25,7 +25,7 @@ object RelativityClient {
 		NeoForge.EVENT_BUS.addListener(ProperTimeHud::onDebugText)
 		ReferenceShot.init()
 		MOD_BUS.addListener(net.neoforged.neoforge.client.event.RegisterPresetEditorsEvent::class.java, PonderflatScreen::onRegisterEditors)
-		MOD_BUS.addListener(net.neoforged.neoforge.client.event.ModelEvent.ModifyBakingResult::class.java, MaglevTrackModel::onModifyBakingResult)
+		MOD_BUS.addListener(net.neoforged.neoforge.client.event.ModelEvent.ModifyBakingResult::class.java, net.kernelpanicsoft.relativity.client.maglev.MaglevTrackModel::onModifyBakingResult)
 		MOD_BUS.addListener(EntityRenderersEvent.RegisterRenderers::class.java) {
 			// Holes draw nothing themselves: the lens and disk passes show them.
 			it.registerEntityRenderer(RelativityEntities.BLACK_HOLE.get(), ::NoopRenderer)

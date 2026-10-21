@@ -1900,16 +1900,16 @@ class LensClientGameTest {
 				}
 				// Curves: from each straight's far end round to a track along x (as Create's placement leaves them), maglev's
 				// and Create's.
-				fun curve(state: net.minecraft.world.level.block.state.BlockState, x: Int, material: com.simibubi.create.content.trains.track.TrackMaterial) {
-					val withBe = state.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.ZO).setValue(com.simibubi.create.content.trains.track.TrackBlock.HAS_BE, true)
-					val endA = BlockPos(x, -60, 6)
-					val endB = BlockPos(x + 6, -60, 13)
-					level.setBlock(endA, withBe, 2)
-					level.setBlock(endB, withBe.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.XO), 2)
-					level.setBlock(endB.east(), state.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+				fun connect(
+					state: net.minecraft.world.level.block.state.BlockState, endA: BlockPos, axisA: net.minecraft.world.phys.Vec3, endB: BlockPos,
+					axisB: net.minecraft.world.phys.Vec3, material: com.simibubi.create.content.trains.track.TrackMaterial,
+				) {
+					fun along(axis: net.minecraft.world.phys.Vec3) = if (axis.x != 0.0) com.simibubi.create.content.trains.track.TrackShape.XO else com.simibubi.create.content.trains.track.TrackShape.ZO
+					for ((end, axis) in listOf(endA to axisA, endB to axisB)) {
+						if (level.getBlockEntity(end) == null)
+							level.setBlock(end, state.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, along(axis)).setValue(com.simibubi.create.content.trains.track.TrackBlock.HAS_BE, true), 2)
+					}
 					val block = state.block as com.simibubi.create.content.trains.track.TrackBlock
-					val axisA = net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0)
-					val axisB = net.minecraft.world.phys.Vec3(-1.0, 0.0, 0.0)
 					val up = net.minecraft.world.phys.Vec3(0.0, 1.0, 0.0)
 					val connection = com.simibubi.create.content.trains.track.BezierConnection(
 						net.createmod.catnip.data.Couple.create(endA, endB),
@@ -1924,14 +1924,28 @@ class LensClientGameTest {
 						entity.notifyUpdate()
 					}
 				}
+				fun curve(state: net.minecraft.world.level.block.state.BlockState, x: Int, material: com.simibubi.create.content.trains.track.TrackMaterial) {
+					val endB = BlockPos(x + 6, -60, 13)
+					level.setBlock(endB.east(), state.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					connect(state, BlockPos(x, -60, 6), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), endB, net.minecraft.world.phys.Vec3(-1.0, 0.0, 0.0), material)
+				}
+				// A junction: a straight, curves leaving it either way from one block (a wye), the straight going on.
+				for (z in -6..14) level.setBlock(BlockPos(20, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
+				for (k in 1..3) {
+					level.setBlock(BlockPos(26 + k, -60, 7), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					level.setBlock(BlockPos(14 - k, -60, 7), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+				}
+				level.setBlock(BlockPos(20, -60, 0), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO).setValue(com.simibubi.create.content.trains.track.TrackBlock.HAS_BE, true), 2)
+				connect(maglev, BlockPos(20, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(26, -60, 7), net.minecraft.world.phys.Vec3(-1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+				connect(maglev, BlockPos(20, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(14, -60, 7), net.minecraft.world.phys.Vec3(1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
 				curve(maglev, 0, net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
 				curve(track, 4, com.simibubi.create.content.trains.track.TrackMaterial.ANDESITE)
 			}
 			waitTicks(5)
 			// (Again, now each end has its half: a client drops a curve whose other end hasn't got it yet.)
 			server.runOnServer { minecraft ->
-				for (x in intArrayOf(0, 4, 6, 10)) for (z in intArrayOf(6, 13))
-					(minecraft.overworld().getBlockEntity(BlockPos(x, -60, z)) as? com.simibubi.create.content.trains.track.TrackBlockEntity)?.notifyUpdate()
+				for (p in listOf(BlockPos(0, -60, 6), BlockPos(4, -60, 6), BlockPos(6, -60, 13), BlockPos(10, -60, 13), BlockPos(20, -60, 0), BlockPos(26, -60, 7), BlockPos(14, -60, 7)))
+					(minecraft.overworld().getBlockEntity(p) as? com.simibubi.create.content.trains.track.TrackBlockEntity)?.notifyUpdate()
 			}
 			waitTicks(20)
 			command("tp @a 2.5 -57.5 -10.5 0 25")
@@ -1946,6 +1960,12 @@ class LensClientGameTest {
 			command("tp @a -20.5 -44.5 13.5 0 55")
 			waitTicks(30)
 			takeScreenshot("maglev_crossings_diagonal")
+			command("tp @a 20.5 -47.5 3.5 0 90")
+			waitTicks(30)
+			takeScreenshot("maglev_junction")
+			command("tp @a 20.5 -56.5 -3.5 0 35")
+			waitTicks(30)
+			takeScreenshot("maglev_junction_low")
 			command("tp @a -3.5 -58.6 -9.5 0 5")
 			waitTicks(30)
 			takeScreenshot("maglev_profile")
