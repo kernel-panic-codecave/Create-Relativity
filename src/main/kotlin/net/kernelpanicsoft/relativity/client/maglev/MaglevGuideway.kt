@@ -33,24 +33,45 @@ object MaglevGuideway {
 
 	/** Another track's centre line, seen from above: (x, z) pairs (in the frames' coordinates). */
 	data class Line(val points: List<Double>) {
-		/** How far (x, z) is from the line. */
-		fun distance(x: Double, z: Double): Double {
-			if (points.size == 2) return hypot(x - points[0], z - points[1])
+		/**
+		 * How far (x, z) is from the line: only alongside it (not past its open ends: track that stops there cuts
+		 * nothing beyond), and leaving out its pieces running along the track at (cx, cz), unit tangent (tx, tz) (its
+		 * own line, or one going on from it: a wall is never cut by those); [Double.MAX_VALUE] if none count.
+		 */
+		fun distance(x: Double, z: Double, cx: Double, cz: Double, tx: Double, tz: Double): Double {
 			var best = Double.MAX_VALUE
+			val last = points.size - 4
 			var i = 0
-			while (i + 3 < points.size) {
+			while (i <= last) {
 				val ax = points[i]
 				val az = points[i + 1]
 				val dx = points[i + 2] - ax
 				val dz = points[i + 3] - az
 				val length2 = dx * dx + dz * dz
-				val t = if (length2 > 0) (((x - ax) * dx + (z - az) * dz) / length2).coerceIn(0.0, 1.0) else 0.0
-				best = minOf(best, hypot(x - ax - dx * t, z - az - dz * t))
+				val length = sqrt(length2)
+				val along = length2 > 0 && abs(dx * tz - dz * tx) / length < PARALLEL && abs((cx - ax) * dz - (cz - az) * dx) / length < ON_LINE
+				if (length2 > 0 && !along) {
+					val t = ((x - ax) * dx + (z - az) * dz) / length2
+					val slack = END_SLACK / sqrt(length2)
+					// (Between two of its pieces, the nearer joint counts: past its first or last, nothing.)
+					val ok = (i > 0 || t >= -slack) && (i < last || t <= 1 + slack)
+					if (ok) {
+						val c = t.coerceIn(0.0, 1.0)
+						best = minOf(best, hypot(x - ax - dx * c, z - az - dz * c))
+					}
+				}
 				i += 2
 			}
 			return best
 		}
 	}
+
+	/** How far (blocks) past a line's end a point still counts as alongside it (its end's wall cap). */
+	private const val END_SLACK = 1.0 / 16.0
+
+	/** A piece of line within this (sine of the angle) of a track's direction, and [ON_LINE] (blocks) of its centre, runs along it. */
+	private const val PARALLEL = 0.02
+	private const val ON_LINE = 0.05
 
 	/** A profile point (pixels: across from the centre line, up from the bottom of a block's track). */
 	private data class P(val x: Double, val y: Double)
@@ -154,14 +175,22 @@ object MaglevGuideway {
 	private fun solid(frames: List<Frame>, part: List<Pair<P, String?>>, others: List<Line>, lift: Double, sprite: TextureAtlasSprite, out: MutableList<BakedQuad>) {
 		val pts = part.map { it.first }
 		val n = pts.size
-		val vs = frames.map { f ->
+		val vs = frames.mapIndexed { i, f ->
+			// (The track's direction here, seen from above.)
+			val prev = frames[maxOf(i - 1, 0)]
+			val next = frames[minOf(i + 1, frames.size - 1)]
+			val h = hypot(next.x - prev.x, next.z - prev.z).takeIf { it > 1e-12 } ?: 1.0
+			val tx = (next.x - prev.x) / h
+			val tz = (next.z - prev.z) / h
 			pts.map { q ->
 				val x = q.x / 16.0
 				val y = q.y / 16.0 + lift
 				val px = f.x + f.rx * x + f.ux * y
 				val py = f.y + f.ry * x + f.uy * y
 				val pz = f.z + f.rz * x + f.uz * y
-				val keep = if (others.isEmpty()) 1.0 else others.minOf { it.distance(px, pz) } - abs(x) + SLACK
+				// (Nothing that counts: kept, with room, so cuts between vertices interpolate sanely.)
+				val nearest = minOf(others.minOfOrNull { it.distance(px, pz, f.x, f.z, tx, tz) } ?: Double.MAX_VALUE, abs(x) + 1.0)
+				val keep = nearest - abs(x) + SLACK
 				V(px, py, pz, f.s, q.x, q.y, keep)
 			}
 		}
