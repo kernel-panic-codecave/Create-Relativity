@@ -52,6 +52,7 @@
     "create.TrackBlockMixin",
     "create.TrackPlacementMixin",
     "create.PlacementInfoAccessor",
-    "create.TrackBlockBogeyMixin"
+    "create.TrackBlockBogeyMixin",
+    "create.TrainMixin"
   ]
 }

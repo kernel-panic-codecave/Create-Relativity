@@ -55,6 +55,11 @@ object MaglevBogey {
 			.build()
 	}
 
+	/** Whether [train] runs wholly on maglev bogeys (faster, less friction: TrainMixin). */
+	@JvmStatic
+	fun isMaglev(train: com.simibubi.create.content.trains.entity.Train): Boolean =
+		train.carriages.isNotEmpty() && train.carriages.all { carriage -> carriage.bogeys.all { it == null || it.style === STYLE } }
+
 	/** Builds the style (registering it with Create's) once the bogey block is registered. */
 	fun init() {
 		STYLE

@@ -2072,6 +2072,19 @@ class LensClientGameTest {
 			server.runOnServer { minecraft ->
 				val carriages = minecraft.overworld().getEntities(com.simibubi.create.AllEntityTypes.CARRIAGE_CONTRAPTION.get()) { true }
 				CreateRelativity.LOGGER.info("Train test: {} carriage(s) at {}", carriages.size, carriages.map { it.position() })
+				// The maglev train (wholly on maglev bogeys) is faster and has less friction than Create's, by the config.
+				val trains = com.simibubi.create.Create.RAILWAYS.trains.values
+				val maglev = trains.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				val standard = trains.single { !net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				val config = net.kernelpanicsoft.relativity.config.RelativityConfig.Server.Trains
+				for ((what, ratio, expected) in listOf(
+					Triple("top speed", maglev.maxSpeed() / standard.maxSpeed(), config.maglevTopSpeed),
+					Triple("turning speed", maglev.maxTurnSpeed() / standard.maxTurnSpeed(), config.maglevTurningSpeed),
+					Triple("acceleration", maglev.acceleration() / standard.acceleration(), config.maglevAcceleration),
+				)) {
+					CreateRelativity.LOGGER.info("Train test: maglev {} x{}", what, "%.2f".format(ratio))
+					assertTrue(kotlin.math.abs(ratio - expected) < 1e-3) { "Maglev $what is x$ratio Create's, expected x$expected" }
+				}
 			}
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).

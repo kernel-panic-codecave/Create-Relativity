@@ -103,5 +103,12 @@
   "itemGroup.create_relativity": "Create: Relativity",
   "create.track.create_relativity.other_type": "Cannot join a different type of track",
   "block.create_relativity.maglev_bogey": "Maglev Bogey",
-  "create_relativity.bogey.style.maglev": "Maglev"
+  "create_relativity.bogey.style.maglev": "Maglev",
+  "config.create_relativity.trains": "Trains",
+  "config.create_relativity.trains.maglev_top_speed": "Maglev Top Speed",
+  "config.create_relativity.trains.maglev_top_speed.comment": "How many times Create's train top speed a train on maglev bogeys reaches (no wheels, no rolling friction).",
+  "config.create_relativity.trains.maglev_turning_speed": "Maglev Turning Speed",
+  "config.create_relativity.trains.maglev_turning_speed.comment": "How many times Create's turning top speed a train on maglev bogeys takes curves at (the guideway holds it).",
+  "config.create_relativity.trains.maglev_acceleration": "Maglev Acceleration",
+  "config.create_relativity.trains.maglev_acceleration.comment": "How many times Create's train acceleration and braking a train on maglev bogeys has (low friction: less of its drive is lost)."
 }

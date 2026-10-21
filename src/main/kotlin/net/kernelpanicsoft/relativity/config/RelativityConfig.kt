@@ -107,6 +107,24 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				default = 8.0,
 			)
 		}
+
+		object Trains : CategorySpec(Component.translatable("config.create_relativity.trains"), "trains") {
+			val maglevTopSpeed by double(
+				title = Component.translatable("config.create_relativity.trains.maglev_top_speed"),
+				comment = Component.translatable("config.create_relativity.trains.maglev_top_speed.comment"),
+				default = 3.0,
+			)
+			val maglevTurningSpeed by double(
+				title = Component.translatable("config.create_relativity.trains.maglev_turning_speed"),
+				comment = Component.translatable("config.create_relativity.trains.maglev_turning_speed.comment"),
+				default = 2.0,
+			)
+			val maglevAcceleration by double(
+				title = Component.translatable("config.create_relativity.trains.maglev_acceleration"),
+				comment = Component.translatable("config.create_relativity.trains.maglev_acceleration.comment"),
+				default = 2.0,
+			)
+		}
 	}
 
 	/** Per-player client settings. */
