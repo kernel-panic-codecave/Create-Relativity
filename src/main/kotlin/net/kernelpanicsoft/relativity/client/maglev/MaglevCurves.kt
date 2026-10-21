@@ -172,7 +172,7 @@ object MaglevCurves {
 	/** [curve]'s quads, relative to its first block. */
 	fun quads(level: Level, curve: BezierConnection): List<BakedQuad> {
 		val quads = ArrayList<BakedQuad>()
-		MaglevGuideway.build(frames(curve), others(level, curve), RANK, MaglevTrackModel.sprite, quads)
+		MaglevGuideway.build(MaglevGuideway.refined(frames(curve), 4), others(level, curve), RANK, MaglevTrackModel.sprite, quads)
 		return quads
 	}
 
