@@ -1936,6 +1936,9 @@ class LensClientGameTest {
 					level.setBlock(BlockPos(14 - k, -60, 7), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
 				}
 				level.setBlock(BlockPos(20, -60, 0), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO).setValue(com.simibubi.create.content.trains.track.TrackBlock.HAS_BE, true), 2)
+				// And a straight across it all, under both curves at whatever angle they have there.
+				for (x in 8..32) level.setBlock(BlockPos(x, -60, 4), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+				level.setBlock(BlockPos(20, -60, 4), shaped(com.simibubi.create.content.trains.track.TrackShape.CR_O), 2)
 				connect(maglev, BlockPos(20, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(26, -60, 7), net.minecraft.world.phys.Vec3(-1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
 				connect(maglev, BlockPos(20, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(14, -60, 7), net.minecraft.world.phys.Vec3(1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
 				curve(maglev, 0, net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)

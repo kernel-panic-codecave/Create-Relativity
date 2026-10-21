@@ -1,7 +1,6 @@
 package net.kernelpanicsoft.relativity.client.maglev
 
 import com.simibubi.create.content.trains.track.TrackBlock
-import com.simibubi.create.content.trains.track.TrackBlockEntity
 import com.simibubi.create.content.trains.track.TrackShape
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.content.RelativityBlocks
@@ -25,53 +24,19 @@ import net.neoforged.neoforge.client.model.data.ModelProperty
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.sign
 import kotlin.math.sqrt
 
 /**
  * Maglev track's block model: the guideway trough ([MaglevGuideway]) along the block's path, built per block from what
- * runs through it: a crossing's other line (in the crossing and the blocks along its lines up to [REACH] out: a trough
- * is wider than a block), and curves leaving any block along its line (junctions: up to [ALONG] out).
+ * runs through it, at any angle: the maglev blocks around (up to [REACH] out: a trough is wider than a block) and the
+ * maglev curves near ([MaglevCurves]).
  */
 class MaglevTrackModel(private val delegate: BakedModel, private val shape: TrackShape, private val sprite: TextureAtlasSprite) : IDynamicBakedModel {
 	override fun getModelData(level: BlockAndTintGetter, pos: BlockPos, state: BlockState, modelData: ModelData): ModelData {
-		val own = PATHS[shape] ?: return modelData
 		val others = LinkedHashSet<MaglevGuideway.Line>()
-		for (dx in -REACH..REACH) for (dz in -REACH..REACH) {
-			val there = level.getBlockState(pos.offset(dx, 0, dz))
-			if (!there.`is`(RelativityBlocks.MAGLEV_TRACK.get())) continue
-			val lines = PATHS[there.getValue(TrackBlock.SHAPE)] ?: continue
-			if (lines.size < 2) continue
-			// A crossing: each of its lines crosses any path of this block's that runs through its centre and not along it.
-			val cx = dx + 0.5
-			val cz = dz + 0.5
-			for (line in lines) for (path in own) {
-				val length = hypot(path.dx, path.dz)
-				if (abs((cx - path.x0) * path.dz - (cz - path.z0) * path.dx) / length > 0.05) continue
-				val lineLength = hypot(line.dx, line.dz)
-				val ux = line.dx / lineLength
-				val uz = line.dz / lineLength
-				if (abs(ux * path.dz - uz * path.dx) / length < 1e-3) continue
-				val ox = line.x0 + dx
-				val oz = line.z0 + dz
-				others += MaglevGuideway.Line(listOf(ox - ux * 8, oz - uz * 8, ox + ux * 8, oz + uz * 8))
-			}
-		}
-		// Junctions: curves leaving any block along this one's line. (A chunk is meshed from its own section and those
-		// around it: nothing further is there to read.)
-		val minX = (pos.x shr 4 shl 4) - 16
-		val minZ = (pos.z shr 4 shl 4) - 16
-		for (path in own) {
-			val sx = sign(path.dx).toInt()
-			val sz = sign(path.dz).toInt()
-			for (m in -ALONG..ALONG) {
-				val at = pos.offset(sx * m, 0, sz * m)
-				if (at.x - minX !in 0 until 48 || at.z - minZ !in 0 until 48) continue
-				if (!level.getBlockState(at).`is`(RelativityBlocks.MAGLEV_TRACK.get())) continue
-				val entity = level.getBlockEntity(at) as? TrackBlockEntity ?: continue
-				for (curve in entity.connections.values) others += MaglevCurves.centreLine(curve, pos)
-			}
-		}
+		// Every maglev block's paths around (along this one's line too: those cut nothing), every maglev curve near.
+		for (dx in -REACH..REACH) for (dz in -REACH..REACH) others += centreLines(level.getBlockState(pos.offset(dx, 0, dz)), dx, dz)
+		for (curve in MaglevCurves.near(intArrayOf(pos.x - 1, pos.z - 1, pos.x + 1, pos.z + 1))) others += MaglevCurves.centreLine(curve, pos)
 		return if (others.isEmpty()) modelData else modelData.derive().with(OTHERS, others.toList()).build()
 	}
 
@@ -129,13 +94,16 @@ class MaglevTrackModel(private val delegate: BakedModel, private val shape: Trac
 		private val OTHERS = ModelProperty<List<MaglevGuideway.Line>>()
 
 		/**
-		 * How far (blocks) a crossing's channel reaches along the lines through it: where two cross at 45°, the walls in
-		 * the acute corners meet a trough's half-width / tan 22.5° (3.5 blocks) out.
+		 * How far (blocks) a block looks for other maglev blocks: where two lines cross at 45° (the sharpest blocks
+		 * meet at), the walls in the acute corners meet a trough's half-width / tan 22.5° (3.5 blocks) out.
 		 */
 		private const val REACH = 4
 
-		/** How far along its line (blocks) a block looks for curves leaving: as far as a gentle curve runs beside it. */
-		private const val ALONG = 16
+		/** [state]'s centre lines, seen from above, offset by ([dx], [dz]) (none if it isn't maglev track). */
+		fun centreLines(state: BlockState, dx: Int, dz: Int): List<MaglevGuideway.Line> {
+			if (!state.`is`(RelativityBlocks.MAGLEV_TRACK.get())) return emptyList()
+			return PATHS[state.getValue(TrackBlock.SHAPE)]?.map { MaglevGuideway.Line(listOf(it.x0 + dx, it.z0 + dz, it.x1 + dx, it.z1 + dz)) } ?: emptyList()
+		}
 
 		/** Cross-sections a block along a straight path (where it's cut, between them, the cut runs straight). */
 		private const val STEPS = 8
