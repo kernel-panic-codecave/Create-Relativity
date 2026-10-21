@@ -85,4 +85,29 @@ class MaglevGameTest {
 		assertTrue(entity.style === net.kernelpanicsoft.relativity.content.MaglevBogey.STYLE) { "The maglev bogey's style is ${entity.style.id}" }
 		succeed()
 	}
+
+	/** A curve laid as a player lays one: maglev selected, then the ground where the curve ends clicked. */
+	@GameTest(template = MEDIUM, batch = "relativity_maglev", timeoutTicks = 20)
+	fun GameTestHelper.laysMaglevCurve() {
+		for (x in 0..19) for (z in 0..19) setBlock(BlockPos(x, 0, z), Blocks.STONE)
+		setBlock(BlockPos(4, 1, 2), RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState().setValue(TrackBlock.SHAPE, TrackShape.ZO))
+		val player = FakePlayerFactory.getMinecraft(level)
+		val stack = ItemStack(RelativityBlocks.MAGLEV_TRACK_ITEM.get(), 64)
+		player.setItemInHand(InteractionHand.MAIN_HAND, stack)
+		fun click(relative: BlockPos, face: Direction, yaw: Float): net.minecraft.world.InteractionResult {
+			val pos = absolutePos(relative)
+			player.moveTo(pos.x + 0.5, pos.y + 1.0, pos.z + 0.5, yaw, 30f)
+			return stack.useOn(UseOnContext(player, InteractionHand.MAIN_HAND, BlockHitResult(Vec3.atCenterOf(pos).add(0.0, 0.5, 0.0), face, pos, false)))
+		}
+		val first = click(BlockPos(4, 1, 2), Direction.UP, 0f) // facing +z
+		assertTrue(stack.has(com.simibubi.create.AllDataComponents.TRACK_CONNECTING_FROM)) { "Selecting maglev didn't take ($first)" }
+		// A 90-degree turn 8 out and 8 across: ends on the ground at (12, 1, 10), along x.
+		val second = click(BlockPos(12, 0, 10), Direction.UP, -90f) // facing +x, the way the curve leaves
+		val end = getBlockState(BlockPos(12, 1, 10))
+		val entity = level.getBlockEntity(absolutePos(BlockPos(4, 1, 2))) as? com.simibubi.create.content.trains.track.TrackBlockEntity
+		assertTrue(end.`is`(RelativityBlocks.MAGLEV_TRACK.get()) && entity != null && entity.connections.isNotEmpty()) {
+			"No curve laid ($second): end ${end.block}, connections ${entity?.connections}"
+		}
+		succeed()
+	}
 }

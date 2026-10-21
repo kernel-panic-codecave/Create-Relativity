@@ -2107,6 +2107,26 @@ class LensClientGameTest {
 			command(lookAt(64.5, -58.0, 16.5, 66.5, -59.9, 18.5))
 			waitTicks(30)
 			takeScreenshot("maglev_placing_refused")
+			// Laying it, as the player's client does (the second click on the ground where the curve ends, facing the
+			// way it leaves: -x).
+			command(lookAt(54.5, -59.0, 22.5, 52.5, -60.0, 22.5))
+			waitTicks(5)
+			runOnClient { minecraft ->
+				val player = minecraft.player!!
+				val ground = BlockPos(52, -61, 22)
+				player.setYRot(90f)
+				val result = minecraft.gameMode!!.useItemOn(player, net.minecraft.world.InteractionHand.MAIN_HAND,
+					net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(ground).add(0.0, 0.5, 0.0), net.minecraft.core.Direction.UP, ground, false))
+				CreateRelativity.LOGGER.info("Train test: client laid the curve: {}", result)
+			}
+			waitTicks(20)
+			server.runOnServer { minecraft ->
+				val entity = minecraft.overworld().getBlockEntity(BlockPos(60, -60, 14)) as? com.simibubi.create.content.trains.track.TrackBlockEntity
+				CreateRelativity.LOGGER.info("Train test: server curve {}, end {}", entity?.connections?.keys, minecraft.overworld().getBlockState(BlockPos(52, -60, 22)))
+			}
+			command(lookAt(62.5, -53.0, 27.5, 56.0, -60.0, 18.0))
+			waitTicks(30)
+			takeScreenshot("maglev_laid")
 			runOnClient { minecraft -> minecraft.options.hideGui = true }
 			command("gamemode spectator @a")
 			command("tp @a 72.5 -56.5 -3.5 90 20")

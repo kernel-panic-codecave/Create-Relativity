@@ -115,6 +115,10 @@ object LightDelay {
 			return
 		}
 		dueTable[key.id] = due
+		// A section's changes are its blocks' too: what comes after for any of them (a block entity's data, made by the
+		// change) waits behind it. (Its own delay is its centre's: keyed apart, a block entity's data arrived before the
+		// change that made it, and was dropped: Create's curves, laid, came without them.)
+		if (packet is ClientboundSectionBlocksUpdatePacket) packet.runUpdates { pos, _ -> blockDue.merge(pos.asLong(), due, ::maxOf) }
 		queue.add(Held(due, arrivals++, game, listener))
 	}
 
