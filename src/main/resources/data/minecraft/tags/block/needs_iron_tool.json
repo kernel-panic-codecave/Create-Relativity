@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "create_relativity:warp_core",
+    "create_relativity:warp_coil"
+  ]
+}

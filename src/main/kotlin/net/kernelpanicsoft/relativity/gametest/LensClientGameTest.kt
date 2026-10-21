@@ -2165,6 +2165,35 @@ class LensClientGameTest {
 		}
 	}
 
+	/** A warp drive formed, its value box looked at (screenshot, nothing asserted). */
+	@ClientGameTest
+	fun ClientGameTestContext.warpDrive() {
+		if (!ClientTestInput.selected("warpDrive")) return
+		runOnClient { minecraft ->
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(40)
+			for (command in listOf("gamemode creative @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val core = BlockPos(0, -59, 5)
+				level.setBlock(core, net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_CORE.get().defaultBlockState()
+					.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, net.minecraft.core.Direction.NORTH), 3)
+				for (pos in net.kernelpanicsoft.relativity.content.WarpDrive.shell(core)) level.setBlock(pos, net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_COIL.get().defaultBlockState(), 3)
+				// A loose core and coil beside it, unformed.
+				level.setBlock(BlockPos(4, -60, 5), net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_CORE.get().defaultBlockState()
+					.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, net.minecraft.core.Direction.NORTH), 3)
+				level.setBlock(BlockPos(5, -60, 5), net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_COIL.get().defaultBlockState(), 3)
+			}
+			waitTicks(40)
+			command("tp @a 1.0 -60.0 1.5 15 12")
+			waitTicks(30)
+			takeScreenshot("warp_drive")
+		}
+	}
+
 	/**
 	 * Waits for the client thread directly, at length, and logs how long it took: the first frames after a change of
 	 * lens compile programs (the terrain's, the tracer's) that can take longer than a harness call allows.

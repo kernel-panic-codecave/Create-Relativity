@@ -32,6 +32,7 @@ internal object RelativityGameTest : AGameTestEventObject(CreateRelativity.MOD) 
 			register<PickGameTest>()
 			register<FieldSourceGameTest>()
 			register<MaglevGameTest>()
+			register<WarpDriveGameTest>()
 		}
 		client {
 			register<LensClientGameTest>()

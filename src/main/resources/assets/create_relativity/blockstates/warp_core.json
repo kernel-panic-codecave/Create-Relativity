@@ -1,0 +1,56 @@
+{
+  "variants": {
+    "facing=up,formed=false": {
+      "model": "create_relativity:block/warp_core"
+    },
+    "facing=up,formed=true": {
+      "model": "create_relativity:block/warp_core_formed"
+    },
+    "facing=down,formed=false": {
+      "model": "create_relativity:block/warp_core",
+      "x": 180
+    },
+    "facing=down,formed=true": {
+      "model": "create_relativity:block/warp_core_formed",
+      "x": 180
+    },
+    "facing=north,formed=false": {
+      "model": "create_relativity:block/warp_core",
+      "x": 90
+    },
+    "facing=north,formed=true": {
+      "model": "create_relativity:block/warp_core_formed",
+      "x": 90
+    },
+    "facing=south,formed=false": {
+      "model": "create_relativity:block/warp_core",
+      "x": 90,
+      "y": 180
+    },
+    "facing=south,formed=true": {
+      "model": "create_relativity:block/warp_core_formed",
+      "x": 90,
+      "y": 180
+    },
+    "facing=west,formed=false": {
+      "model": "create_relativity:block/warp_core",
+      "x": 90,
+      "y": 270
+    },
+    "facing=west,formed=true": {
+      "model": "create_relativity:block/warp_core_formed",
+      "x": 90,
+      "y": 270
+    },
+    "facing=east,formed=false": {
+      "model": "create_relativity:block/warp_core",
+      "x": 90,
+      "y": 90
+    },
+    "facing=east,formed=true": {
+      "model": "create_relativity:block/warp_core_formed",
+      "x": 90,
+      "y": 90
+    }
+  }
+}

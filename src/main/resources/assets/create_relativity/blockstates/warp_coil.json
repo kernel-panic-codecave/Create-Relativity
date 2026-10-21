@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "formed=false": {
+      "model": "create_relativity:block/warp_coil"
+    },
+    "formed=true": {
+      "model": "create_relativity:block/warp_coil_formed"
+    }
+  }
+}

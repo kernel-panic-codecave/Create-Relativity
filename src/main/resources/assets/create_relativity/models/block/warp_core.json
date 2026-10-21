@@ -1,0 +1,7 @@
+{
+  "parent": "minecraft:block/orientable_vertical",
+  "textures": {
+    "front": "create_relativity:block/warp_core",
+    "side": "create_relativity:block/warp_coil"
+  }
+}

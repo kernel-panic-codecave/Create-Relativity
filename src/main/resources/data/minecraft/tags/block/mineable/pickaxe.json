@@ -2,6 +2,8 @@
   "replace": false,
   "values": [
     "create_relativity:maglev_bogey",
-    "create_relativity:maglev_track"
+    "create_relativity:maglev_track",
+    "create_relativity:warp_coil",
+    "create_relativity:warp_core"
   ]
 }

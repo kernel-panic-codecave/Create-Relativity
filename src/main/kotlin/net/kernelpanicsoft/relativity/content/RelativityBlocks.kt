@@ -43,13 +43,35 @@ object RelativityBlocks {
 		BlockEntityType.Builder.of({ pos, state -> MaglevBogeyBlockEntity(MAGLEV_BOGEY_ENTITY.get(), pos, state) }, MAGLEV_BOGEY.get()).build(null)
 	}
 
+	/** The warp drive ([WarpDrive]): its core, and the coils wrapped round it. */
+	val WARP_CORE: DeferredBlock<WarpCoreBlock> = BLOCKS.register("warp_core") { ->
+		WarpCoreBlock(BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_LIGHT_BLUE).strength(5.0f, 6.0f).sound(SoundType.NETHERITE_BLOCK).requiresCorrectToolForDrops()
+			.lightLevel { if (it.getValue(WarpDrive.FORMED)) 15 else 6 })
+	}
+	val WARP_COIL: DeferredBlock<WarpCoilBlock> = BLOCKS.register("warp_coil") { ->
+		WarpCoilBlock(BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(5.0f, 6.0f).sound(SoundType.NETHERITE_BLOCK).requiresCorrectToolForDrops()
+			.lightLevel { if (it.getValue(WarpDrive.FORMED)) 9 else 0 })
+	}
+	val WARP_CORE_ENTITY: DeferredHolder<BlockEntityType<*>, BlockEntityType<WarpCoreBlockEntity>> = BLOCK_ENTITY_TYPES.register("warp_core") { ->
+		BlockEntityType.Builder.of({ pos, state -> WarpCoreBlockEntity(WARP_CORE_ENTITY.get(), pos, state) }, WARP_CORE.get()).build(null)
+	}
+	val WARP_COIL_ENTITY: DeferredHolder<BlockEntityType<*>, BlockEntityType<WarpCoilBlockEntity>> = BLOCK_ENTITY_TYPES.register("warp_coil") { ->
+		BlockEntityType.Builder.of({ pos, state -> WarpCoilBlockEntity(WARP_COIL_ENTITY.get(), pos, state) }, WARP_COIL.get()).build(null)
+	}
+	val WARP_CORE_ITEM = ITEMS.register("warp_core") { -> net.minecraft.world.item.BlockItem(WARP_CORE.get(), Item.Properties()) }
+	val WARP_COIL_ITEM = ITEMS.register("warp_coil") { -> net.minecraft.world.item.BlockItem(WARP_COIL.get(), Item.Properties()) }
+
 	val MAGLEV_TRACK_ITEM: DeferredItem<TrackBlockItem> = ITEMS.register("maglev_track") { -> TrackBlockItem(MAGLEV_TRACK.get(), Item.Properties()) }
 
 	val TAB = TABS.register("main") { ->
 		CreativeModeTab.builder()
 			.title(Component.translatable("itemGroup.create_relativity"))
 			.icon { ItemStack(MAGLEV_TRACK_ITEM.get()) }
-			.displayItems { _, output -> output.accept(MAGLEV_TRACK_ITEM.get()) }
+			.displayItems { _, output ->
+				output.accept(MAGLEV_TRACK_ITEM.get())
+				output.accept(WARP_CORE_ITEM.get())
+				output.accept(WARP_COIL_ITEM.get())
+			}
 			.build()
 	}
 

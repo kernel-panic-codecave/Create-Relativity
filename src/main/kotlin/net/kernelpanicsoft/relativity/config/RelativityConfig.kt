@@ -119,6 +119,11 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.trains.maglev_turning_speed.comment"),
 				default = 2.0,
 			)
+			val maxWarp by double(
+				title = Component.translatable("config.create_relativity.trains.max_warp"),
+				comment = Component.translatable("config.create_relativity.trains.max_warp.comment"),
+				default = 9.0,
+			)
 			val maglevAcceleration by double(
 				title = Component.translatable("config.create_relativity.trains.maglev_acceleration"),
 				comment = Component.translatable("config.create_relativity.trains.maglev_acceleration.comment"),
