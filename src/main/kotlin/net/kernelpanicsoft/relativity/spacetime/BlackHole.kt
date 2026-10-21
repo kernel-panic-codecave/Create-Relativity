@@ -69,6 +69,15 @@ data class BlackHole(
 		mass / maxOf(position.distanceSquared(x, y, z), schwarzschildRadius * schwarzschildRadius)
 
 	companion object {
+		/**
+		 * Whether holes spin. Off for now (spinning holes don't render right yet): every hole reads as non-spinning,
+		 * everywhere (lens, free fall, frame dragging, disk), its stored spin kept for when this is back on
+		 * (BlackHoleEntity.snapshot / apply). On while GameTests run (CreateRelativity), so the spinning paths stay tested.
+		 */
+		@JvmField
+		@Volatile
+		var spinning = false
+
 		/** Thorne's limit: photons from the disk swallowed with the wrong angular momentum stop spin-up here. */
 		const val MAX_SPIN = 0.998
 	}

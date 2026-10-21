@@ -70,7 +70,7 @@ object RelativityCommands {
 	private fun testScene(): LiteralArgumentBuilder<CommandSourceStack> =
 		Commands.literal("testscene").requires { it.hasPermission(2) }
 			.then(Commands.literal("ground")
-				.executes { groundScene(it, 0.9) }
+				.executes { groundScene(it, 0.0) }
 				.then(Commands.argument("spin", DoubleArgumentType.doubleArg(-BlackHole.MAX_SPIN, BlackHole.MAX_SPIN))
 					.executes { groundScene(it, DoubleArgumentType.getDouble(it, "spin")) }))
 

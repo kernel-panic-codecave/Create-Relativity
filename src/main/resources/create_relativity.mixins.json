@@ -42,6 +42,7 @@
     "LevelMixin",
     "LevelTicksMixin",
     "ServerLevelMixin",
+    "WorldDimensionsMixin",
     "create.KineticNetworkMixin",
     "create.TorquePropagatorAccessor"
   ]

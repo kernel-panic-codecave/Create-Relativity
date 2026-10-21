@@ -223,7 +223,7 @@ class LensClientGameTest {
 			SpacetimeDebugRenderer.hidden = true
 			minecraft.options.bobView().set(false)
 		}
-		withTestWorld {
+		withTestWorld(ponderflat = false) { // (plain ground behind the shafts: a checkerboard there magnifies by-design differences by the axis)
 			waitTicks(60)
 			for (command in listOf(
 				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
@@ -2045,12 +2045,29 @@ class LensClientGameTest {
 	 * A singleplayer world for [block], deleted afterwards: Archie's withSingleplayer leaves every test world in
 	 * run/saves.
 	 */
-	private fun ClientGameTestContext.withTestWorld(seed: String? = null, block: TestSingleplayerContext.() -> Unit) {
+	private fun ClientGameTestContext.withTestWorld(seed: String? = null, ponderflat: Boolean = true, block: TestSingleplayerContext.() -> Unit) {
 		runOnClient { ClientTestInput.lock(it) }
 		waitTicks(20) // the window resizes
-		// Superflat (seed 1), or the default world type with a given seed.
+		// Ponderflat in its Contrast colours (seed 1: the floor at y -61, as superflat's), or superflat, or the default
+		// world type with a given seed.
 		val builder = worldBuilder()
 		if (seed != null) builder.setUseConsistentSettings(false).adjustSettings { it.seed = seed }
+		else if (ponderflat) builder.adjustSettings { state ->
+			val ponderflat = net.minecraft.resources.ResourceKey.create(
+				net.minecraft.core.registries.Registries.WORLD_PRESET,
+				net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, "ponderflat"),
+			)
+			state.worldType = net.minecraft.client.gui.screens.worldselection.WorldCreationUiState.WorldTypeEntry(
+				state.settings.worldgenLoadContext().lookupOrThrow(net.minecraft.core.registries.Registries.WORLD_PRESET).getOrThrow(ponderflat),
+			)
+			// (Its Contrast preset: white and blue concrete in 2-block squares, the scenes' floor, everywhere.)
+			state.updateDimensions { registries, dimensions ->
+				val overworld = dimensions.overworld()
+				dimensions.replaceOverworldGenerator(registries, net.kernelpanicsoft.relativity.world.PonderflatGenerator(
+					overworld.biomeSource, Blocks.WHITE_CONCRETE.defaultBlockState(), Blocks.BLUE_CONCRETE.defaultBlockState(), 2,
+				))
+			}
+		}
 		val world = builder.create()
 		val save = world.saveDirectory
 		try {

@@ -39,18 +39,19 @@ class BlackHoleEntity(type: EntityType<out BlackHoleEntity>, level: Level) : Ent
 			BlackHole(
 				id = stringUUID, x = x, y = y, z = z,
 				schwarzschildRadius = entityData.get(RADIUS).toDouble(),
-				spin = entityData.get(SPIN).toDouble().coerceIn(-BlackHole.MAX_SPIN, BlackHole.MAX_SPIN),
+				spin = if (BlackHole.spinning) entityData.get(SPIN).toDouble().coerceIn(-BlackHole.MAX_SPIN, BlackHole.MAX_SPIN) else 0.0,
 				accretionRate = entityData.get(ACCRETION).toDouble(),
 				feedRate = entityData.get(FEED).toDouble(),
 			)
 		} else {
-			BlackHole(stringUUID, x, y, z, schwarzschildRadius, spin, accretionRate, feedRate)
+			BlackHole(stringUUID, x, y, z, schwarzschildRadius, if (BlackHole.spinning) spin else 0.0, accretionRate, feedRate)
 		}
 
-	fun apply(hole: BlackHole) {
+	/** Takes [hole]'s values; its spin only with [setSpin] (while holes don't spin, a snapshot's 0 isn't the stored spin). */
+	fun apply(hole: BlackHole, setSpin: Boolean = BlackHole.spinning) {
 		if (hole.x != x || hole.y != y || hole.z != z) setPos(hole.x, hole.y, hole.z)
 		schwarzschildRadius = hole.schwarzschildRadius
-		spin = hole.spin
+		if (setSpin) spin = hole.spin
 		accretionRate = hole.accretionRate
 		feedRate = hole.feedRate
 	}

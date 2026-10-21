@@ -89,5 +89,14 @@
   "config.create_relativity.physics.light_follows_physics": "Light Follows Physics",
   "config.create_relativity.physics.light_follows_physics.comment": "The speed of light set by the physics: as fast as Sable's physics steps can follow smoothly (Light Blocks per Step x 20 x its substeps per tick). Off: the Speed of Light value. Per-dimension overrides apply either way.",
   "config.create_relativity.physics.light_blocks_per_step": "Light Blocks per Step",
-  "config.create_relativity.physics.light_blocks_per_step.comment": "How far light goes in one Sable physics substep (blocks), with Light Follows Physics. Higher is faster light but jumpier motion near it. 1.6 at Sable's default 2 substeps is 64 blocks/s."
+  "config.create_relativity.physics.light_blocks_per_step.comment": "How far light goes in one Sable physics substep (blocks), with Light Follows Physics. Higher is faster light but jumpier motion near it. 1.6 at Sable's default 2 substeps is 64 blocks/s.",
+  "generator.create_relativity.ponderflat": "Ponderflat",
+  "createWorld.customize.create_relativity.ponderflat.title": "Customize Ponderflat",
+  "createWorld.customize.create_relativity.ponderflat.light": "Light squares",
+  "createWorld.customize.create_relativity.ponderflat.dark": "Dark squares",
+  "createWorld.customize.create_relativity.ponderflat.preset.ponder": "Ponder",
+  "createWorld.customize.create_relativity.ponderflat.preset.contrast": "Contrast",
+  "createWorld.customize.create_relativity.ponderflat.swap": "Swap Squares",
+  "createWorld.customize.create_relativity.ponderflat.squares": "Squares",
+  "createWorld.customize.create_relativity.ponderflat.size": "Square Size: %s"
 }

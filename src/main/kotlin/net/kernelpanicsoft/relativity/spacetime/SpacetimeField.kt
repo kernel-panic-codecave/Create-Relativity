@@ -69,7 +69,7 @@ object SpacetimeField {
 	fun addBlackHole(level: ServerLevel, hole: BlackHole) {
 		val entity = RelativityEntities.BLACK_HOLE.get().create(level) ?: return
 		entity.setPos(hole.x, hole.y, hole.z)
-		entity.apply(hole)
+		entity.apply(hole, setSpin = true)
 		level.addFreshEntity(entity)
 	}
 
