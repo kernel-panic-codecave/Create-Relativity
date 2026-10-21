@@ -179,12 +179,22 @@ def texture():
                 if y in (14, 15): base = (140, 146, 156)
                 if x % 16 == 0: base = tuple(c - 14 for c in base)  # expansion joint each block
                 px[x, y] = noisy(base, 5)
-            elif y < 39:  # slope: steel plating, the magnet strip along it
-                base = (96, 106, 122)
-                if y in (33, 34): base = (80, 220, 240)
-                elif y in (32, 35): base = (70, 120, 140)
-                if y not in (32, 33, 34, 35) and x % 8 == 0: base = (76, 84, 98)
-                px[x, y] = noisy(base, 3 if y in (33, 34) else 5)
+            elif y < 39:  # slope: a row of magnets (after Simulated's redstone magnet), poles alternating, coils wound round
+                phase = x % 8
+                pole = (176, 58, 58) if (x // 8) % 2 == 0 else (58, 93, 176)
+                frame = (60, 63, 70)
+                if y in (30, 38):
+                    base = frame
+                elif y in (31, 37):  # copper windings
+                    base = (224, 149, 106) if x % 2 == 0 else (154, 90, 62)
+                elif phase in (0, 7) or y in (32, 36):
+                    base = frame
+                elif phase in (3, 4) and y in (34, 35):
+                    base = (111, 115, 120)  # the pole's iron face
+                else:
+                    shade = {33: 1.12, 34: 1.0, 35: 0.94, 36: 0.86}.get(y, 1.0)
+                    base = tuple(min(255, int(c * shade)) for c in pole)
+                px[x, y] = noisy(base, 3)
             elif y < 41:  # wall top: edge-worn concrete
                 px[x, y] = noisy((200, 204, 210), 6)
             elif y < 50:  # outer face
@@ -201,8 +211,9 @@ def texture():
 def item_texture():
     img = Image.new('RGBA', (16, 16), (0, 0, 0, 0))
     px = img.load()
-    # The profile, end on, shaded: walls, slopes with the strip, the floor; and the floor running back.
-    concrete, dark, steel, glow = (184, 190, 198, 255), (130, 136, 146, 255), (96, 106, 122, 255), (80, 220, 240, 255)
+    # The profile, end on, shaded: walls, slopes with their magnets, the floor; and the floor running back.
+    concrete, dark, steel = (184, 190, 198, 255), (130, 136, 146, 255), (96, 106, 122, 255)
+    north, south = (176, 58, 58, 255), (58, 93, 176, 255)
     for x in range(16):
         for y in range(9, 13): px[x, y] = concrete if y > 9 else (205, 209, 215, 255)
     for y in range(12, 15):
@@ -212,8 +223,8 @@ def item_texture():
     for k in range(5):
         px[2 + k, 5 + k] = steel
         px[13 - k, 5 + k] = steel
-        px[2 + k, 4 + k] = glow if k in (1, 2) else concrete
-        px[13 - k, 4 + k] = glow if k in (1, 2) else concrete
+        px[2 + k, 4 + k] = (north if k == 1 else south) if k in (1, 2) else concrete
+        px[13 - k, 4 + k] = (south if k == 1 else north) if k in (1, 2) else concrete
     for x in range(16): px[x, 15] = (90, 96, 104, 255)
     return img
 
