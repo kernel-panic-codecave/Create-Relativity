@@ -3,13 +3,14 @@ package net.kernelpanicsoft.relativity.spacetime
 import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
+import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube
 import net.minecraft.world.level.Level
 import org.joml.Vector3d
 import org.joml.Vector3dc
 
 /**
- * Something that curves spacetime in a level, in game terms (block coordinates, game axes): a [BlackHole], a [Mass] or a
- * [Bubble]. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
+ * Something that curves spacetime in a level, in game terms (block coordinates, game axes): a [BlackHole], a [Mass], a
+ * [Bubble] or a [Tube]. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
  * [SpacetimeField.addProvider] (gravity generators, warp drives, tests); [SpacetimeField.sources] gives both. Every
  * system that asks [SpacetimeField] sees them: free fall, clocks, the lens.
  */
@@ -68,6 +69,40 @@ sealed interface FieldSource {
 		// The shift reaches about a wall's thickness past the radius; inside and on the wall it's of order speed / radius.
 		override fun strengthAt(position: Vector3dc): Double =
 			if (center.distance(position) < 1.5 * radius) kotlin.math.abs(speed) / radius else 0.0
+	}
+
+	/**
+	 * A warp tube ([WarpTube]): a warp field of [radius] blocks round the polyline [spine] (game coordinates), pushing at
+	 * [speed] times c along it (more than 1 is faster than light): a maglev train's, round its carriages and bending
+	 * with its track.
+	 */
+	data class Tube(val spine: List<Vector3dc>, val speed: Double, val radius: Double) : FieldSource {
+		override fun toPhysics(origin: Vector3dc): MetricSource {
+			val flat = DoubleArray(3 * spine.size)
+			val p = DoubleArray(3)
+			for ((i, point) in spine.withIndex()) {
+				GameFrame.toPhysics(Vector3d(point).sub(origin), p)
+				flat[3 * i] = p[0]; flat[3 * i + 1] = p[1]; flat[3 * i + 2] = p[2]
+			}
+			return WarpTube(flat, speed, radius)
+		}
+
+		/** Its distance from [position] (to the nearest point of the spine). */
+		fun distance(position: Vector3dc): Double {
+			var best = Double.MAX_VALUE
+			for (k in 0 until spine.size - 1) {
+				val a = spine[k]
+				val d = Vector3d(spine[k + 1]).sub(a)
+				val l2 = d.lengthSquared()
+				val u = if (l2 > 0) (Vector3d(position).sub(a).dot(d) / l2).coerceIn(0.0, 1.0) else 0.0
+				best = minOf(best, Vector3d(a).fma(u, d).distance(position))
+			}
+			return best
+		}
+
+		// As a bubble's: of order speed / radius within a wall's reach of it, nothing past.
+		override fun strengthAt(position: Vector3dc): Double =
+			if (distance(position) < 1.5 * radius) kotlin.math.abs(speed) / radius else 0.0
 	}
 
 	/** Supplies a level's sources each time they're asked for (cheap: called per query). */

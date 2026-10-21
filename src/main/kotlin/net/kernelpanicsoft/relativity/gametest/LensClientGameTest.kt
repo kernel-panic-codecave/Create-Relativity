@@ -2086,6 +2086,16 @@ class LensClientGameTest {
 					assertTrue(kotlin.math.abs(ratio - expected) < 1e-3) { "Maglev $what is x$ratio Create's, expected x$expected" }
 				}
 			}
+			// Under way, the maglev train carries a warp tube round its carriages; Create's doesn't.
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val trains = com.simibubi.create.Create.RAILWAYS.trains.values
+				for (train in trains) train.speed = 1.5
+				val tubes = net.kernelpanicsoft.relativity.content.MaglevWarp.compute(level)
+				CreateRelativity.LOGGER.info("Train test: server tubes {}", tubes.map { "speed %.2f radius %.1f spine %s".format(it.speed, it.radius, it.spine.map { p -> "(%.1f %.1f %.1f)".format(p.x(), p.y(), p.z()) }) })
+				assertTrue(tubes.size == 1) { "${tubes.size} warp tubes under way, expected the maglev train's alone" }
+				for (train in trains) train.speed = 0.0
+			}
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).
 			command("gamemode creative @a")

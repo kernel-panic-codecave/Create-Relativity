@@ -272,6 +272,8 @@ object BlackHoleLens {
 				is FieldSource.Mass -> 2.0 * kotlin.math.abs(source.mass) > MIN_BENDING * source.center.distance(at)
 				is FieldSource.Bubble -> source.center.distance(at) < 4.0 * Minecraft.getInstance().gameRenderer.renderDistance + source.radius
 				is BlackHole -> source.schwarzschildRadius > MIN_BENDING * source.center.distanceTo(camera)
+				// (Drawn by the field lens's tube module, not here.)
+				is FieldSource.Tube -> false
 			}
 		}
 	}
@@ -304,6 +306,7 @@ object BlackHoleLens {
 					put(source.center, 3f, { set(source.radius.toFloat(), (8.0 / source.radius).toFloat(), source.speed.toFloat(), 0f) }, { set(n.x.toFloat(), n.y.toFloat(), n.z.toFloat(), 0f) })
 				}
 				is BlackHole -> put(org.joml.Vector3d(source.x, source.y, source.z), 1f, { set(source.mass.toFloat(), (source.spin * source.mass).toFloat(), 0f, 0f) })
+				is FieldSource.Tube -> {}
 			}
 		}
 		return count to general

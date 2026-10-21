@@ -55,6 +55,7 @@ object RelativityBlocks {
 
 	fun register() {
 		Maglev.init()
+		MaglevWarp.init()
 		BLOCKS.register(MOD_BUS)
 		ITEMS.register(MOD_BUS)
 		TABS.register(MOD_BUS)
