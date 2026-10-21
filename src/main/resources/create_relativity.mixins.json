@@ -44,6 +44,8 @@
     "ServerLevelMixin",
     "WorldDimensionsMixin",
     "create.KineticNetworkMixin",
-    "create.TorquePropagatorAccessor"
+    "create.TorquePropagatorAccessor",
+    "create.TrackBlockMixin",
+    "create.TrackPlacementMixin"
   ]
 }

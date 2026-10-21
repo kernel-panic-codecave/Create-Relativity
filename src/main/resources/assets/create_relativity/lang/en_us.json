@@ -100,5 +100,6 @@
   "createWorld.customize.create_relativity.ponderflat.squares": "Squares",
   "createWorld.customize.create_relativity.ponderflat.size": "Square Size: %s",
   "block.create_relativity.maglev_track": "Maglev Track",
-  "itemGroup.create_relativity": "Create: Relativity"
+  "itemGroup.create_relativity": "Create: Relativity",
+  "create.track.create_relativity.other_type": "Cannot join a different type of track"
 }
