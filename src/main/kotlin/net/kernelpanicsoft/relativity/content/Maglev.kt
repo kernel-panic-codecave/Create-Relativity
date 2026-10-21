@@ -5,7 +5,6 @@ import com.simibubi.create.content.trains.track.ITrackBlock
 import com.simibubi.create.content.trains.track.TrackBlock
 import com.simibubi.create.content.trains.track.TrackMaterial
 import com.simibubi.create.content.trains.track.TrackMaterialFactory
-import com.simibubi.create.content.trains.track.TrackPlacement
 import com.tterrag.registrate.util.nullness.NonNullSupplier
 import dev.engine_room.flywheel.lib.model.baked.PartialModel
 import net.kernelpanicsoft.relativity.CreateRelativity
@@ -72,17 +71,19 @@ object Maglev {
 		return false
 	}
 
+	/** Create's message (track.*) for a curve refused for joining track of another type. */
+	const val OTHER_TYPE = "create_relativity.other_type"
+
 	/**
-	 * Why a curve from the track selected in [stack] to track [state] can't be laid, if it can't: one or the other is
-	 * of a type other than the track laid's (Create's message; null if it can).
+	 * Whether a curve from the track selected in [stack] to track [state] can't be laid: one or the other is of a type
+	 * other than the track laid's.
 	 */
 	@JvmStatic
-	fun refuseConnection(level: BlockGetter, state: BlockState, stack: ItemStack): TrackPlacement.PlacementInfo? {
+	fun refusesConnection(level: BlockGetter, state: BlockState, stack: ItemStack): Boolean {
 		val material = TrackMaterial.fromItem(stack.item)
 		val from = stack.get(AllDataComponents.TRACK_CONNECTING_FROM)?.pos?.let(level::getBlockState)
 		val types = listOfNotNull(typeOf(state), from?.let(::typeOf))
-		if (types.all { it === material.trackType }) return null
-		return TrackPlacement.PlacementInfo(material).withMessage("create_relativity.other_type")
+		return types.any { it !== material.trackType }
 	}
 }
 

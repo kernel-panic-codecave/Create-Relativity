@@ -2073,6 +2073,42 @@ class LensClientGameTest {
 				val carriages = minecraft.overworld().getEntities(com.simibubi.create.AllEntityTypes.CARRIAGE_CONTRAPTION.get()) { true }
 				CreateRelativity.LOGGER.info("Train test: {} carriage(s) at {}", carriages.size, carriages.map { it.position() })
 			}
+			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
+			// off to the side (Create's preview of the curve), then at Create's track (refused).
+			command("gamemode creative @a")
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				level.setBlock(BlockPos(54, -60, 20), net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState()
+					.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.XO), 3)
+				val player = minecraft.playerList.players.first()
+				val stack = net.minecraft.world.item.ItemStack(net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK_ITEM.get(), 64)
+				player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, stack)
+				player.teleportTo(60.5, -59.0, 12.5)
+				player.setYRot(0f)
+				player.setXRot(60f)
+				val start = BlockPos(60, -60, 14)
+				stack.useOn(net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND,
+					net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(start), net.minecraft.core.Direction.UP, start, false)))
+				CreateRelativity.LOGGER.info("Train test: start selected: {}", stack.has(com.simibubi.create.AllDataComponents.TRACK_CONNECTING_FROM))
+			}
+			runOnClient { minecraft -> minecraft.options.hideGui = false }
+			// Eye 1.62 above the feet: aim at the middle of the target's top.
+			fun lookAt(fx: Double, fy: Double, fz: Double, tx: Double, ty: Double, tz: Double): String {
+				val dx = tx - fx
+				val dy = ty - (fy + 1.62)
+				val dz = tz - fz
+				val yaw = Math.toDegrees(Math.atan2(-dx, dz))
+				val pitch = Math.toDegrees(-Math.atan2(dy, Math.hypot(dx, dz)))
+				return "tp @a $fx $fy $fz ${"%.2f".format(yaw)} ${"%.2f".format(pitch)}"
+			}
+			command(lookAt(56.5, -58.0, 17.5, 54.5, -59.9, 20.5))
+			waitTicks(30)
+			takeScreenshot("maglev_placing")
+			command(lookAt(64.5, -58.0, 16.5, 66.5, -59.9, 18.5))
+			waitTicks(30)
+			takeScreenshot("maglev_placing_refused")
+			runOnClient { minecraft -> minecraft.options.hideGui = true }
+			command("gamemode spectator @a")
 			command("tp @a 72.5 -56.5 -3.5 90 20")
 			waitTicks(60)
 			runOnClient { minecraft ->

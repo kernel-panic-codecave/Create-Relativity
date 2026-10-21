@@ -51,6 +51,7 @@
     "create.TorquePropagatorAccessor",
     "create.TrackBlockMixin",
     "create.TrackPlacementMixin",
+    "create.PlacementInfoAccessor",
     "create.TrackBlockBogeyMixin"
   ]
 }

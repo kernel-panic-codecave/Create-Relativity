@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "create_relativity:maglev_bogey",
+    "create_relativity:maglev_track"
+  ]
+}

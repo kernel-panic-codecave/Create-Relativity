@@ -51,12 +51,19 @@ class MaglevGameTest {
 		assertTrue(lay(BlockPos(6, 1, 6))) { "Maglev wasn't laid on its own" }
 		assertTrue(lay(BlockPos(6, 1, 7))) { "Maglev wasn't laid in line with maglev" }
 
+		// A curve begun on maglev (selected as a player selects it) toward Create's track, 4 across and 5 along.
+		val start = absolutePos(BlockPos(6, 1, 7))
+		player.moveTo(start.x + 0.5, start.y + 1.0, start.z + 0.5, 180f, 30f) // facing -z, toward it
+		stack.useOn(UseOnContext(player, InteractionHand.MAIN_HAND, BlockHitResult(Vec3.atCenterOf(start), Direction.UP, start, false)))
+		assertTrue(stack.has(com.simibubi.create.AllDataComponents.TRACK_CONNECTING_FROM)) { "Clicking maglev track with maglev track didn't select it" }
 		val refused = TrackPlacement.tryConnect(level, player, absolutePos(BlockPos(2, 1, 2)), standard, stack, false, false)
 		// (Its message is package-private.)
 		val message = TrackPlacement.PlacementInfo::class.java.getDeclaredField("message").apply { isAccessible = true }.get(refused)
 		assertTrue(message == "track.create_relativity.other_type") { "A maglev curve to Create's track wasn't refused ($message)" }
+		val valid = TrackPlacement.PlacementInfo::class.java.getDeclaredField("valid").apply { isAccessible = true }.get(refused)
+		assertTrue(valid == false) { "A maglev curve to Create's track was refused but left valid" }
 		val maglev = getBlockState(BlockPos(6, 1, 6))
-		assertTrue(Maglev.refuseConnection(level, maglev, stack) == null) { "A maglev curve to maglev was refused" }
+		assertTrue(!Maglev.refusesConnection(level, maglev, stack)) { "A maglev curve to maglev was refused" }
 		succeed()
 	}
 
