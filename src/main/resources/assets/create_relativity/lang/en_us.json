@@ -98,5 +98,7 @@
   "createWorld.customize.create_relativity.ponderflat.preset.contrast": "Contrast",
   "createWorld.customize.create_relativity.ponderflat.swap": "Swap Squares",
   "createWorld.customize.create_relativity.ponderflat.squares": "Squares",
-  "createWorld.customize.create_relativity.ponderflat.size": "Square Size: %s"
+  "createWorld.customize.create_relativity.ponderflat.size": "Square Size: %s",
+  "block.create_relativity.maglev_track": "Maglev Track",
+  "itemGroup.create_relativity": "Create: Relativity"
 }

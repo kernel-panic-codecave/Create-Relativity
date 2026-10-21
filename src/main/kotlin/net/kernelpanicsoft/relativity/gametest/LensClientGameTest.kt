@@ -1852,6 +1852,33 @@ class LensClientGameTest {
 		}
 	}
 
+	/** Maglev track beside Create's own, straight, for a look (screenshot, nothing asserted). */
+	@ClientGameTest
+	fun ClientGameTestContext.maglevTrack() {
+		if (!ClientTestInput.selected("maglevTrack")) return
+		runOnClient { minecraft ->
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(40)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val maglev = net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState()
+				val track = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:track")).defaultBlockState()
+				for (z in -6..6) {
+					level.setBlock(BlockPos(0, -60, z), maglev, 2)
+					level.setBlock(BlockPos(3, -60, z), track, 2)
+				}
+			}
+			command("tp @a 1.5 -57.5 -8.5 0 30")
+			waitTicks(40)
+			takeScreenshot("maglev_track")
+		}
+	}
+
 	/**
 	 * Waits for the client thread directly, at length, and logs how long it took: the first frames after a change of
 	 * lens compile programs (the terrain's, the tracer's) that can take longer than a harness call allows.

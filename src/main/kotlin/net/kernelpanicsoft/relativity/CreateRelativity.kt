@@ -46,6 +46,7 @@ object CreateRelativity {
 		// (Spinning holes are off for players for now; the GameTests keep their paths tested.)
 		if (System.getProperty("archie.gametest.side") != null) net.kernelpanicsoft.relativity.spacetime.BlackHole.spinning = true
 		RelativityEntities.register()
+		net.kernelpanicsoft.relativity.content.RelativityBlocks.register()
 		net.kernelpanicsoft.relativity.world.PonderflatGenerator.register()
 		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityJoin)
 		NeoForge.EVENT_BUS.addListener(SpacetimeField::onEntityLeave)
