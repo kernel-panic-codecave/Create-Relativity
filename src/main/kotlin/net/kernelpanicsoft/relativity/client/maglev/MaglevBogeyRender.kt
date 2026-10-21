@@ -8,6 +8,10 @@ import com.simibubi.create.content.trains.bogey.BogeyVisualizer
 import dev.engine_room.flywheel.api.instance.Instance
 import dev.engine_room.flywheel.lib.instance.InstanceTypes
 import dev.engine_room.flywheel.lib.instance.TransformedInstance
+import dev.engine_room.flywheel.api.material.CardinalLightingMode
+import dev.engine_room.flywheel.lib.material.LightShaders
+import dev.engine_room.flywheel.lib.material.SimpleMaterial
+import dev.engine_room.flywheel.lib.model.ModelUtil
 import dev.engine_room.flywheel.lib.model.baked.BakedModelBuilder
 import net.kernelpanicsoft.relativity.CreateRelativity
 import net.minecraft.client.renderer.RenderType
@@ -100,7 +104,12 @@ object MaglevBogeyRender {
 			for (quad in quads) buffer.putBulkData(pose.last(), quad, 1f, 1f, 1f, 1f, light, overlay)
 		},
 		BogeyVisualizer { context, _, _ ->
-			val model = BakedModelBuilder(QuadsModel(quads)).build()
+			// Lit flat by the light Create gives it (as its bogeys are): below a train, the contraption's own light
+			// volume doesn't reach, and smooth lighting read it black there.
+			val model = BakedModelBuilder(QuadsModel(quads)).materialFunc { renderType, shaded, ao ->
+				SimpleMaterial.builderOf(ModelUtil.getMaterial(renderType, shaded, ao)).light(LightShaders.FLAT)
+					.cardinalLightingMode(if (shaded) CardinalLightingMode.CHUNK else CardinalLightingMode.OFF).build()
+			}.build()
 			Visual(context.instancerProvider().instancer(InstanceTypes.TRANSFORMED, model).createInstance())
 		},
 	)

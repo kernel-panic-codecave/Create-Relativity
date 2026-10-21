@@ -1989,6 +1989,104 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * A train assembled on maglev track (maglev bogeys) beside one on Create's track, as a player assembles them: a
+	 * station, two bogeys from a train casing's anchor, casing on top. Screenshots; logs the carriages.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.maglevTrain() {
+		if (!ClientTestInput.selected("maglevTrain")) return
+		runOnClient { minecraft ->
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(40)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
+			val tracks = listOf(
+				60 to net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState(),
+				66 to net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:track")).defaultBlockState(),
+			)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for ((x, track) in tracks) for (z in -20..20) level.setBlock(BlockPos(x, -60, z), track.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.ZO), 3)
+			}
+			waitTicks(20)
+			// Stations: selected on the track, placed beside it.
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
+				for ((x, _) in tracks) {
+					val stack = net.minecraft.world.item.ItemStack(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(net.minecraft.resources.ResourceLocation.parse("create:track_station")))
+					player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, stack)
+					player.moveTo(x + 0.5, -59.0, -2.5, 0f, 30f) // facing +z
+					val track = BlockPos(x, -60, 0)
+					stack.useOn(net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND,
+						net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(track), net.minecraft.core.Direction.UP, track, false)))
+					val ground = BlockPos(x + 2, -61, 0)
+					stack.useOn(net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND,
+						net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(ground).add(0.0, 0.5, 0.0), net.minecraft.core.Direction.UP, ground, false)))
+					CreateRelativity.LOGGER.info("Train test: station at x {}: {}", x + 2, level.getBlockState(ground.above()))
+				}
+			}
+			waitTicks(40)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
+				for ((x, track) in tracks) {
+					val station = level.getBlockEntity(BlockPos(x + 2, -60, 0)) as? com.simibubi.create.content.trains.station.StationBlockEntity
+					if (station == null) { CreateRelativity.LOGGER.info("Train test: no station at x {}", x + 2); continue }
+					val entered = station.enterAssemblyMode(minecraft.playerList.players.first())
+					val dir = station.assemblyDirection
+					CreateRelativity.LOGGER.info("Train test: x {} edge point {}, assembly {}, direction {}", x, station.station, entered, dir)
+					// Bogeys at the station's marker (the frontmost must be: a block along from its track) and 5 blocks on,
+					// casing over them, controls in front.
+					for (k in listOf(1, 6)) {
+						val at = BlockPos(x, -60, 0).relative(dir, k)
+						val anchor = (track.block as com.simibubi.create.content.trains.track.TrackBlock).getBogeyAnchor(level, at, level.getBlockState(at))
+						level.setBlock(at.above(), anchor, 3)
+					}
+					for (k in 1..6) level.setBlock(BlockPos(x, -58, 0).relative(dir, k), net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:railway_casing")).defaultBlockState(), 3)
+					val controls = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:controls")).defaultBlockState()
+					level.setBlock(BlockPos(x, -57, 0).relative(dir, 1), controls.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, dir), 3)
+					// Glued together, as a player glues a train (only what's on a bogey sticks to it unglued).
+					val from = BlockPos(x, -59, 0).relative(dir, 1)
+					val to = BlockPos(x, -57, 0).relative(dir, 6)
+					level.addFreshEntity(com.simibubi.create.content.contraptions.glue.SuperGlueEntity(level, net.minecraft.world.phys.AABB.encapsulatingFullBlocks(from, to)))
+				}
+			}
+			waitTicks(10)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
+				for ((x, _) in tracks) {
+					val station = level.getBlockEntity(BlockPos(x + 2, -60, 0)) as? com.simibubi.create.content.trains.station.StationBlockEntity ?: continue
+					station.refreshAssemblyInfo()
+					fun field(name: String) = com.simibubi.create.content.trains.station.StationBlockEntity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(station)
+					CreateRelativity.LOGGER.info("Train test: x {} bogeys {} at {}, length {}", x, field("bogeyCount"), (field("bogeyLocations") as IntArray?)?.toList(), field("assemblyLength"))
+					station.assemble(minecraft.playerList.players.first().uuid)
+					CreateRelativity.LOGGER.info("Train test: x {} assembly failed: {}", x, (field("lastException") as? com.simibubi.create.content.contraptions.AssemblyException)?.component?.string)
+				}
+			}
+			waitTicks(40)
+			server.runOnServer { minecraft ->
+				val carriages = minecraft.overworld().getEntities(com.simibubi.create.AllEntityTypes.CARRIAGE_CONTRAPTION.get()) { true }
+				CreateRelativity.LOGGER.info("Train test: {} carriage(s) at {}", carriages.size, carriages.map { it.position() })
+			}
+			command("tp @a 72.5 -56.5 -3.5 90 20")
+			waitTicks(60)
+			runOnClient { minecraft ->
+				val carriages = minecraft.level!!.entitiesForRendering().filterIsInstance<com.simibubi.create.content.trains.entity.CarriageContraptionEntity>()
+				CreateRelativity.LOGGER.info("Train test: client has {} carriage(s): {}", carriages.size, carriages.map { "${it.position()} contraption ${it.contraption?.blocks?.size} carriage ${it.carriage != null}" })
+			}
+			takeScreenshot("maglev_train")
+			command("tp @a 63.5 -58.2 -3.5 90 10")
+			waitTicks(30)
+			takeScreenshot("maglev_train_close")
+		}
+	}
+
+	/**
 	 * Waits for the client thread directly, at length, and logs how long it took: the first frames after a change of
 	 * lens compile programs (the terrain's, the tracer's) that can take longer than a harness call allows.
 	 */

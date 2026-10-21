@@ -78,20 +78,17 @@ object LightDelay {
 	}
 
 	@Suppress("UNCHECKED_CAST")
-	private fun receive(packet: Packet<*>, listener: ClientPacketListener) {
-		if (packet is ClientboundBundlePacket) {
-			for (sub in packet.subPackets()) receiveOne(sub, listener)
-		} else {
-			receiveOne(packet as Packet<ClientGamePacketListener>, listener)
-		}
-	}
+	private fun receive(packet: Packet<*>, listener: ClientPacketListener) = receiveOne(packet as Packet<ClientGamePacketListener>, listener)
 
-	private fun receiveOne(packet: Packet<in ClientGamePacketListener>, listener: ClientPacketListener) {
-		@Suppress("UNCHECKED_CAST")
-		val game = packet as Packet<ClientGamePacketListener>
-		if (packet is ClientboundRemoveEntitiesPacket && packet.entityIds.size > 1) {
+	/**
+	 * Holds [game] until its source's light arrives, or applies it now. A bundle is one unit, held for its first
+	 * sub-packet with a source and then applied whole, in order: its packets belong together (an entity and its spawn
+	 * data: applied before the entity arrives, that's dropped and the entity comes without it; Create's trains vanished).
+	 */
+	private fun receiveOne(game: Packet<ClientGamePacketListener>, listener: ClientPacketListener) {
+		if (game is ClientboundRemoveEntitiesPacket && game.entityIds.size > 1) {
 			// Each removal waits for its own entity's light.
-			for (id in packet.entityIds.toIntArray()) receiveOne(ClientboundRemoveEntitiesPacket(id), listener)
+			for (id in game.entityIds.toIntArray()) receiveOne(ClientboundRemoveEntitiesPacket(id), listener)
 			return
 		}
 		val minecraft = Minecraft.getInstance()
@@ -102,7 +99,8 @@ object LightDelay {
 			return
 		}
 		syncLevel(level)
-		val source = sourceOf(game, level)
+		val packet = (game as? ClientboundBundlePacket)?.subPackets()?.firstOrNull { sourceOf(it, level) != null } ?: game
+		val source = sourceOf(packet, level)
 		if (source == null) {
 			game.handle(listener)
 			return
