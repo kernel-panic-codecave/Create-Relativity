@@ -1450,15 +1450,46 @@ bool relativityHoleAim(vec3 from, vec3 c, float rs, vec3 target, bool secondary,
     return true;
 }
 
-// The weak fields of the sources in `mask` (bit k: source k) on the line (o, d) up to `until` along: the line the
-// light is on there, turned, and through where they've moved it to.
+// How far round source k its field isn't weak: RELATIVITY_FIELD_NEAR of a hole's r_s (its exact pass starts there),
+// none round a mass (FieldLens.near).
+const float RELATIVITY_FIELD_NEAR = 20.0; // FieldLens.NEAR
+float relativityFieldNear(int k) { return relativityFieldHole(k) ? RELATIVITY_FIELD_NEAR * relativityFieldParams(k).x : 0.0; }
+
+// Source k's weak field on light running straight from a to b, outside its near sphere (FieldLens.fieldOutside): adds
+// the turn, and the move at b (a turn before the sphere carries the light on round it). (One call site for the
+// field: each is inlined whole.)
+void relativityFieldWeakOutside(int k, vec3 a, vec3 b, inout vec3 turn, inout vec3 move) {
+    vec3 span = b - a;
+    float len = max(length(span), 1e-6);
+    vec3 d = span / len;
+    vec3 c = relativityFieldCentre(k);
+    float tc = dot(c - a, d);
+    float impact = length(a + d * tc - c);
+    float radius = relativityFieldNear(k);
+    float h = impact < radius ? sqrt(radius * radius - impact * impact) : 0.0;
+    // The stretches outside: [0, tc - h] and [tc + h, len] (the whole when the line misses the sphere).
+    for (int part = 0; part < 2; part += 1) {
+        float from = part == 0 ? 0.0 : (h > 0.0 ? max(tc + h, 0.0) : len);
+        float to = part == 0 ? (h > 0.0 ? min(tc - h, len) : len) : len;
+        if (to > from) {
+            vec3 t = vec3(0.0);
+            vec3 m = vec3(0.0);
+            relativityFieldWeak(k, a + d * from, a + d * to, t, m);
+            turn += t;
+            move += m + t * (len - to);
+        }
+    }
+}
+
+// The weak fields of the sources in `mask` (bit k: source k), each outside its near sphere, on the line (o, d) up to
+// `until` along: the line the light is on there, turned, and through where they've moved it to.
 void relativityFieldWeakly(inout vec3 o, inout vec3 d, float until, int mask) {
     if (until > 0.0) {
         vec3 end = o + d * until;
         vec3 turn = vec3(0.0);
         vec3 move = vec3(0.0);
         for (int k = 0; k < relativityFieldCount(); k += 1) {
-            if ((mask & (1 << k)) != 0) relativityFieldWeak(k, o, end, turn, move);
+            if ((mask & (1 << k)) != 0) relativityFieldWeakOutside(k, o, end, turn, move);
         }
         d = normalize(d + turn);
         o = end + move - d * until;
@@ -1466,12 +1497,13 @@ void relativityFieldWeakly(inout vec3 o, inout vec3 d, float until, int mask) {
 }
 
 // Light along (o, d) past the sources in the order it meets them (FieldLens.propagate): false if one captures it.
-// With `stop`, only those met before it comes level with stopAt, and the line then carried on weakly to there; with a
-// `terminal` source too, only those met before it, it not passed, and its weak field left off the last stretch.
-bool relativityFieldPropagate(inout vec3 o, inout vec3 d, bool stop, vec3 stopAt, int terminal) {
+// Each is passed exactly from where the light enters its near sphere (back behind where it is, if that's inside, but
+// not past where it set out: started level with an earlier source beside it, its orbit began by its photon sphere,
+// and the weak field standing in before that is no good there: the order showed, a straight cut through a shadow).
+bool relativityFieldPropagate(inout vec3 o, inout vec3 d) {
     int n = relativityFieldCount();
+    vec3 start = o;
     int left = (1 << n) - 1;
-    if (terminal >= 0) left &= ~(1 << terminal);
     int passed = 0;
     // (Bounded by the uniform count, not a constant: a constant bound is unrolled, and this is inlined at every call.)
     for (int i = 0; i < n; i += 1) {
@@ -1483,11 +1515,13 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d, bool stop, vec3 stopAt
             if (t < nextAt) { nextAt = t; next = k; }
         }
         if (next < 0) break;
-        if (stop && nextAt > dot(stopAt - o, d)) break;
-        if (terminal >= 0 && nextAt > dot(relativityFieldCentre(terminal) - o, d)) break;
+        vec3 c = relativityFieldCentre(next);
+        float impact = length(o + d * nextAt - c);
+        float radius = relativityFieldNear(next);
+        float entry = impact < radius ? max(nextAt - sqrt(radius * radius - impact * impact), dot(start - o, d)) : 0.0;
+        if (entry > 0.0) relativityFieldWeakly(o, d, entry, left);
+        else o += d * entry;
         left &= ~(1 << next);
-        // The others' fields up to level with it (and the terminal's), then it exactly from there on.
-        relativityFieldWeakly(o, d, nextAt, terminal >= 0 ? left | (1 << terminal) : left);
         vec3 before = d;
         if (!relativityFieldPass(next, o, d)) return false;
         // Those already passed counted their tails along the old line: from the turn on, the light runs along the new.
@@ -1505,7 +1539,6 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d, bool stop, vec3 stopAt
         d = normalize(d + tails);
         passed |= 1 << next;
     }
-    if (stop) relativityFieldWeakly(o, d, dot(stopAt - o, d), left);
     return true;
 }
 
@@ -1513,7 +1546,7 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d, bool stop, vec3 stopAt
 bool relativityFieldSky(vec3 d, out vec3 escape) {
     vec3 o = vec3(0.0);
     escape = d;
-    if (!relativityFieldPropagate(o, escape, false, vec3(0.0), -1)) return false;
+    if (!relativityFieldPropagate(o, escape)) return false;
     return true;
 }
 
@@ -1612,10 +1645,7 @@ bool relativityFieldImage(vec3 target, bool secondary, out vec3 seen) {
         float shadow = u0 > 2.0 / 3.0 ? 3.14159265 - critical : critical;
         if (acos(clamp(dot(seen, c / rc), -1.0, 1.0)) < RELATIVITY_SHADOW_MARGIN * shadow) return false;
     }
-    // And once forward: light that a source captures isn't seen at all.
-    vec3 o = vec3(0.0);
-    vec3 d = seen;
-    return relativityFieldPropagate(o, d, false, target, -1);
+    return true;
 }
 
 int relativityFarImage(vec3 p, out vec3 seen, bool probe) {

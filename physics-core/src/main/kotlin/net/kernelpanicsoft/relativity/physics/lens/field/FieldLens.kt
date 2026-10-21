@@ -125,29 +125,35 @@ class FieldLens(val modules: List<LensModule>) {
 		var line = start
 		val left = modules.toMutableList()
 		val passed = ArrayList<LensModule>()
-		// The weak fields of the sources not yet passed on the line up to [until]
-		// along: the line the light is on there, turned, and through where they've moved it to (so it arrives where
-		// it should, heading as it should; turning the whole stretch about its start would move it by the full turn
-		// times the stretch, not by what the turn on the way adds up to).
-		fun weakly(until: Double): LightLine {
+		// The weak fields of [sources] (each outside its own near sphere, which its exact pass covers) on the line up to
+		// [until] along: the line the light is on there, turned, and through where they've moved it to (so it arrives
+		// where it should, heading as it should).
+		fun weakly(until: Double, sources: List<LensModule>): LightLine {
 			if (until <= 0.0) return line
 			val end = line.at(until)
 			var heading = line.direction
 			var arrival = end
-			fun add(m: LensModule) {
-				val (turn, move) = m.field(line.origin, end)
+			for (m in sources) {
+				val (turn, move) = fieldOutside(m, line.origin, end)
 				heading += turn
 				arrival += move
 			}
-			for (m in left) add(m)
 			val h = heading.normalized()
 			return LightLine(arrival - h * until, h)
 		}
 		while (left.isNotEmpty()) {
 			val next = left.minBy { line.along(it.centre) }
+			// This one exactly from where the light enters its near sphere (behind where it is now, if that's inside:
+			// started level with an earlier source beside it, its orbit began by its photon sphere, and the weak field
+			// standing in before that is no good there: the order the two came in showed, a straight cut through a
+			// shadow), and every source's weak field up to there.
+			val tc = line.along(next.centre)
+			val impact = (line.at(tc) - next.centre).length
+			val radius = near(next)
+			// (Never back past where the light set out: level with the camera.)
+			val entry = if (impact < radius) maxOf(tc - sqrt(radius * radius - impact * impact), line.along(start.origin)) else 0.0
+			val arriving = if (entry > 0.0) weakly(entry, left) else LightLine(line.at(entry), line.direction)
 			left.remove(next)
-			// The other sources' fields up to level with this one, then this one exactly from there on.
-			val arriving = weakly(line.along(next.centre))
 			val out = next.pass(arriving) ?: return null
 			// The sources already passed counted their weak tails along the old line, out to infinity: from the turn on
 			// the light runs along the new one instead.
@@ -162,7 +168,43 @@ class FieldLens(val modules: List<LensModule>) {
 		return line
 	}
 
+	/** How far round [m] its field isn't weak: [NEAR] of its sizes for a hole (its exact pass starts there), none else. */
+	private fun near(m: LensModule): Double = if (m is HoleModule) NEAR * m.scale else 0.0
+
+	/**
+	 * [m]'s weak field on light running straight from [a] to [b], leaving out the part inside its near sphere: the turn,
+	 * and the move at [b] (a turn before the sphere carries the light on round it).
+	 */
+	private fun fieldOutside(m: LensModule, a: V3, b: V3): Pair<V3, V3> {
+		val radius = near(m)
+		val span = b - a
+		val length = span.length
+		if (radius <= 0.0 || length < 1e-12) return m.field(a, b)
+		val d = span * (1.0 / length)
+		val tc = (m.centre - a) dot d
+		val impact = (a + d * tc - m.centre).length
+		if (impact >= radius) return m.field(a, b)
+		val h = sqrt(radius * radius - impact * impact)
+		var turn = V3.ZERO
+		var move = V3.ZERO
+		if (tc - h > 0.0) {
+			val e = minOf(tc - h, length)
+			val (t, mv) = m.field(a, a + d * e)
+			turn += t
+			move += mv + t * (length - e)
+		}
+		if (tc + h < length) {
+			val (t, mv) = m.field(a + d * maxOf(tc + h, 0.0), b)
+			turn += t
+			move += mv
+		}
+		return turn to move
+	}
+
 	companion object {
+		/** A hole's near sphere (its sizes): where its weak field stops standing in for its orbit. */
+		const val NEAR = 20.0
+
 		/** "Out past everything" (blocks): weak fields' remaining turn beyond is negligible. */
 		private const val FAR = 1e8
 
