@@ -7,6 +7,9 @@ import net.kernelpanicsoft.relativity.physics.geodesic.CoordinateAcceleration
 import net.kernelpanicsoft.relativity.physics.geodesic.Geodesic
 import net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime
 import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
+import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
+import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpEllipsoid
+import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube
 import net.kernelpanicsoft.relativity.physics.weakfield.PostNewtonian
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.Level
@@ -199,7 +202,17 @@ object SpacetimeField {
 			val beta2 = minOf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2], 1.0)
 			return kotlin.math.sqrt(1.0 - beta2)
 		}
-		return Geodesic.properTimeRate(ComposedSpacetime(sources.all()), DoubleArray(4), v)
+		val spacetime = ComposedSpacetime(sources.all())
+		val rate = Geodesic.properTimeRate(spacetime, DoubleArray(4), v)
+		if (rate > 0.0 || sources.others.none { it is WarpEllipsoid || it is WarpBubble || it is WarpTube }) return rate
+		// Not timelike: at rest (or too slow) against a warp push faster than light, which nothing can be (a bubble
+		// standing still, as `relativity bubble add` places, flows past what's in it). It rides the push instead, as a
+		// ship's riders do, on the clock of the push's own observer: the lapse, 1 / sqrt(−g^tt) (1 for a warp push).
+		// (Not behind a horizon: there no clock runs.)
+		if (spacetime.captures(DoubleArray(4))) return 0.0
+		val sample = net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample()
+		spacetime.inverse(DoubleArray(4), sample)
+		return if (sample.value[0] < 0.0) 1.0 / kotlin.math.sqrt(-sample.value[0]) else 0.0
 	}
 
 	/**

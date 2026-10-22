@@ -100,7 +100,8 @@ class FieldSourceGameTest {
 	/**
 	 * A living thing dropped into a warp bubble standing still (as `relativity bubble add` places one: warp 5, moving diagonally):
 	 * its wall's pull is huge and sharp, and once flung players hundreds of thousands of blocks a tick. The field takes
-	 * nothing past c: it never moves faster than that.
+	 * nothing past c: it never moves faster than that. And clocks inside run (at rest against a push faster than light,
+	 * they ride it instead): one at rest at the centre, and one moving with the push, run at world time.
 	 */
 	@GameTest(template = MEDIUM, batch = "relativity_bubble_fall", timeoutTicks = 80)
 	fun GameTestHelper.bubbleDoesNotFling() {
@@ -120,6 +121,13 @@ class FieldSourceGameTest {
 			tick++
 			if (tick == 2L) {
 				SpacetimeField.addProvider(provider)
+				val at = Vector3d(centre.x, centre.y, centre.z)
+				val still = LocalClocks.rateAt(level, at)
+				val c0 = net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension())
+				val riding = SpacetimeField.properTimeRate(level, at, Vector3d(bubble.direction).mul(bubble.speed * c0))
+				assertTrue(kotlin.math.abs(still - 1.0) < 1e-3 && kotlin.math.abs(riding - 1.0) < 1e-3) {
+					"Clocks inside a warp 5 bubble ran at $still (at rest) and $riding (riding it); expected 1"
+				}
 				// Above the bubble, falling in through its top.
 				// (An armour stand: a living thing that falls, as a player does; a mob without AI doesn't move.)
 				mob = net.minecraft.world.entity.EntityType.ARMOR_STAND.create(level)!!.also {
