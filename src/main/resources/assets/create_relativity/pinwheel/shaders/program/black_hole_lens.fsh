@@ -417,7 +417,27 @@ void main() {
     // to the horizon: it closes round a camera falling in). Nothing marched, no tables built.
     if (relativityFieldCount() >= 1 || relativityWalls()) {
         vec3 scene = original.rgb;
-        if (sceneDist >= 1e29) {
+        float far = relativityFarField();
+        if (far > 0.0 && sceneDist >= far) {
+            // The far field (its band too, where it's drawn half bent: only so its triangles stay whole): the light this
+            // pixel sees, followed back past every source, looked up where its last leg points (far enough that where it
+            // set off from barely matters): in the frame, if it's on screen and past the band there (drawn where it is;
+            // else hidden by nearer geometry), otherwise as sky. Every image order alike.
+            vec3 escape;
+            vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
+            scene = vec3(0.0);
+            if (relativityFieldSky(viewDir, escape)) {
+                vec3 world = normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz);
+                scene = skyAt(world);
+                vec4 clip = VeilCamera.ProjMat * vec4(escape, 0.0);
+                if (clip.w > 0.0) {
+                    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+                    if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) && sceneDistance(uv) >= far * RELATIVITY_FAR_BAND) {
+                        scene = texture(DiffuseSampler0, uv).rgb;
+                    }
+                }
+            }
+        } else if (sceneDist >= 1e29) {
             vec3 escape;
             vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
             if (relativityFieldSky(viewDir, escape)) scene = skyAt(normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz));

@@ -1312,7 +1312,7 @@ const float RELATIVITY_NEAR_BLEND = 0.35;
 // new line. A point's image: Newton's method on that composition, the point's nearest source aiming the last stretch
 // exactly (a hole: its image tables). No marching, nothing built per frame. View space; directions are coordinate
 // tangents of the light's path (the camera's own directions, as the rest of the lens takes them).
-// [28] x: how many sources; [29 + 2k]: source k's centre (view space) and type (1 hole, 2 mass); [30 + 2k]: its
+// [28] x: how many sources, y the far field's distance (relativityFarField); [29 + 2k]: source k's centre (view space) and type (1 hole, 2 mass); [30 + 2k]: its
 // parameters (hole: x r_s; mass: x mass, y softening). VertexLens.uploadField.
 const int RELATIVITY_MAX_FIELD = 8; // VertexLens.MAX_FIELD_SOURCES
 const float RELATIVITY_FAR = 1e7;   // blocks: "out past everything"
@@ -1320,6 +1320,14 @@ const float RELATIVITY_FAR = 1e7;   // blocks: "out past everything"
 // (Not clamped to RELATIVITY_MAX_FIELD here, VertexLens never uploads more: with the bound known, the compiler unrolled
 // every loop over the sources, nested ones included, and the world's shaders took tens of seconds to compile.)
 int relativityFieldCount() { return int(RelativityLensData[28].x + 0.5); }
+
+// How far from the camera (blocks) the far field starts, 0 for none: geometry past it is drawn unbent, and the post pass
+// lenses it per pixel by looking its light up in the frame, every image of it (VertexLens.farField).
+float relativityFarField() { return RelativityLensData[28].y; }
+
+// The far field's band: from its start to this many times as far the bend eases off (keeping its triangles whole); the
+// post pass lenses every pixel from its start, and takes light from the frame only past it (drawn where it is).
+const float RELATIVITY_FAR_BAND = 1.25;
 vec3 relativityFieldCentre(int k) { return RelativityLensData[29 + 2 * k].xyz; }
 bool relativityFieldHole(int k) { return RelativityLensData[29 + 2 * k].w < 1.5; }
 vec4 relativityFieldParams(int k) { return RelativityLensData[30 + 2 * k]; }
@@ -2522,7 +2530,7 @@ int relativityFarImage(vec3 p, out vec3 seen, bool probe) {
 // Works in view space (camera at the origin): the projection alone recovers that from the clip position, whatever
 // space the draw's own vertices and model-view matrix use (chunk-relative, world, posed).
 // The bend itself, whether or not the level is being drawn with lensing on (the post pass uses it after).
-vec4 relativityBend(vec4 clip, mat4 proj) {
+vec4 relativityBendNear(vec4 clip, mat4 proj) {
     if (RelativityLensData[0].w <= 0.0) return clip;
     vec4 view = inverse(proj) * clip;
     vec3 p = view.xyz / view.w;
@@ -2592,6 +2600,28 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     return proj * vec4(seen * d, 1.0);
 }
 
+// The bend, or with a far field (relativityFarField): none past it (the post pass lenses what's there per pixel,
+// black_hole_lens.fsh), easing from the full bend over its band (so no triangle is torn between the two).
+vec4 relativityBend(vec4 clip, mat4 proj) {
+    float far = relativityFarField();
+    if (far <= 0.0 || RelativityLensData[0].w <= 0.0) return relativityBendNear(clip, proj);
+    vec4 view = inverse(proj) * clip;
+    float d = length(view.xyz / view.w);
+    float unbent = smoothstep(far, far * RELATIVITY_FAR_BAND, d);
+    // (The far field's secondary images are the post pass's too: the secondary pass draws none of it.)
+    if (relativitySecond() && unbent > 0.0) {
+        vec4 hidden = proj * vec4(view.xyz / view.w, 1.0);
+        hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
+        return hidden;
+    }
+    vec4 bent = clip;
+    if (unbent < 1.0) bent = relativityBendNear(clip, proj);
+    // (Hidden near its start: hidden still.)
+    if (unbent < 0.5 && bent.z > abs(bent.w)) return bent;
+    return mix(bent, clip, unbent);
+}
+
+
 // The lens for draws that may not use the level's projection (vanilla, Sodium, Flywheel: the hand, GUI items...).
 vec4 relativityLens(vec4 clip, mat4 proj) {
     if (RelativityLensData[1].x < 0.5 || !relativityLevelProjection(proj)) return clip;
@@ -2630,6 +2660,8 @@ const float RELATIVITY_TUBE_PIXEL_BLOCKS = 0.3;
 
 // For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
+    if (relativityFarField() > 0.0 && length(unbent) > relativityFarField()) return relativitySecond();
+    // (Past the far field's start the drawn point is eased toward unbent: no image to check it against.)
     // Tubes: the light seen where the pixel's drawn, followed (one trace: the aim per pixel is too dear), must pass by
     // what it shows; a triangle stretched across a tube's wall (its corners seen through it and not) doesn't. (With
     // other sources too, unchecked.)

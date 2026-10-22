@@ -2562,6 +2562,57 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * The far field in screen space (prototype, VertexLens.farField): the ground test's scene round a hole of r_s 2, from
+	 * beside and above, with the far field off and starting 48 and 24 blocks out: each against the exact light per pixel
+	 * (LensReference), and the post pass's cost. Logged (nothing asserted yet).
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.farFieldLens() {
+		if (!ClientTestInput.selected("farFieldLens")) return
+		settleClient("Far field, start")
+		runOnClient { minecraft ->
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.fovEffectScale().set(0.0)
+		}
+		withTestWorld {
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear", "relativity testscene ground", "tick freeze")) command(command)
+			try {
+				for ((name, at) in listOf("side" to "-14.5 -54 0.5 -90 10", "above" to "-9.5 -46 0.5 -90 45")) {
+					command("tp @a $at")
+					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+					repeat(2) { settleClient("Far field, $name") }
+					waitTicks(40)
+					val columns = 120
+					val rows = computeOnClient { columns * it.window.height / it.window.width }
+					val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+					for (first in 0 until rows step 8) {
+						val part = atLength { minecraft ->
+							val hole = SpacetimeField.blackHoles(minecraft.level!!).single()
+							LensReference.trace(minecraft, hole, columns, rows, 96.0, 60.0, first until minOf(first + 8, rows))
+						}
+						for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+					}
+					for (far in listOf(0.0, 48.0, 24.0)) {
+						runOnClient { VertexLens.farField = far; BlackHoleLens.timeGpu = true }
+						repeat(2) { settleClient("Far field, $name, $far") }
+						waitTicks(20)
+						val millis = (0 until 20).map { waitTick(); computeOnClient { BlackHoleLens.gpuMillis } }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] }
+						val shot = takeScreenshot("far_field_${name}_${far.toInt()}")
+						CreateRelativity.LOGGER.info("Far field, {}, from {} blocks: {}% of pixels in the wrong class, {}% counting white and blue as one; post pass {} ms, {} fps",
+							name, far.toInt(), "%.1f".format(LensReference.compare(reference, shot) * 100), "%.1f".format(LensReference.compare(reference, shot, floorAsOne = true) * 100),
+							"%.2f".format(millis), computeOnClient { it.fps })
+					}
+				}
+			} finally {
+				runOnClient { VertexLens.farField = 0.0; BlackHoleLens.timeGpu = false }
+				command("tick unfreeze")
+			}
+		}
+	}
+
+	/**
 	 * Tubes and bubbles placed by command (`relativity tube`, `relativity bubble`): the client's field has them (a bent
 	 * tube, extended; a bubble round a box), the lens draws the tube (screenshot from inside it), and clear takes them.
 	 */
@@ -2609,10 +2660,10 @@ class LensClientGameTest {
 	}
 
 	/**
-	 * Waits for the client thread directly, at length, and logs how long it took: the first frames after a change of
+	 * Waits for the client thread directly, at length, and logs (and returns) how long it took: the first frames after a change of
 	 * lens compile programs (the terrain's, the tracer's) that can take longer than a harness call allows.
 	 */
-	private fun settleClient(label: String) {
+	private fun settleClient(label: String): Long {
 		val start = System.nanoTime()
 		val ready = java.util.concurrent.CompletableFuture<Unit>()
 		repeat(3) {
@@ -2622,7 +2673,9 @@ class LensClientGameTest {
 			Thread.sleep(200)
 		}
 		ready.complete(Unit)
-		CreateRelativity.LOGGER.info("{}: client settled after {} ms", label, (System.nanoTime() - start) / 1_000_000)
+		val millis = (System.nanoTime() - start) / 1_000_000
+		CreateRelativity.LOGGER.info("{}: client settled after {} ms", label, millis)
+		return millis
 	}
 
 	/**
@@ -2829,7 +2882,8 @@ class LensClientGameTest {
 		try {
 			// (After a lens change the world's programs compile cold: the first frames take long, past the harness's waits.)
 			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
-			repeat(4) { settleClient("Test world") }
+			// (Till frames come quickly: the programs compile lazily, a few each frame.)
+			for (round in 0 until 40) if (settleClient("Test world") < 3000) break
 			world.block()
 		} finally {
 			// Debug switches back to normal, so a failed test doesn't leave the lens half off for the next.
@@ -2896,9 +2950,22 @@ class LensClientGameTest {
 		waitTicks(20)
 	}
 
-	/** Runs a command as the server (Archie's runCommand fails on its reflective call here). */
-	private fun TestSingleplayerContext.command(command: String) = server.runOnServer { minecraft ->
-		minecraft.commands.performPrefixedCommand(minecraft.createCommandSourceStack(), command)
+	/**
+	 * Runs a command as the server (Archie's runCommand fails on its reflective call here), waited for at length: a
+	 * command that makes a hole can stall a while as the client compiles the lens's programs cold.
+	 */
+	private fun TestSingleplayerContext.command(command: String) {
+		val server = net.minecraft.client.Minecraft.getInstance().singleplayerServer ?: error("no integrated server")
+		val done = java.util.concurrent.CompletableFuture<Unit>()
+		server.execute {
+			try {
+				server.commands.performPrefixedCommand(server.createCommandSourceStack(), command)
+				done.complete(Unit)
+			} catch (e: Throwable) {
+				done.completeExceptionally(e)
+			}
+		}
+		done.get(600, java.util.concurrent.TimeUnit.SECONDS)
 	}
 
 	/** Median GPU time of the lens pipeline (ms) over a second or so, in a given Kerr mode. */

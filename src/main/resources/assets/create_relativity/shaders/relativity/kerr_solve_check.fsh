@@ -11,6 +11,14 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 8) {
+        // The field lens's sky (relativityFieldSky) for the view direction p: xyz where its light ends heading, w 1, or
+        // -1 captured.
+        vec3 escape;
+        bool out_ = relativityFieldSky(normalize(p), escape);
+        Result = vec4(escape, out_ ? 1.0 : -1.0);
+        return;
+    }
     if (Direct == 7) {
         // The field lens's tubes alone (relativityTubeAim): xyz where p is seen, w 1 found, -1 hidden.
         vec3 seen;
