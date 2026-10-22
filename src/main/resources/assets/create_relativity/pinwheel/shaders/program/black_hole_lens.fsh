@@ -132,8 +132,16 @@ bool kerrRemarched = false;
 // (judged by second differences: the deflection's against a pixel's angle, the disk hit point's against its own
 // change per texel). Elsewhere (shadow and disk edges, the photon ring) the ray is marched here.
 KerrRay kerrNearest(vec3 dir, vec2 uv) {
+    // (Every field set, even when nothing's marched: what's left unset is whatever the registers held, and that changed
+    // with unrelated code: frames came out black round spinning holes.)
     KerrRay ray;
     ray.status = 2;
+    ray.exitPos = vec3(0.0);
+    ray.exitDir = dir;
+    ray.diskRho = 0.0;
+    ray.diskG = 0.0;
+    ray.diskAngle = 0.0;
+    ray.diskDist = 0.0;
     if (HoleCount == 0 || abs(HoleSpins[0].x) < MIN_KERR_SPIN) return ray;
     // Only near the hole can a pixel be in its shadow or show its disk: further out (past three r_s's apparent size,
     // or the disk's lensed extent, with room to spare) there's nothing for the table to say.

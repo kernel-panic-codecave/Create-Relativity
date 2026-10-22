@@ -187,6 +187,24 @@ object SpacetimeField {
 	}
 
 	/**
+	 * The flow of space at [position] (the river picture): how fast the field's own observers (Eulerian: those it
+	 * carries, as a warp bubble its riders) move there, in units of c, game axes. Inward round a hole (twisted round a
+	 * spinning one: frame dragging), along the push in a warp bubble or tube, along a Krasnikov tube; none round a mass.
+	 */
+	fun flow(level: Level, position: Vector3dc, dest: Vector3d): Vector3d {
+		dest.zero()
+		val sources = sourcesAt(level, position, 0.0)
+		if (sources.isEmpty()) return dest
+		val sample = net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample()
+		ComposedSpacetime(sources.all()).inverse(DoubleArray(4), sample)
+		val gtt = sample.value[0]
+		if (gtt >= 0.0) return dest
+		// dx/dt of the observers along g^{μt}: g^{ti} / g^{tt}.
+		val v = doubleArrayOf(sample.value[1] / gtt, sample.value[2] / gtt, sample.value[3] / gtt)
+		return GameFrame.toGame(v, 0, dest)
+	}
+
+	/**
 	 * How fast a clock at [position] moving at [velocity] (blocks/s) runs against world time: 1 far from any hole,
 	 * less near one or at speed, 0 at a horizon. In the spacetime of every hole together; with none, it's just
 	 * special-relativistic time dilation.

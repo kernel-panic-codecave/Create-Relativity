@@ -1,5 +1,7 @@
 package net.kernelpanicsoft.relativity.gametest
 
+import kotlin.math.abs
+
 import com.mojang.blaze3d.platform.NativeImage
 import net.kernelpanicsoft.archie.gametest.ClientGameTest
 import net.kernelpanicsoft.archie.gametest.ClientGameTestContext
@@ -2476,6 +2478,90 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * F3 + Z: the spacetime grid comes up round a spinning hole, a mass, a warp bubble and a
+	 * Krasnikov tube, its flow as each should have it (inward round the hole and turned its spin's way, none round the
+	 * mass, along the bubble's push at its speed, along the tube), a screenshot of each; F3 + Z again hides it.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.spacetimeGrid() {
+		if (!ClientTestInput.selected("spacetimeGrid")) return
+		settleClient("Spacetime grid, start")
+		runOnClient { minecraft ->
+			minecraft.options.hideGui = true
+			minecraft.options.bobView().set(false)
+		}
+		val speed = net.kernelpanicsoft.relativity.physics.WarpScale.speed(1.5)
+		val sources = listOf(
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-40.5, -55.0, 0.5), 0.5, softening = 1.5),
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid(org.joml.Vector3d(0.5, -56.0, 40.5),
+				listOf(org.joml.Vector3d(6.0, 0.0, 0.0), org.joml.Vector3d(0.0, 4.0, 0.0), org.joml.Vector3d(0.0, 0.0, 5.0)), org.joml.Vector3d(1.0, 0.0, 0.0), speed),
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(listOf(org.joml.Vector3d(30.0, -57.5, -40.5), org.joml.Vector3d(70.0, -57.5, -40.5)), 0.05, 3.0),
+		)
+		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else sources
+		}
+		withTestWorld {
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(3) { settleClient("Spacetime grid, world") }
+			waitTicks(20)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear", "tick freeze")) command(command)
+			command("relativity bh create 40.5 -55 0.5 2 0.9")
+			SpacetimeField.addProvider(provider)
+			// (Till the hole reaches the client.)
+			waitTicks(20)
+			try {
+				// (F3 + Z as the game handles it: a real F3 can't be held down here, and the game asks GLFW whether it is.)
+				fun press() = runOnClient { minecraft ->
+					(minecraft.keyboardHandler as net.kernelpanicsoft.relativity.mixin.client.KeyboardHandlerInvoker).`create_relativity$handleDebugKeys`(org.lwjgl.glfw.GLFW.GLFW_KEY_Z)
+				}
+				press()
+				assertTrue(computeOnClient { net.kernelpanicsoft.relativity.client.SpacetimeGrid.shown }) { "F3 + Z didn't show the grid" }
+				// The flow, source by source.
+				val c = computeOnClient { minecraft -> net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(minecraft.level!!.dimension()) }
+				val flows = computeOnClient { minecraft ->
+					val level = minecraft.level!!
+					fun flow(x: Double, y: Double, z: Double) = SpacetimeField.flow(level, org.joml.Vector3d(x, y, z), org.joml.Vector3d())
+					val pull = SpacetimeField.acceleration(level, org.joml.Vector3d(-36.5, -55.0, 0.5), org.joml.Vector3d(), org.joml.Vector3d())
+					mapOf(
+						"hole" to flow(46.5, -55.0, 0.5), "mass" to flow(-36.5, -55.0, 0.5), "mass pull" to pull,
+						"bubble" to flow(0.5, -56.0, 40.5), "tube" to flow(50.0, -57.5, -40.5),
+					)
+				}
+				CreateRelativity.LOGGER.info("Spacetime grid flows: {}", flows.entries.joinToString { (k, v) -> "$k (%.3f %.3f %.3f)".format(v.x, v.y, v.z) })
+				val hole = flows.getValue("hole")
+				assertTrue(hole.x < 0.0 && abs(hole.z) > 1e-3) { "Beside the spinning hole (+x of it) space flows ${hole}: expected inward (-x) and turned by its spin" }
+				// (The hole's field reaches everywhere: a little of its inflow (toward +x) shows round the others.)
+				assertTrue(flows.getValue("mass").length() < 0.05 && flows.getValue("mass pull").x < 0.0) { "Round the mass: flow ${flows["mass"]}, pull ${flows["mass pull"]}; expected next to none, and toward it" }
+				val bubble = flows.getValue("bubble")
+				assertTrue(abs(bubble.x - speed) < 0.1 * speed && abs(bubble.y) < 0.05 * speed && abs(bubble.z) < 0.05 * speed) { "Inside the bubble space flows $bubble: expected its push, $speed c along +x" }
+				val tube = flows.getValue("tube")
+				assertTrue(tube.x > 1.0 && abs(tube.y) < 0.1 * tube.x && abs(tube.z) < 0.1 * tube.x) { "Inside the Krasnikov tube space flows $tube: expected along it (+x)" }
+				// (The spinning hole alone, then the others without it: together the lens falls back to its tracer, which
+				// has no tubes or bubbles.)
+				SpacetimeField.removeProvider(provider)
+				for ((name, at) in listOf("hole" to "26.5 -48 0.5 -90 25", "mass" to "-54.5 -50 0.5 -90 20", "bubble" to "-14.5 -50 40.5 -90 20", "tube" to "50 -48 -60.5 0 25")) {
+					if (name == "mass") {
+						command("relativity bh clear")
+						SpacetimeField.addProvider(provider)
+					}
+					command("tp @a $at")
+					repeat(2) { settleClient("Spacetime grid, $name") }
+					waitTicks(40)
+					takeScreenshot("spacetime_grid_$name")
+				}
+				val ms = (0 until 20).map { atLength { val start = System.nanoTime(); net.kernelpanicsoft.relativity.client.SpacetimeGrid.onClientTick(net.neoforged.neoforge.client.event.ClientTickEvent.Post()); (System.nanoTime() - start) / 1e6 } }.sorted()
+				CreateRelativity.LOGGER.info("Spacetime grid: a tick's share of the rebuild in {} ms (median of 20), {} at most", "%.1f".format(ms[10]), "%.1f".format(ms.last()))
+				press()
+				assertTrue(!computeOnClient { net.kernelpanicsoft.relativity.client.SpacetimeGrid.shown }) { "F3 + Z again didn't hide the grid" }
+			} finally {
+				SpacetimeField.removeProvider(provider)
+				command("tick unfreeze")
+				runOnClient { if (net.kernelpanicsoft.relativity.client.SpacetimeGrid.shown) net.kernelpanicsoft.relativity.client.SpacetimeGrid.toggle() }
+			}
+		}
+	}
+
+	/**
 	 * Tubes and bubbles placed by command (`relativity tube`, `relativity bubble`): the client's field has them (a bent
 	 * tube, extended; a bubble round a box), the lens draws the tube (screenshot from inside it), and clear takes them.
 	 */
@@ -2741,6 +2827,9 @@ class LensClientGameTest {
 		val world = builder.create()
 		val save = world.saveDirectory
 		try {
+			// (After a lens change the world's programs compile cold: the first frames take long, past the harness's waits.)
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(4) { settleClient("Test world") }
 			world.block()
 		} finally {
 			// Debug switches back to normal, so a failed test doesn't leave the lens half off for the next.

@@ -124,5 +124,8 @@
   "commands.create_relativity.tube.none": "No tube placed by command in this dimension",
   "commands.create_relativity.tube.cleared": "Removed %s tube(s)",
   "commands.create_relativity.bubble.added": "Warp bubble round %s to %s: warp %s (%s c), moving along %s",
-  "commands.create_relativity.bubble.cleared": "Removed %s bubble(s)"
+  "commands.create_relativity.bubble.cleared": "Removed %s bubble(s)",
+  "debug.create_relativity.spacetime_grid.on": "Spacetime grid: shown",
+  "debug.create_relativity.spacetime_grid.off": "Spacetime grid: hidden",
+  "debug.create_relativity.spacetime_grid.help": "F3 + Z = Show spacetime grid (space's flow round every source, coloured by clock rate)"
 }

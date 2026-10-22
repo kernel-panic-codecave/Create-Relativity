@@ -35,7 +35,9 @@
     "client.LightTextureAccessor",
     "client.MouseHandlerMixin",
     "client.ShaderInstanceMixin",
-    "client.SectionCompilerMixin"
+    "client.SectionCompilerMixin",
+    "client.KeyboardHandlerMixin",
+    "client.KeyboardHandlerInvoker"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -46,16 +46,18 @@ object SpacetimeDebugRenderer {
 
 	fun render(event: RenderLevelStageEvent) {
 		if (event.stage != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return
-		if (!RelativityConfig.Client.Debug.showRadii || hidden) return
+		if (hidden) return
 		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) return // keep gizmos out of other level views
 		if (BlackHoleLens.active) return // drawn undistorted after the lens instead
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
-		val holes = SpacetimeField.blackHoles(level)
-		if (holes.isEmpty()) return
+		val holes = if (RelativityConfig.Client.Debug.showRadii) SpacetimeField.blackHoles(level) else emptyList()
+		if (holes.isEmpty() && !SpacetimeGrid.visible) return
 
 		val buffers = minecraft.renderBuffers().bufferSource()
-		drawHoles(buffers.getBuffer(RenderType.lines()), event.poseStack, event.camera.position, holes)
+		val lines = buffers.getBuffer(RenderType.lines())
+		drawHoles(lines, event.poseStack, event.camera.position, holes)
+		if (SpacetimeGrid.visible) SpacetimeGrid.draw(lines, event.poseStack.last(), event.camera.position)
 		buffers.endBatch(RenderType.lines())
 	}
 
@@ -64,11 +66,11 @@ object SpacetimeDebugRenderer {
 	 * scenery.
 	 */
 	fun renderAfterLens(projection: Matrix4f) {
-		if (!RelativityConfig.Client.Debug.showRadii || hidden) return
+		if (hidden) return
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level ?: return
-		val holes = SpacetimeField.blackHoles(level)
-		if (holes.isEmpty()) return
+		val holes = if (RelativityConfig.Client.Debug.showRadii) SpacetimeField.blackHoles(level) else emptyList()
+		if (holes.isEmpty() && !SpacetimeGrid.visible) return
 		val camera = minecraft.gameRenderer.mainCamera
 
 		minecraft.mainRenderTarget.bindWrite(false)
@@ -84,7 +86,7 @@ object SpacetimeDebugRenderer {
 		RenderSystem.enableBlend()
 		RenderSystem.defaultBlendFunc()
 		RenderSystem.setShader(GameRenderer::getRendertypeLinesShader)
-		RenderSystem.lineWidth(2f)
+		RenderSystem.lineWidth(if (SpacetimeGrid.visible) 2.5f else 2f)
 		// Gizmos mark true positions: keep the vertex lens out of them.
 		VertexLens.setEnabled(false)
 
@@ -92,6 +94,7 @@ object SpacetimeDebugRenderer {
 		poseStack.mulPose(camera.rotation().conjugate(Quaternionf()))
 		val buffer = Tesselator.getInstance().begin(VertexFormat.Mode.LINES, DefaultVertexFormat.POSITION_COLOR_NORMAL)
 		drawHoles(buffer, poseStack, camera.position, holes)
+		if (SpacetimeGrid.visible) SpacetimeGrid.draw(buffer, poseStack.last(), camera.position)
 		buffer.build()?.let(BufferUploader::drawWithShader)
 
 		RenderSystem.lineWidth(1f)
