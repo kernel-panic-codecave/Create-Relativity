@@ -96,4 +96,44 @@ class FieldSourceGameTest {
 			succeed()
 		}
 	}
+
+	/**
+	 * A living thing dropped into a warp bubble standing still (as `relativity bubble add` places one: warp 5, moving diagonally):
+	 * its wall's pull is huge and sharp, and once flung players hundreds of thousands of blocks a tick. The field takes
+	 * nothing past c: it never moves faster than that.
+	 */
+	@GameTest(template = MEDIUM, batch = "relativity_bubble_fall", timeoutTicks = 80)
+	fun GameTestHelper.bubbleDoesNotFling() {
+		val level = level as ServerLevel
+		val centre = absoluteVec(Vec3(10.5, 4.5, 10.5))
+		val bubble = net.kernelpanicsoft.relativity.sable.ShipWarp.around(
+			Vector3d(centre.x, centre.y, centre.z),
+			listOf(Vector3d(2.5, 0.0, 0.0), Vector3d(0.0, 2.0, 0.0), Vector3d(0.0, 0.0, 2.5)),
+			Vector3d(-0.52, -0.67, -0.53), net.kernelpanicsoft.relativity.physics.WarpScale.speed(5.0),
+		)
+		val provider = FieldSource.Provider { asked -> if (asked === level) listOf(bubble) else emptyList() }
+		val c = net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension()) / 20.0
+		var tick = 0L
+		var mob: net.minecraft.world.entity.LivingEntity? = null
+		var fastest = 0.0
+		onEachTick {
+			tick++
+			if (tick == 2L) {
+				SpacetimeField.addProvider(provider)
+				// Above the bubble, falling in through its top.
+				// (An armour stand: a living thing that falls, as a player does; a mob without AI doesn't move.)
+				mob = net.minecraft.world.entity.EntityType.ARMOR_STAND.create(level)!!.also {
+					it.setPos(centre.x + 0.3, centre.y + 6.0, centre.z - 0.2)
+					level.addFreshEntity(it)
+				}
+			}
+			mob?.let { m -> if (tick > 3L) fastest = maxOf(fastest, Vec3(m.x - m.xo, m.y - m.yo, m.z - m.zo).length()) }
+			if (tick == 60L) {
+				SpacetimeField.removeProvider(provider)
+				mob?.discard()
+				assertTrue(fastest <= c * 1.05) { "It moved %.1f blocks in a tick through the bubble; c is %.1f a tick".format(fastest, c) }
+				succeed()
+			}
+		}
+	}
 }

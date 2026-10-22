@@ -62,10 +62,15 @@ object SableSpacetimeForces {
 				continue
 			}
 
+			// (As for entities, the field takes nothing past c, or past how fast it already went: EntitySpacetime.)
+			val limit = maxOf(velocity.length(), c)
+			val before = Vector3d(velocity)
 			if (velocity.length() > MAX_FIELD_SPEED * c) velocity.normalize(MAX_FIELD_SPEED * c)
 			SpacetimeField.acceleration(level, worldCom, velocity, accel)
 			accel.add(SpacetimeField.radiationAcceleration(level, worldCom, Accretion.SHIP_COUPLING, Vector3d()))
 			if (accel.lengthSquared() == 0.0) continue
+			val after = Vector3d(before).fma(dt, accel)
+			if (after.length() > limit) accel.set(after.normalize(limit).sub(before).div(dt))
 			val impulse = pose.transformNormalInverse(accel.mul(mass.mass * dt))
 			val forces = subLevel.getOrCreateQueuedForceGroup(RelativityForceGroups.SPACETIME_CURVATURE.get())
 			forces.applyAndRecordPointForce(com, impulse)

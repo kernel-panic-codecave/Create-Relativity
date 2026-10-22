@@ -191,10 +191,15 @@ object EntitySpacetime {
 			return accel.add(SpacetimeField.radiationAcceleration(level, at, coupling, push))
 		}
 
+		// The field takes nothing past c (or past how fast it already went): across a warp bubble's wall the pull is huge
+		// and sharp, and a tick or two of it threw players hundreds of thousands of blocks.
+		val limit = maxOf(velocity.length(), c)
 		repeat(steps) {
 			velocity.fma(h / 2.0, pull(position, velocity))
+			if (velocity.length() > limit) velocity.normalize(limit)
 			position.fma(h, velocity)
 			velocity.fma(h / 2.0, pull(position, velocity))
+			if (velocity.length() > limit) velocity.normalize(limit)
 			if (diskDrag && inDisk) velocity.mul(kotlin.math.exp(-DISK_DRAG * h))
 			// The horizon is one-way: nothing inside moves outward.
 			val inside = SpacetimeField.insideHorizon(level, position)
