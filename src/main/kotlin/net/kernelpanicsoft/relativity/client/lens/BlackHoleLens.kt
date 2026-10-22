@@ -275,7 +275,7 @@ object BlackHoleLens {
 				// (Tubes: the field lens's tube module, in view out to the render distance.)
 				is FieldSource.Tube -> source.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.radius
 				is FieldSource.Krasnikov -> source.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.radius
-				is FieldSource.Ellipsoid -> false
+				is FieldSource.Ellipsoid -> source.center.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.axes.maxOf { it.length() }
 			}
 		}
 	}
@@ -301,7 +301,7 @@ object BlackHoleLens {
 		}
 		for (source in others) {
 			// (Tubes aren't the tracer's: the field lens's.)
-			if (source !is FieldSource.Tube && source !is FieldSource.Krasnikov) general = true
+			if (source !is FieldSource.Tube && source !is FieldSource.Krasnikov && source !is FieldSource.Ellipsoid) general = true
 			when (source) {
 				is FieldSource.Mass -> put(source.center, 2f, { set(source.mass.toFloat(), source.softening.toFloat(), 0f, 0f) })
 				is FieldSource.Bubble -> {

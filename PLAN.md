@@ -411,6 +411,10 @@ outrunning light.
   out through the side, a scan along the wall) then a few Gauss-Newton steps on one traced path, at most 16 traces; the
   pixel check is one trace. Known gaps: from outside, light grazing the silhouette or running far through the tube
   can need more traces than the cap (left hidden: a thin seam); the camera is a static observer, not the moving rider.
+- **Warp bubbles drawn** too (BubbleModule, the same walk in the shaders): frozen where they are (exact for one standing
+  still, as `relativity bubble add` places; a moving ship's leaves out light's travel time), a warp push inside an
+  ellipsoidal wall. Faster than light, a rider sees nothing ahead (a horizon); from outside the bubble is a lens with a
+  black rim.
 
 ### No time travel
 A single tube, or opposed pairs at rest together, can't reach the past: the cone tips at most to flat (instant), never

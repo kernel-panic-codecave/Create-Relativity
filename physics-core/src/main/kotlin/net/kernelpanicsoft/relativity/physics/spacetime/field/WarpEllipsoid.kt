@@ -8,7 +8,8 @@ import kotlin.math.tanh
  * t = 0 and moving at coordinate speed [speed] (any, faster than light included) along unit direction [n]. Its
  * [axes] are three perpendicular semi-axis vectors (x, y, z triples: their lengths the semi-axes). `ds² = −dt² +
  * (dx^i − v n^i f dt)²` as [WarpBubble], f the shape on the ellipsoidal radius s (1 on the wall): a sphere of radius R
- * is the same as [WarpBubble] of R. [sigma] is the wall's sharpness on s (per unit of s: R times a sphere's).
+ * is the same as [WarpBubble] of R. [sigma] is the wall's sharpness on s (per unit of s: R times a sphere's). Not
+ * [moving], it stays where it is, its push the same (frozen: the lens's view of it, BubbleModule).
  */
 class WarpEllipsoid(
 	val cx: Double, val cy: Double, val cz: Double,
@@ -16,6 +17,7 @@ class WarpEllipsoid(
 	val n: DoubleArray,
 	val speed: Double,
 	val sigma: Double = 8.0,
+	val moving: Boolean = true,
 ) : MetricSource {
 	init {
 		require(axes.size == 9 && n.size == 3) { "three semi-axes and a direction" }
@@ -37,9 +39,10 @@ class WarpEllipsoid(
 
 	/** The ellipsoidal radius of (x, y, z) at time [t]: 1 on the wall. */
 	fun radius(t: Double, x: Double, y: Double, z: Double): Double {
-		val rx = x - (cx + speed * n[0] * t)
-		val ry = y - (cy + speed * n[1] * t)
-		val rz = z - (cz + speed * n[2] * t)
+		val travelled = if (moving) speed * t else 0.0
+		val rx = x - (cx + travelled * n[0])
+		val ry = y - (cy + travelled * n[1])
+		val rz = z - (cz + travelled * n[2])
 		var s2 = 0.0
 		for (a in 0..2) {
 			val u = rx * scaled[3 * a] + ry * scaled[3 * a + 1] + rz * scaled[3 * a + 2]
@@ -63,7 +66,7 @@ class WarpEllipsoid(
 			val fm = shape(radius(t, x - if (k == 1) h else 0.0, y - if (k == 2) h else 0.0, z - if (k == 3) h else 0.0))
 			df[k] = (fp - fm) / (2 * h)
 		}
-		df[0] = -speed * (n[0] * df[1] + n[1] * df[2] + n[2] * df[3])
+		df[0] = if (moving) -speed * (n[0] * df[1] + n[1] * df[2] + n[2] * df[3]) else 0.0
 		val v = speed
 		for (i in 1..3) {
 			val ni = n[i - 1]

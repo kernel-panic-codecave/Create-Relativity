@@ -379,7 +379,7 @@ bool inShadow(vec3 dir, KerrRay first) {
 void main() {
     vec3 dir = viewRay(texCoord);
     vec4 original = texture(DiffuseSampler0, texCoord);
-    if ((HoleCount == 0 && SourceCount == 0 && relativityTubeCount() == 0) || LensMode == 4 || LensMode == 5) { fragColor = original; return; } // the frame as rendered (profiling)
+    if ((HoleCount == 0 && SourceCount == 0 && !relativityWalls()) || LensMode == 4 || LensMode == 5) { fragColor = original; return; } // the frame as rendered (profiling)
     if (KerrTableEnabled == 3) {
         // The table's error against a full march of this pixel: red, the exit direction's (a quarter per sample
         // spacing: a pixel's angle, or the exit direction's change per pixel where the lens squeezes the background);
@@ -407,7 +407,7 @@ void main() {
     // Sources the field lens has modules for (vertex_lens_core.glsl), any number: the geometry is already where its
     // light appears; the sky the light leaving each sky pixel ends on, or the shadow where a source captures it (exact
     // to the horizon: it closes round a camera falling in). Nothing marched, no tables built.
-    if (relativityFieldCount() >= 1 || relativityTubeCount() > 0) {
+    if (relativityFieldCount() >= 1 || relativityWalls()) {
         vec3 scene = original.rgb;
         if (sceneDist >= 1e29) {
             vec3 escape;

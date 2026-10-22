@@ -45,7 +45,7 @@ object VertexLens {
 	private val TEXTURE_UNIT: Int by lazy { GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - 1 }
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
-	private const val BLOCK_BYTES = 1952 // 122 vec4s: see vertex_lens_core.glsl's RelativityLensData
+	private const val BLOCK_BYTES = 2416 // 151 vec4s: see vertex_lens_core.glsl's RelativityLensData
 
 	/** The field lens's sources (vertex_lens_core.glsl's RELATIVITY_MAX_FIELD), nearest first. */
 	const val MAX_FIELD_SOURCES = 8
@@ -72,6 +72,13 @@ object VertexLens {
 
 	/** This frame's tubes for the field lens, nearest first. */
 	private var tubeSources: List<net.kernelpanicsoft.relativity.spacetime.FieldSource> = emptyList()
+
+	/** The field lens's warp bubbles (vertex_lens_core.glsl's RELATIVITY_MAX_BUBBLES), and this frame's, nearest first. */
+	const val MAX_BUBBLES = 4
+	private var bubbleSources: List<net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid> = emptyList()
+
+	/** Whether the field lens's walls draw [source]: a tube or a bubble. */
+	private fun isWall(source: net.kernelpanicsoft.relativity.spacetime.FieldSource) = isTube(source) || source is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid
 
 	private fun isTube(source: net.kernelpanicsoft.relativity.spacetime.FieldSource) =
 		source is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov || source is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube
@@ -179,6 +186,8 @@ object VertexLens {
 		} ?: return tube?.let {
 			val p = nearestOnSpine(spineOf(it), at)
 			Centre(p.x, p.y, p.z, tubeRadius(it), 0.05, null, "tubes")
+		} ?: others.filterIsInstance<net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid>().minByOrNull { it.center.distanceSquared(at) }?.let {
+			Centre(it.center.x(), it.center.y(), it.center.z(), it.axes.maxOf { a -> a.length() }, 0.05, null, "bubbles")
 		}
 		return when (strongest) {
 			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> {
@@ -358,15 +367,16 @@ object VertexLens {
 		// Several sources the field lens has modules for (non-spinning holes, masses): composed in the shaders, with
 		// nothing traced or solved per frame.
 		val fieldCapable = holes.size + others.size >= 1 && holes.all { abs(it.spin) < MIN_KERR_SPIN } &&
-			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass || isTube(it) } && fieldLens
-		// (Tubes are drawn by the field lens alone: a lone one too.)
-		val fieldWanted = fieldCapable && (holes.size + others.size > 1 || others.any { isTube(it) })
+			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass || isWall(it) } && fieldLens
+		// (Tubes and bubbles are drawn by the field lens alone: a lone one too.)
+		val fieldWanted = fieldCapable && (holes.size + others.size > 1 || others.any { isWall(it) })
 		if (!perspective) {
 			composed = fieldWanted
 			fieldSky = fieldCapable
 			val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
 			tubeSources = others.filter { isTube(it) }.sortedBy { nearestOnSpine(spineOf(it), at).distanceSquared(at) }
-			fieldSources = (holes + others.filter { !isTube(it) }).sortedBy { s ->
+			bubbleSources = others.filterIsInstance<net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid>().sortedBy { it.center.distanceSquared(at) }
+			fieldSources = (holes + others.filter { !isWall(it) }).sortedBy { s ->
 				when (s) {
 					is BlackHole -> s.center.distanceToSqr(camera)
 					is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> s.center.distanceSquared(camera.x, camera.y, camera.z)
@@ -720,7 +730,7 @@ object VertexLens {
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Warp(tube.speed)
 				else -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Flat
 			}
-			data.put(tubeRadius(tube).toFloat()).put(if (j == 0) tubeTraces.toFloat() else 0f).put(0f).put(0f)
+			data.put(tubeRadius(tube).toFloat()).put(0f).put(0f).put(0f)
 			data.put(inside.a.toFloat()).put(inside.b.toFloat()).put(inside.c.toFloat()).put(inside.alpha.toFloat())
 			data.put(inside.beta.toFloat()).put(inside.gamma.toFloat()).put(0f).put(0f)
 		}
@@ -730,6 +740,32 @@ object VertexLens {
 			data.put(at.x).put(at.y).put(at.z).put(j.toFloat())
 		}
 		repeat(MAX_TUBE_POINTS - points) { repeat(4) { data.put(0f) } }
+		uploadBubbles(data, camX, camY, camZ, view)
+	}
+
+	/**
+	 * [122..150]: the field lens's warp bubbles (vertex_lens_core.glsl's relativityBubbleCount and on), when [fieldSky]:
+	 * how many; each one's centre, semi-axes (unit and length), its inside (a warp push: TubeModule.Interior.Warp) and the
+	 * push's direction, in view space, reversed as the tubes' spines are (light followed arriving).
+	 */
+	private fun uploadBubbles(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
+		val bubbles = if (fieldSky) bubbleSources.take(MAX_BUBBLES) else emptyList()
+		// (And the walls' aim's most traces.)
+		data.put(bubbles.size.toFloat()).put(tubeTraces.toFloat()).put(0f).put(0f)
+		for (bubble in bubbles) {
+			val c = view.transform(Vector3f((bubble.center.x() - camX).toFloat(), (bubble.center.y() - camY).toFloat(), (bubble.center.z() - camZ).toFloat()))
+			data.put(c.x).put(c.y).put(c.z).put(0f)
+			for (axis in bubble.axes) {
+				val u = view.transform(Vector3f(axis.x().toFloat(), axis.y().toFloat(), axis.z().toFloat()).normalize())
+				data.put(u.x).put(u.y).put(u.z).put(axis.length().toFloat())
+			}
+			val inside = net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Warp(bubble.speed)
+			data.put(inside.a.toFloat()).put(inside.b.toFloat()).put(inside.c.toFloat()).put(inside.alpha.toFloat())
+			data.put(inside.beta.toFloat()).put(inside.gamma.toFloat()).put(0f).put(0f)
+			val n = view.transform(Vector3f(bubble.direction.x().toFloat(), bubble.direction.y().toFloat(), bubble.direction.z().toFloat()).normalize().negate())
+			data.put(n.x).put(n.y).put(n.z).put(0f)
+		}
+		repeat(MAX_BUBBLES - bubbles.size) { repeat(28) { data.put(0f) } }
 	}
 
 	/** Creates the buffer and, once the table is built, its texture. False until both exist. */

@@ -18,8 +18,9 @@
 //      azimuths round it (relativityShadowEdge), all 0 when there's none
 // [28..44] the field lens's sources (relativityFieldCount and on)
 // [45..121] the field lens's tubes (relativityTubeCount and on)
+// [122..150] the field lens's warp bubbles (relativityBubbleCount and on)
 layout(std140) uniform RelativityLens {
-    vec4 RelativityLensData[122];
+    vec4 RelativityLensData[151];
 };
 uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sqrt u0, sqrt uP, phi / pi): r the
                                     // launch-angle correction, g whether there's an image (interpolated)
@@ -1550,7 +1551,7 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d) {
 // Inside, its direction is the one the inside's observers see. Followed the way the camera sees light, arriving: time
 // reversal turns a tube's push round, so VertexLens uploads each spine reversed and these follow light forward.
 // [45] x: how many tubes, y how many spine points in all, z the walk's most events, w the aim's most steps; [46 + 3j]:
-// tube j's radius (and [46].y the aim's most traces); [47 + 3j]: its inside's g^tt, g^ts, g^ss and its observers' alpha; [48 + 3j]: their beta, gamma
+// tube j's radius ([122].y: the aim's most traces); [47 + 3j]: its inside's g^tt, g^ts, g^ss and its observers' alpha; [48 + 3j]: their beta, gamma
 // (TubeModule.Interior); [58 + i]: spine point i (view space) and its tube. VertexLens.uploadTubes.
 const int RELATIVITY_MAX_TUBES = 4;        // VertexLens.MAX_TUBES
 const int RELATIVITY_MAX_TUBE_POINTS = 64; // VertexLens.MAX_TUBE_POINTS
@@ -1563,6 +1564,52 @@ int relativityTubeSteps() { return int(RelativityLensData[45].w + 0.5); }
 vec3 relativityTubePoint(int i) { return RelativityLensData[58 + i].xyz; }
 int relativityTubeOf(int i) { return int(RelativityLensData[58 + i].w + 0.5); }
 
+// Warp bubbles (physics-core's BubbleModule, which these mirror): the same walk, the same crossings, an ellipsoidal wall
+// round a uniform warp push, frozen where it is. [122] x: how many; [123 + 7e]: bubble e's centre (view space); [124 +
+// 7e ..]: its three semi-axes ([122].y: the walls' aim's most traces) (unit, then length); [127 + 7e]: its inside's g^tt, g^ts, g^ss, alpha; [128 + 7e]: beta,
+// gamma; [129 + 7e]: its push's direction (reversed, as the tubes' spines: light followed arriving). VertexLens.uploadBubbles.
+// Bubble e is region RELATIVITY_BUBBLE_REGION + e.
+const int RELATIVITY_MAX_BUBBLES = 4;        // VertexLens.MAX_BUBBLES
+const int RELATIVITY_BUBBLE_REGION = 1000;
+
+int relativityBubbleCount() { return int(RelativityLensData[122].x + 0.5); }
+bool relativityIsBubble(int region) { return region >= RELATIVITY_BUBBLE_REGION; }
+vec3 relativityBubbleCentre(int e) { return RelativityLensData[123 + 7 * e].xyz; }
+
+// Whether any tube or bubble is in view.
+bool relativityWalls() { return relativityTubeCount() > 0 || relativityBubbleCount() > 0; }
+
+// x in bubble e's semi-axes (1 on its wall).
+vec3 relativityBubbleLocal(vec3 x, int e) {
+    vec3 r = x - relativityBubbleCentre(e);
+    vec4 a0 = RelativityLensData[124 + 7 * e];
+    vec4 a1 = RelativityLensData[125 + 7 * e];
+    vec4 a2 = RelativityLensData[126 + 7 * e];
+    return vec3(dot(r, a0.xyz) / a0.w, dot(r, a1.xyz) / a1.w, dot(r, a2.xyz) / a2.w);
+}
+
+// Bubble e's wall's outward normal at (or by) x.
+vec3 relativityBubbleNormal(vec3 x, int e) {
+    vec3 u = relativityBubbleLocal(x, e);
+    vec4 a0 = RelativityLensData[124 + 7 * e];
+    vec4 a1 = RelativityLensData[125 + 7 * e];
+    vec4 a2 = RelativityLensData[126 + 7 * e];
+    return normalize(a0.xyz * (u.x / a0.w) + a1.xyz * (u.y / a1.w) + a2.xyz * (u.z / a2.w));
+}
+
+// Where the line x + w t is inside bubble e: range, false if nowhere.
+bool relativityBubbleSpan(vec3 x, vec3 w, int e, out vec2 range) {
+    vec3 u = relativityBubbleLocal(x, e);
+    vec3 du = relativityBubbleLocal(x + w, e) - u;
+    float qa = dot(du, du);
+    float qb = 2.0 * dot(u, du);
+    float qc = dot(u, u) - 1.0;
+    float disc = qb * qb - 4.0 * qa * qc;
+    range = vec2(1.0, 0.0);
+    if (qa > 1e-20 && disc >= 0.0) range = vec2(-qb - sqrt(disc), -qb + sqrt(disc)) / (2.0 * qa);
+    return range.x <= range.y;
+}
+
 // Whether spine points g and g + 1 make a segment (are the same tube's). Segment g is region g; -1 is outside.
 bool relativityTubeSegment(int g) { return g >= 0 && g + 1 < relativityTubePoints() && relativityTubeOf(g) == relativityTubeOf(g + 1); }
 float relativityTubeRadius(int g) { return RelativityLensData[46 + 3 * relativityTubeOf(g)].x; }
@@ -1570,22 +1617,22 @@ float relativityTubeRadius(int g) { return RelativityLensData[46 + 3 * relativit
 // Region g's inside (outside: flat): g^tt, g^ts, g^ss and alpha; beta and gamma; its direction t.
 vec4 relativityTubeMetric(int g) {
     vec4 inside = vec4(-1.0, 0.0, 1.0, 0.0);
-    if (g >= 0) inside = RelativityLensData[47 + 3 * relativityTubeOf(g)];
+    if (relativityIsBubble(g)) inside = RelativityLensData[127 + 7 * (g - RELATIVITY_BUBBLE_REGION)];
+    else if (g >= 0) inside = RelativityLensData[47 + 3 * relativityTubeOf(g)];
     return inside;
 }
 vec2 relativityTubeObservers(int g) {
     vec2 inside = vec2(1.0, 0.0);
-    if (g >= 0) inside = RelativityLensData[48 + 3 * relativityTubeOf(g)].xy;
+    if (relativityIsBubble(g)) inside = RelativityLensData[128 + 7 * (g - RELATIVITY_BUBBLE_REGION)].xy;
+    else if (g >= 0) inside = RelativityLensData[48 + 3 * relativityTubeOf(g)].xy;
     return inside;
 }
 vec3 relativityTubeAxis(int g) {
     vec3 axis = vec3(1.0, 0.0, 0.0);
-    if (g >= 0) axis = normalize(relativityTubePoint(g + 1) - relativityTubePoint(g));
+    if (relativityIsBubble(g)) axis = RelativityLensData[129 + 7 * (g - RELATIVITY_BUBBLE_REGION)].xyz;
+    else if (g >= 0) axis = normalize(relativityTubePoint(g + 1) - relativityTubePoint(g));
     return axis;
 }
-
-// Between segments g and g + 1: the normal (toward g + 1) of the plane through their joint halving the turn.
-vec3 relativityTubeJoint(int g) { return normalize(relativityTubeAxis(g) + relativityTubeAxis(g + 1)); }
 
 vec3 relativityTubeClosest(vec3 x, int g) {
     vec3 a = relativityTubePoint(g);
@@ -1596,9 +1643,34 @@ vec3 relativityTubeClosest(vec3 x, int g) {
     return a + d * u;
 }
 
-// The region x is in: the nearest segment within its tube's radius (then across its joints' planes), or -1.
+// A wall's outward normal at x, region g's (a tube's segment, or a bubble).
+vec3 relativityWallOutward(vec3 x, int g) {
+    vec3 n = vec3(0.0, 1.0, 0.0);
+    if (relativityIsBubble(g)) n = relativityBubbleNormal(x, g - RELATIVITY_BUBBLE_REGION);
+    else n = normalize(x - relativityTubeClosest(x, g));
+    return n;
+}
+
+// How big the walls are, for the aim's search: the first tube's radius, or the first bubble's longest semi-axis.
+float relativityWallSize() {
+    float size = 1.0;
+    if (relativityBubbleCount() > 0) size = max(RelativityLensData[124].w, max(RelativityLensData[125].w, RelativityLensData[126].w));
+    if (relativityTubeCount() > 0) size = relativityTubeRadius(0);
+    return size;
+}
+
+// Between segments g and g + 1: the normal (toward g + 1) of the plane through their joint halving the turn.
+vec3 relativityTubeJoint(int g) { return normalize(relativityTubeAxis(g) + relativityTubeAxis(g + 1)); }
+
+
+// The region x is in: a bubble it's inside, else the nearest segment within its tube's radius (then across its joints'
+// planes), else -1.
 int relativityTubeRegion(vec3 x) {
     int n = relativityTubePoints();
+    int bubble = -1;
+    for (int e = 0; e < relativityBubbleCount(); e += 1) {
+        if (bubble < 0 && length(relativityBubbleLocal(x, e)) < 1.0) bubble = RELATIVITY_BUBBLE_REGION + e;
+    }
     int best = -1;
     float bestD = 1e30;
     for (int g = 0; g < n; g += 1) {
@@ -1617,6 +1689,7 @@ int relativityTubeRegion(vec3 x) {
             else break;
         }
     }
+    if (bubble >= 0) k = bubble;
     return k;
 }
 
@@ -1738,9 +1811,22 @@ bool relativityTubeCross(int into, vec3 n, float pt, inout vec3 p, inout int reg
 // helper at one call site: they're inlined whole, and the world's programs all carry this.)
 int relativityTubeStep(inout vec3 x, inout vec3 p, float pt, inout int region) {
     vec3 w = relativityTubeVelocity(p, pt, region);
-    // Outside: the first capsule it enters; inside segment k: where it leaves k's.
+    // Outside: the first capsule or bubble it enters; inside segment k (or a bubble): where it leaves it.
     float event = 1e30;
     int hit = -1;
+    for (int e = 0; e < relativityBubbleCount(); e += 1) {
+        int r = RELATIVITY_BUBBLE_REGION + e;
+        if (region >= 0 && r != region) continue;
+        vec2 range;
+        if (!relativityBubbleSpan(x, w, e, range)) continue;
+        if (region >= 0) {
+            event = max(range.y, 0.0);
+            hit = r;
+        } else if (range.x > RELATIVITY_TUBE_EPS && range.x < event && range.y > range.x) {
+            event = range.x;
+            hit = r;
+        }
+    }
     for (int g = 0; g < relativityTubePoints(); g += 1) {
         if (!relativityTubeSegment(g) || (region >= 0 && g != region)) continue;
         vec2 range;
@@ -1761,7 +1847,7 @@ int relativityTubeStep(inout vec3 x, inout vec3 p, float pt, inout int region) {
         // Inside, a joint first: across into the next segment.
         int next = -1;
         vec3 n = vec3(0.0);
-        if (region >= 0 && relativityTubeSegment(region + 1)) {
+        if (region >= 0 && !relativityIsBubble(region) && relativityTubeSegment(region + 1)) {
             vec3 m = relativityTubeJoint(region);
             float wm = dot(w, m);
             if (wm > 1e-9) {
@@ -1783,13 +1869,16 @@ int relativityTubeStep(inout vec3 x, inout vec3 p, float pt, inout int region) {
         int into = next;
         if (next < 0) {
             int beyond = relativityTubeRegion(x + w * RELATIVITY_TUBE_EPS);
+            // (Into a wall: its normal turned in, at the one it hit.)
+            int wall = region;
+            if (region < 0) wall = hit;
+            n = relativityWallOutward(x, wall);
             if (region < 0) {
-                n = normalize(relativityTubeClosest(x, hit) - x);
+                n = -n;
                 into = beyond;
                 if (beyond < 0) into = hit;
-            } else {
-                n = normalize(x - relativityTubeClosest(x, region));
-                if (beyond >= 0 && beyond != region) into = beyond;
+            } else if (beyond >= 0 && beyond != region) {
+                into = beyond;
             }
         }
         int was = region;
@@ -1849,7 +1938,7 @@ bool relativityTubePass(inout vec3 o, inout vec3 d) {
 }
 
 // How far light leaving the camera along d misses target: the target less the nearest point of its path (the straight
-// pieces between walls); false if it's captured.
+// pieces between walls, up to where it's captured, if it is: what's seen is the target's light, wherever it goes after).
 bool relativityTubeMiss(vec3 d, vec3 target, out vec3 miss) {
     vec3 p;
     float pt;
@@ -1858,19 +1947,18 @@ bool relativityTubeMiss(vec3 d, vec3 target, out vec3 miss) {
     relativityTubeStart(x, d, p, pt, region);
     float best = 1e30;
     miss = vec3(1e9);
-    bool alive = true;
     for (int e = 0; e < relativityTubeEvents(); e += 1) {
         vec3 a = x;
         vec3 w = normalize(relativityTubeVelocity(p, pt, region));
         int outcome = relativityTubeStep(x, p, pt, region);
-        if (outcome < 0) { alive = false; break; }
+        // (Out for good: on without end; else to the wall it met, captured there or not.)
         float len = 1e30;
-        if (outcome == 0) len = length(x - a);
+        if (outcome != 1) len = length(x - a);
         vec3 near = a + w * clamp(dot(target - a, w), 0.0, len);
         if (length(target - near) < best) { best = length(target - near); miss = target - near; }
-        if (outcome > 0) break;
+        if (outcome != 0) break;
     }
-    return alive;
+    return best < 1e30;
 }
 
 // Whether the straight line from the camera to target stays clear of every tube (both ends outside): unbent.
@@ -1879,6 +1967,10 @@ bool relativityTubeClear(vec3 target) {
     for (int g = 0; g < relativityTubePoints() && clear; g += 1) {
         vec2 range;
         if (relativityTubeSegment(g) && relativityTubeCapsule(vec3(0.0), target, g, range) && range.y > 0.0 && range.x < 1.0) clear = false;
+    }
+    for (int e = 0; e < relativityBubbleCount() && clear; e += 1) {
+        vec2 range;
+        if (relativityBubbleSpan(vec3(0.0), target, e, range) && range.y > 0.0 && range.x < 1.0) clear = false;
     }
     return clear;
 }
@@ -1933,17 +2025,26 @@ vec3 relativityTubeGuess(vec3 target, bool beside) {
         vec3 t = relativityTubeAxis(k);
         vec4 f = relativityTubeMetric(k);
         vec2 o = relativityTubeObservers(k);
-        float radius = relativityTubeRadius(k);
+        float radius = 0.0;
+        if (!relativityIsBubble(k)) radius = relativityTubeRadius(k);
         // The straight line inside to aim along (closed form, below), unless the light leaves the straight line's way.
         vec3 along = s;
         bool inside = relativityTubeRegion(target) == k;
-        vec3 rel = target - relativityTubePoint(k);
+        bool bubble = relativityIsBubble(k);
+        // (A bubble's "axis point" its centre, and nothing's beside it: it has no length.)
+        vec3 base = relativityTubePoint(max(k, 0));
+        if (bubble) {
+            base = relativityBubbleCentre(k - RELATIVITY_BUBBLE_REGION);
+            radius = 0.0;
+            beside = false;
+        }
+        vec3 rel = target - base;
         float zTarget = dot(rel, t);
         vec3 radial = rel - t * zTarget;
         bool found = false;
-        if (!inside && !beside && length(radial) > radius) {
+        if (!inside && !beside && !bubble && length(radial) > radius) {
             vec3 n = normalize(radial);
-            float zFrom = dot(-relativityTubePoint(k), t);
+            float zFrom = dot(-base, t);
             float lo = min(zFrom, zTarget) - length(radial);
             float hi = max(zFrom, zTarget) + length(radial);
             bool bisecting = false;
@@ -1996,6 +2097,7 @@ vec3 relativityTubeGuess(vec3 target, bool beside) {
             vec3 n = t;
             if (dot(s, t) < 0.0) n = -t;
             if (length(radial) > radius) n = normalize(radial);
+            if (bubble) n = normalize(rel);
             vec3 pT = s - n * dot(s, n);
             float q;
             if (relativityTubeSolve(-1.0, pT, n, k, 1.0, q)) guess = relativityTubeObserve(pT + n * q, -1.0, k);
@@ -2046,7 +2148,7 @@ bool relativityTubeAim(vec3 target, out vec3 seen) {
     if (relativityTubeClear(target)) return true;
     // (A quarter of a pixel, or the CPU's tolerance where that's looser.)
     float tolerance = max(RELATIVITY_TUBE_TOLERANCE, 0.25 * RelativityLensData[11].x) * max(distance, 1.0);
-    float reach = min(atan(3.0 * relativityTubeRadius(0), max(distance, relativityTubeRadius(0))), 0.6);
+    float reach = min(atan(3.0 * relativityWallSize(), max(distance, relativityWallSize())), 0.6);
     int side = 2 * RELATIVITY_TUBE_GRID + 1;
     vec3 start = straight;
     vec3 e1 = vec3(0.0);
@@ -2064,6 +2166,7 @@ bool relativityTubeAim(vec3 target, out vec3 seen) {
             if (d < nearestD) { nearestD = d; nearest = g; }
         }
         vec3 t = relativityTubeAxis(nearest);
+        if (relativityTubeCount() == 0) t = relativityTubeAxis(RELATIVITY_BUBBLE_REGION);
         way = t - straight * dot(t, straight);
         if (length(way) > 1e-6) way = normalize(way);
         else way = vec3(0.0);
@@ -2090,7 +2193,7 @@ bool relativityTubeAim(vec3 target, out vec3 seen) {
     bool done = false;
     bool settled = false;
     // (At most as many traces as the block says: a group of vertices waits for its slowest.)
-    int budget = min(3 * (1 + relativityTubeSteps() * (2 + RELATIVITY_TUBE_HALVINGS)) + side * side, int(RelativityLensData[46].y + 0.5));
+    int budget = min(3 * (1 + relativityTubeSteps() * (2 + RELATIVITY_TUBE_HALVINGS)) + side * side, int(RelativityLensData[122].y + 0.5));
     for (int pass = 0; pass < budget && !done; pass += 1) {
         // (An attempt's start, at one call site.)
         if (fresh) {
@@ -2216,14 +2319,14 @@ bool relativityTubeAim(vec3 target, out vec3 seen) {
 }
 
 // Whether the field lens places the geometry: several sources, or any tube.
-bool relativityFieldComposed() { return relativityFieldCount() > 1 || relativityTubeCount() > 0; }
+bool relativityFieldComposed() { return relativityFieldCount() > 1 || relativityWalls(); }
 
 // Where the light leaving the camera along d ends (FieldLens.sky): false if it's captured. Tubes first: they're round the
 // camera, or near it (nothing farther lenses them).
 bool relativityFieldSky(vec3 d, out vec3 escape) {
     vec3 o = vec3(0.0);
     escape = d;
-    if (relativityTubeCount() > 0 && !relativityTubePass(o, escape)) return false;
+    if (relativityWalls() && !relativityTubePass(o, escape)) return false;
     if (!relativityFieldPropagate(o, escape)) return false;
     return true;
 }
@@ -2310,7 +2413,7 @@ bool relativityFieldImage(vec3 target, bool secondary, bool tubes, out vec3 seen
     seen = normalize(blended);
     // The tubes last, nearest the camera (as relativityFieldSky takes them first): the point as the sources show it,
     // seen through them.
-    if (tubes && relativityTubeCount() > 0) {
+    if (tubes && relativityWalls()) {
         vec3 through;
         if (!relativityTubeAim(seen * distance, through)) return false;
         seen = through;
@@ -2530,7 +2633,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // Tubes: the light seen where the pixel's drawn, followed (one trace: the aim per pixel is too dear), must pass by
     // what it shows; a triangle stretched across a tube's wall (its corners seen through it and not) doesn't. (With
     // other sources too, unchecked.)
-    if (relativityTubeCount() > 0) {
+    if (relativityWalls()) {
         if (relativityFieldCount() > 0) return false;
         vec3 miss;
         if (!relativityTubeMiss(normalize(bent), unbent, miss)) return true;

@@ -31,6 +31,42 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 			return (m + t * (alpha + (beta - 1) * ms)) to (-1.0 + gamma * ms)
 		}
 
+		/** dt/dλ for light of momentum [p] and energy [pt] here (spine direction [t]): positive is future-directed. */
+		fun tDot(p: V3, pt: Double, t: V3): Double = a * pt + b * (p dot t)
+
+		/** Light's coordinate velocity per unit coordinate time: (p + ((g^ss − 1) p_s + g^ts p_t) t̂) / ṫ. */
+		fun velocity(p: V3, pt: Double, t: V3): V3 {
+			val ps = p dot t
+			return (p + t * ((c - 1) * ps + b * pt)) * (1.0 / tDot(p, pt, t))
+		}
+
+		/**
+		 * The momentum across a wall of normal [n] for light of energy [pt] and momentum [pT] along it, here (spine
+		 * direction [t]), going along n ([sense] 1) or against it (-1): null if there's none (or none future-directed).
+		 */
+		fun across(pt: Double, pT: V3, n: V3, t: V3, sense: Double): Double? {
+			// p = pT + q n, p_s = a0 + b0 q; null: g^tt p_t² + 2 g^ts p_t p_s + g^ss p_s² + |p|² − p_s² = 0.
+			val a0 = pT dot t
+			val b0 = n dot t
+			val qa = 1 + (c - 1) * b0 * b0
+			val qb = 2 * (c - 1) * a0 * b0 + 2 * b * pt * b0
+			val qc = (c - 1) * a0 * a0 + 2 * b * pt * a0 + a * pt * pt + (pT dot pT)
+			val roots = if (abs(qa) < 1e-12) (if (abs(qb) < 1e-14) emptyList() else listOf(-qc / qb)) else {
+				val disc = qb * qb - 4 * qa * qc
+				if (disc < 0) return null
+				val s = sqrt(disc)
+				listOf((-qb - s) / (2 * qa), (-qb + s) / (2 * qa))
+			}
+			return roots.filter { q ->
+				val p = pT + n * q
+				val td = tDot(p, pt, t)
+				// Future-directed, and going the right way across (its velocity's normal part).
+				val ps = p dot t
+				val vn = (q + b0 * ((c - 1) * ps + b * pt)) / td
+				td > 1e-12 && vn * sense > 0
+			}.minByOrNull { abs(it) }
+		}
+
 		/** The inverse of [start]: the direction its observers see light of momentum [p] and energy [pt] (any scale) going. */
 		fun observe(p: V3, pt: Double, t: V3): V3 {
 			val ps = p dot t
@@ -78,18 +114,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 	private fun axisOf(region: Int): V3 = if (region < 0) V3(1.0, 0.0, 0.0) else directions[region]
 
 	/** dt/dλ: g^tt p_t + g^ts p_s (light's is positive: future-directed). */
-	private fun tDot(pt: Double, p: V3, region: Int): Double {
-		val f = interiorOf(region)
-		return f.a * pt + f.b * (p dot axisOf(region))
-	}
-
-	/** Coordinate velocity per unit coordinate time: (p + ((g^ss − 1) p_s + g^ts p_t) t̂) / ṫ. */
-	private fun velocity(r: Ray): V3 {
-		val f = interiorOf(r.region)
-		val t = axisOf(r.region)
-		val ps = r.p dot t
-		return (r.p + t * ((f.c - 1) * ps + f.b * r.pt)) * (1.0 / tDot(r.pt, r.p, r.region))
-	}
+	/** Coordinate velocity per unit coordinate time. */
+	private fun velocity(r: Ray): V3 = interiorOf(r.region).velocity(r.p, r.pt, axisOf(r.region))
 
 	/** The nearest segment within the tube's radius of [x] (thin walls), or -1. */
 	private fun regionOf(x: V3): Int {
@@ -178,30 +204,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 	 * The momentum across a wall of normal [n] for light of energy at infinity [pt] and momentum [pT] along it, in
 	 * [region], going along n ([sense] 1) or against it (-1): null if there's none (or none with positive energy).
 	 */
-	private fun solve(pt: Double, pT: V3, n: V3, region: Int, sense: Double): Double? {
-		val f = interiorOf(region)
-		val t = axisOf(region)
-		// p = pT + q n, p_s = a0 + b0 q; null: g^tt p_t² + 2 g^ts p_t p_s + g^ss p_s² + |p|² − p_s² = 0.
-		val a0 = pT dot t
-		val b0 = n dot t
-		val qa = 1 + (f.c - 1) * b0 * b0
-		val qb = 2 * (f.c - 1) * a0 * b0 + 2 * f.b * pt * b0
-		val qc = (f.c - 1) * a0 * a0 + 2 * f.b * pt * a0 + f.a * pt * pt + (pT dot pT)
-		val roots = if (abs(qa) < 1e-12) (if (abs(qb) < 1e-14) emptyList() else listOf(-qc / qb)) else {
-			val disc = qb * qb - 4 * qa * qc
-			if (disc < 0) return null
-			val s = sqrt(disc)
-			listOf((-qb - s) / (2 * qa), (-qb + s) / (2 * qa))
-		}
-		return roots.filter { q ->
-			val p = pT + n * q
-			val td = tDot(pt, p, region)
-			// Future-directed, and going the right way across (its velocity's normal part).
-			val ps = p dot t
-			val vn = (q + (n dot t) * ((f.c - 1) * ps + f.b * pt)) / td
-			td > 1e-12 && vn * sense > 0
-		}.minByOrNull { abs(it) }
-	}
+	private fun solve(pt: Double, pT: V3, n: V3, region: Int, sense: Double): Double? =
+		interiorOf(region).across(pt, pT, n, axisOf(region), sense)
 
 	override fun pass(line: LightLine): LightLine? {
 		val walk = Walk(start(line.origin, line.direction))
@@ -512,7 +516,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 
 	/**
 	 * How far the light leaving [from] along [d] misses [target]: the target less the nearest point of its path (the
-	 * straight pieces between walls), or null if it's captured.
+	 * straight pieces between walls, up to where it's captured, if it is: what's seen is the target's light, wherever it
+	 * goes after).
 	 */
 	internal fun missAt(from: V3, d: V3, target: V3): V3? = trace(from, d, target)
 
@@ -530,7 +535,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 			val a = walk.ray.x
 			val w = velocity(walk.ray)
 			when (walk.step()) {
-				null -> return null
+				// (Captured: up to there. What's seen is the target's light, wherever it goes after.)
+				null -> { piece(a, w, (walk.ray.x - a).length); return best }
 				true -> { piece(a, w, Double.MAX_VALUE); return best }
 				false -> piece(a, w, (walk.ray.x - a).length)
 			}

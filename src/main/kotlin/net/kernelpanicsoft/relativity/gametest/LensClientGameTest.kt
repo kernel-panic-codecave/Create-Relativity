@@ -2373,6 +2373,109 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * A warp bubble (warp 2, pushing +x) standing over the checkerboard and pillars, the floor through it, seen from inside
+	 * (forward, back) and beside: the shaders' aim for a grid of points traced back through the CPU module (it must reach
+	 * them), and the picture against the CPU module's light per pixel (both following light arriving: the push reversed).
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.bubbleLens() {
+		if (!ClientTestInput.selected("bubbleLens")) return
+		settleClient("Bubble lens, start")
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.fovEffectScale().set(0.0)
+		}
+		val speed = net.kernelpanicsoft.relativity.physics.WarpScale.speed(2.0)
+		val centre = org.joml.Vector3d(0.5, -58.0, 0.5)
+		val axes = listOf(org.joml.Vector3d(6.0, 0.0, 0.0), org.joml.Vector3d(0.0, 4.0, 0.0), org.joml.Vector3d(0.0, 0.0, 5.0))
+		val bubble = net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid(centre, axes, org.joml.Vector3d(1.0, 0.0, 0.0), speed)
+		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else listOf(bubble)
+		}
+		withTestWorld {
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(5) { settleClient("Bubble lens, world") }
+			waitTicks(40)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear", "relativity bh clear",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -48..48) for (z in -48..48) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+				for (x in -48..48 step 8) for (z in -48..48 step 8) {
+					for (y in -60..-57) level.setBlock(BlockPos(x, y, z + 4), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+				}
+			}
+			command("tick freeze")
+			SpacetimeField.addProvider(provider)
+			val failures = ArrayList<String>()
+			try {
+				for ((name, at) in listOf("inside_forward" to "0.5 -59.62 0.5 -90 10", "inside_back" to "0.5 -59.62 0.5 90 10", "beside" to "0.5 -54 -12.5 0 25")) {
+					command("tp @a $at")
+					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+					repeat(3) { settleClient("Bubble lens, $name") }
+					waitTicks(40)
+					val composed = computeOnClient { VertexLens.composed }
+					val (eye, rotation) = computeOnClient { minecraft ->
+						val camera = minecraft.gameRenderer.mainCamera
+						camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+					}
+					val module = net.kernelpanicsoft.relativity.physics.lens.field.BubbleModule(
+						net.kernelpanicsoft.relativity.physics.lens.field.V3(centre.x - eye.x, centre.y - eye.y, centre.z - eye.z),
+						axes.map { net.kernelpanicsoft.relativity.physics.lens.field.V3(it.x, it.y, it.z) },
+						net.kernelpanicsoft.relativity.physics.lens.field.V3(-1.0, 0.0, 0.0),
+						net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Warp(speed),
+					)
+					val targets = ArrayList<net.minecraft.world.phys.Vec3>()
+					for (x in -40..40 step 4) for (z in -40..40 step 4) targets += net.minecraft.world.phys.Vec3(x + 0.3, -60.0, z + 0.7)
+					for (x in -5..5) for (dy in listOf(-1.5, 0.0, 1.5)) for (dz in listOf(-2.0, 0.0, 2.0)) targets += net.minecraft.world.phys.Vec3(x + 0.6, -58.0 + dy, 0.5 + dz)
+					val views = targets.map { t -> rotation.transform(org.joml.Vector3f((t.x - eye.x).toFloat(), (t.y - eye.y).toFloat(), (t.z - eye.z).toFloat())).let { floatArrayOf(it.x, it.y, it.z) } }
+					val gpu = views.chunked(1000).flatMap { chunk -> atLength { KerrSolveCheck.run(chunk, VertexLens.lastProjection, tubes = true) } }
+					val pixel = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
+					val back = org.joml.Quaternionf(rotation).conjugate()
+					var placed = 0
+					var reaching = 0
+					for ((i, t) in targets.withIndex()) {
+						val g = gpu[i]
+						if (g[3] <= 0f) continue
+						placed++
+						val d = back.transform(org.joml.Vector3f(g[0], g[1], g[2]))
+						val target = net.kernelpanicsoft.relativity.physics.lens.field.V3(t.x - eye.x, t.y - eye.y, t.z - eye.z)
+						val miss = module.missAt(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, net.kernelpanicsoft.relativity.physics.lens.field.V3(d.x.toDouble(), d.y.toDouble(), d.z.toDouble()), target)
+						// (Within two pixels' angle at the point's distance.)
+						if (miss != null && miss.length < 2.0 * pixel * target.length) reaching++
+					}
+					CreateRelativity.LOGGER.info("Bubble lens, {}{}: {} points, {} placed, {} of those reached by the CPU module's light", name, if (composed) "" else " (NOT composed)", targets.size, placed, reaching)
+					if (!composed) failures += "$name: not composed"
+					if (reaching < 0.95 * placed) failures += "$name: only $reaching of $placed placed points reached"
+					val columns = 120
+					val rows = computeOnClient { columns * it.window.height / it.window.width }
+					val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+					for (first in 0 until rows step 8) {
+						val part = atLength { minecraft -> LensReference.traceBubble(minecraft, module, columns, rows, 200.0, 60.0, first until minOf(first + 8, rows)) }
+						for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+					}
+					val shot = takeScreenshot("bubble_$name")
+					val wrong = LensReference.compare(reference, shot)
+					CreateRelativity.LOGGER.info("Bubble lens, {}: {}% of pixels in the wrong class; {} fps", name, "%.1f".format(wrong * 100), computeOnClient { it.fps })
+					if (wrong > 0.06) failures += "$name: ${"%.1f".format(wrong * 100)}% of pixels in the wrong class"
+				}
+			} finally {
+				SpacetimeField.removeProvider(provider)
+				command("tick unfreeze")
+			}
+			if (failures.isNotEmpty()) throw AssertionError(failures.joinToString("; "))
+		}
+	}
+
+	/**
 	 * Tubes and bubbles placed by command (`relativity tube`, `relativity bubble`): the client's field has them (a bent
 	 * tube, extended; a bubble round a box), the lens draws the tube (screenshot from inside it), and clear takes them.
 	 */

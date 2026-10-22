@@ -72,11 +72,19 @@ internal object LensReference {
 	 * As [traceField], but with light following [module] (a tube lens module, in game coordinates relative to the eye) as
 	 * it does: straight between its walls, on out to [maxLength].
 	 */
-	fun traceTube(minecraft: Minecraft, module: net.kernelpanicsoft.relativity.physics.lens.field.TubeModule, columns: Int, rows: Int, maxLength: Double, fogFree: Double, only: IntRange = 0 until rows): Array<Array<Kind?>> {
+	fun traceTube(minecraft: Minecraft, module: net.kernelpanicsoft.relativity.physics.lens.field.TubeModule, columns: Int, rows: Int, maxLength: Double, fogFree: Double, only: IntRange = 0 until rows): Array<Array<Kind?>> =
+		tracePaths(minecraft, columns, rows, fogFree, only) { d -> module.path(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, d, maxLength) }
+
+	/** As [traceTube], through a bubble lens module ([module], in game coordinates relative to the eye). */
+	fun traceBubble(minecraft: Minecraft, module: net.kernelpanicsoft.relativity.physics.lens.field.BubbleModule, columns: Int, rows: Int, maxLength: Double, fogFree: Double, only: IntRange = 0 until rows): Array<Array<Kind?>> =
+		tracePaths(minecraft, columns, rows, fogFree, only) { d -> module.path(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, d, maxLength) }
+
+	/** Light along the polyline [pathOf] gives for each pixel's direction (game axes, from the eye; null: captured). */
+	private fun tracePaths(minecraft: Minecraft, columns: Int, rows: Int, fogFree: Double, only: IntRange, pathOf: (net.kernelpanicsoft.relativity.physics.lens.field.V3) -> List<net.kernelpanicsoft.relativity.physics.lens.field.V3>?): Array<Array<Kind?>> {
 		val eye = minecraft.gameRenderer.mainCamera.position
 		return traceWith(minecraft, eye, columns, rows, fogFree, only) { _, direction ->
 			val game = GameFrame.toGame(direction, 0, Vector3d())
-			val path = module.path(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, net.kernelpanicsoft.relativity.physics.lens.field.V3(game.x, game.y, game.z), maxLength)
+			val path = pathOf(net.kernelpanicsoft.relativity.physics.lens.field.V3(game.x, game.y, game.z))
 			if (path == null) NullRay.Path(listOf(DoubleArray(3)), NullRay.End.CAPTURED)
 			else NullRay.Path(path.map { p -> DoubleArray(3).also { GameFrame.toPhysics(Vector3d(p.x, p.y, p.z), it) } }, NullRay.End.LENGTH)
 		}
