@@ -118,5 +118,11 @@
   "create_relativity.warp_drive.max_warp": "Maximum Warp",
   "config.create_relativity.trains.krasnikov_speed": "Krasnikov Tube Speed",
   "config.create_relativity.trains.krasnikov_speed.comment": "How fast light runs along a Krasnikov tube, in multiples of c; trains in one go at up to 90% of that. Finite: an instant tube would let light reach its own past.",
-  "block.create_relativity.krasnikov_track": "Krasnikov Track"
+  "block.create_relativity.krasnikov_track": "Krasnikov Track",
+  "commands.create_relativity.tube.added": "Krasnikov tube from %s %s %s to %s %s %s: light along it at %s c, radius %s",
+  "commands.create_relativity.tube.extended": "Extended the last tube to %s %s %s",
+  "commands.create_relativity.tube.none": "No tube placed by command in this dimension",
+  "commands.create_relativity.tube.cleared": "Removed %s tube(s)",
+  "commands.create_relativity.bubble.added": "Warp bubble round %s to %s: warp %s (%s c), moving along %s",
+  "commands.create_relativity.bubble.cleared": "Removed %s bubble(s)"
 }

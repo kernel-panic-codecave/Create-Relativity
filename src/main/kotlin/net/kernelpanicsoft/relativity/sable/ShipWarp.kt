@@ -12,6 +12,7 @@ import net.minecraft.world.level.ChunkPos
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.block.state.properties.BlockStateProperties
 import org.joml.Vector3d
+import org.joml.Vector3dc
 import java.util.WeakHashMap
 import kotlin.math.sqrt
 
@@ -81,10 +82,17 @@ object ShipWarp {
 		val halves = doubleArrayOf((box.maxX() + 1 - box.minX()) / 2.0, (box.maxY() + 1 - box.minY()) / 2.0, (box.maxZ() + 1 - box.minZ()) / 2.0)
 		val axes = (0..2).map { a ->
 			val unit = Vector3d(if (a == 0) 1.0 else 0.0, if (a == 1) 1.0 else 0.0, if (a == 2) 1.0 else 0.0)
-			pose.transformNormal(unit).normalize(halves[a] * sqrt(3.0) + CLEARANCE)
+			pose.transformNormal(unit).normalize(halves[a])
 		}
-		return FieldSource.Ellipsoid(pose.transformPosition(centre), axes, drive.direction, speed)
+		return around(pose.transformPosition(centre), axes, drive.direction, speed)
 	}
+
+	/**
+	 * The bubble round a box centred at [centre] with half-extent vectors [halves], moving along [direction] at [speed]
+	 * (times c): an ellipsoid through the box's corners (√3 its half-extents), a block clear.
+	 */
+	fun around(centre: Vector3dc, halves: List<Vector3dc>, direction: Vector3dc, speed: Double): FieldSource.Ellipsoid =
+		FieldSource.Ellipsoid(Vector3d(centre), halves.map { Vector3d(it).normalize(it.length() * sqrt(3.0) + CLEARANCE) }, Vector3d(direction).normalize(), speed)
 
 	/** Each warp ship's speed along its drive's way (blocks/s), spooling up to the drive's warp; and the tick it's for. */
 	private class Spool(var speed: Double, var tick: Long)

@@ -2372,6 +2372,45 @@ class LensClientGameTest {
 		}
 	}
 
+	/**
+	 * Tubes and bubbles placed by command (`relativity tube`, `relativity bubble`): the client's field has them (a bent
+	 * tube, extended; a bubble round a box), the lens draws the tube (screenshot from inside it), and clear takes them.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.testSourceCommands() {
+		if (!ClientTestInput.selected("testSourceCommands")) return
+		settleClient("Test source commands, start")
+		runOnClient { minecraft ->
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(3) { settleClient("Test source commands, world") }
+			waitTicks(20)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
+			command("relativity tube add -40 -58.5 0.5 8 -58.5 0.5 20")
+			command("relativity tube extend 40 -58.5 32.5")
+			command("relativity bubble add 20 -60 -20 26 -57 -14 2")
+			waitTicks(5)
+			val seen = computeOnClient { minecraft -> SpacetimeField.fieldSources(minecraft.level!!).map { it.javaClass.simpleName to ((it as? net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov)?.spine?.size ?: 0) } }
+			CreateRelativity.LOGGER.info("Test source commands: the client's field has {}", seen)
+			assertTrue(seen.count { it.first == "Krasnikov" && it.second == 3 } == 1) { "Expected one Krasnikov tube of 3 points, the client has $seen" }
+			assertTrue(seen.count { it.first == "Ellipsoid" } == 1) { "Expected one bubble, the client has $seen" }
+			command("tp @a -10.5 -60.12 0.5 -80 10")
+			repeat(3) { settleClient("Test source commands, in the tube") }
+			waitTicks(40)
+			assertTrue(computeOnClient { VertexLens.composed }) { "The placed tube isn't drawn by the field lens" }
+			takeScreenshot("test_source_tube")
+			command("relativity tube clear")
+			command("relativity bubble clear")
+			waitTicks(5)
+			val left = computeOnClient { minecraft -> SpacetimeField.fieldSources(minecraft.level!!).size }
+			assertTrue(left == 0) { "$left sources left after clear" }
+		}
+	}
+
 	/** [action] on the client thread, waited for at length (a program compiling cold, a long trace). */
 	private fun <T> atLength(action: (net.minecraft.client.Minecraft) -> T): T {
 		val minecraft = net.minecraft.client.Minecraft.getInstance()
