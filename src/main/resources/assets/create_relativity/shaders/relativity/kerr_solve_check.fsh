@@ -11,6 +11,13 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 7) {
+        // The field lens's tubes alone (relativityTubeAim): xyz where p is seen, w 1 found, -1 hidden.
+        vec3 seen;
+        bool found = relativityTubeAim(p, seen);
+        Result = vec4(seen, found ? 1.0 : -1.0);
+        return;
+    }
     if (Direct == 6) {
         // The closed-form exact image from the approximation's (relativityKerrExactImage): xyz the unit view direction,
         // w 1 found, 0 not (xyz the approximation's), -1 no approximate image either.

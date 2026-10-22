@@ -21,42 +21,42 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 
 	/**
 	 * The inside's inverse metric along the spine's direction t̂: g^tt = [a], g^ts = [b], g^ss = [c] (s along t̂), flat
-	 * across; and who looks out from inside.
+	 * across; and who looks out from inside: light its observers see going along unit m has momentum p = m + t̂ ([alpha]
+	 * + ([beta] − 1) m_s) and energy at infinity p_t = −1 + [gamma] m_s (m_s = m · t̂).
 	 */
-	sealed class Interior(val a: Double, val b: Double, val c: Double) {
+	sealed class Interior(val a: Double, val b: Double, val c: Double, val alpha: Double, val beta: Double, val gamma: Double) {
 		/** Light seen going along unit [m] (by this interior's observers, spine direction [t]): its momentum and p_t. */
-		abstract fun start(m: V3, t: V3): Pair<V3, Double>
+		fun start(m: V3, t: V3): Pair<V3, Double> {
+			val ms = m dot t
+			return (m + t * (alpha + (beta - 1) * ms)) to (-1.0 + gamma * ms)
+		}
+
+		/** The inverse of [start]: the direction its observers see light of momentum [p] and energy [pt] (any scale) going. */
+		fun observe(p: V3, pt: Double, t: V3): V3 {
+			val ps = p dot t
+			val scale = -(1 + gamma * alpha / beta) / (pt - gamma * ps / beta)
+			return (p - t * ps) * scale + t * ((scale * ps - alpha) / beta)
+		}
 
 		/**
 		 * A warp tube's push at [speed] times c along t̂ ([net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube]):
 		 * its observers ride it (Eulerian: time and space flat for them), light's coordinate velocity m̂ + v t̂.
 		 */
-		class Warp(val speed: Double) : Interior(-1.0, -speed, 1.0 - speed * speed) {
-			override fun start(m: V3, t: V3): Pair<V3, Double> = m to (-1.0 - speed * (t dot m))
-		}
+		class Warp(val speed: Double) : Interior(-1.0, -speed, 1.0 - speed * speed, 0.0, 1.0, -speed)
 
 		/**
 		 * A Krasnikov tube's inside ([net.kernelpanicsoft.relativity.physics.spacetime.field.KrasnikovTube]), k in (0, 1]:
-		 * light runs along t̂ at 1 / k, back at 1. Its observers stand still (g_tt is −1: they always can).
+		 * light runs along t̂ at 1 / k, back at 1. Its observers stand still (g_tt is −1: they always can); along t̂ their
+		 * unit vector orthogonal to ∂_t is (g_ts, t̂) 2 / (1 + k), g_ts = −(1 − k) / 2.
 		 */
-		class Krasnikov(val k: Double) : Interior(-4 * k / ((1 + k) * (1 + k)), -2 * (1 - k) / ((1 + k) * (1 + k)), 4 / ((1 + k) * (1 + k))) {
-			override fun start(m: V3, t: V3): Pair<V3, Double> {
-				// The static observer's frame: along t̂ the unit vector orthogonal to ∂_t is (g_ts, t̂) 2 / (1 + k).
-				val gts = -(1 - k) / 2
-				val ms = m dot t
-				val kt = 1 + ms * gts * 2 / (1 + k)
-				val ks = ms * 2 / (1 + k)
-				val pt = -kt + gts * ks
-				val ps = gts * kt + k * ks
-				return (m - t * ms + t * ps) to pt
-			}
-		}
+		class Krasnikov(val k: Double) : Interior(
+			-4 * k / ((1 + k) * (1 + k)), -2 * (1 - k) / ((1 + k) * (1 + k)), 4 / ((1 + k) * (1 + k)), -(1 - k) / 2, (1 + k) / 2, 0.0,
+		)
 
 		/** Flat: outside. */
-		object Flat : Interior(-1.0, 0.0, 1.0) {
-			override fun start(m: V3, t: V3): Pair<V3, Double> = m to -1.0
-		}
+		object Flat : Interior(-1.0, 0.0, 1.0, 0.0, 1.0, 0.0)
 	}
+
 	init {
 		require(spine.size >= 2) { "the spine needs at least two points" }
 	}
@@ -282,6 +282,235 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 	}
 
 	/**
+	 * The direction light leaving [from] must take to reach [target] as the shaders find it (vertex_lens_core.glsl's
+	 * relativityTubeAim): from [guess], or failing that the straight line, by at most [steps] Gauss-Newton steps on the
+	 * traced path's miss, done once it misses by little or a step turns it by less than [angle] (radians: where the tube
+	 * squeezes the view, a wide miss is a small angle); null if that doesn't get there. Far cheaper than [aim], which
+	 * searches a grid first.
+	 */
+	fun quickAim(from: V3, target: V3, steps: Int = QUICK_STEPS, angle: Double = QUICK_ANGLE): V3? {
+		if (secondaryOrClear(from, target)) return (target - from).normalized()
+		val distance = (target - from).length
+		val tolerance = QUICK_TOLERANCE * maxOf(distance, 1.0)
+		var bestD: V3? = null
+		var bestMiss = Double.MAX_VALUE
+		val straight = (target - from).normalized()
+		val outside = regionOf(from) < 0
+		for (attempt in 0 until 3) {
+			// (From outside the second guess is the first.)
+			if (outside && attempt == 1) continue
+			// The closed-form guesses (from outside, the straight line), and failing both the best of a coarse grid over the
+			// tube's size as seen from here (light through the tube from beside it, its image refracted far off the line).
+			var start = if (attempt < 2) guess(from, target, attempt == 1) else straight
+			if (attempt == 0 && outside) {
+				// From outside, light through the tube: its image moved mostly along the tube's axis as seen from here. The
+				// best of a few directions that way (the straight line among them), as far as the grid reaches.
+				val t = directions[(0 until segments).minBy { (target - closestOnSegment(target, it)).length }]
+				val u = t - straight * (t dot straight)
+				if (u.length > 1e-6) {
+					val way = u.normalized()
+					val reach = kotlin.math.atan2(3.0 * radius, maxOf(distance, radius)).coerceAtMost(0.6)
+					var scanMiss = Double.MAX_VALUE
+					for (i in -AXIS_SCAN..AXIS_SCAN) {
+						val d = (straight + way * (reach * i / AXIS_SCAN)).normalized()
+						quickTraces++
+						val m = trace(from, d, target)?.length ?: continue
+						if (m < scanMiss) { scanMiss = m; start = d }
+					}
+				}
+			}
+			val (e1, e2) = FieldLens.tangents(start)
+			if (attempt == 2) {
+				val reach = kotlin.math.atan2(3.0 * radius, maxOf(distance, radius)).coerceAtMost(0.6)
+				var gridMiss = Double.MAX_VALUE
+				for (i in -QUICK_GRID..QUICK_GRID) for (j in -QUICK_GRID..QUICK_GRID) {
+					if (i == 0 && j == 0) continue
+					val d = (straight + e1 * (reach * i / QUICK_GRID) + e2 * (reach * j / QUICK_GRID)).normalized()
+					quickTraces++
+					val m = trace(from, d, target)?.length ?: continue
+					if (m < gridMiss) { gridMiss = m; start = d }
+				}
+				if (gridMiss == Double.MAX_VALUE) break
+			}
+			val (f1, f2) = FieldLens.tangents(start)
+			fun direction(a: Double, b: Double) = (start + f1 * a + f2 * b).normalized()
+			fun miss(a: Double, b: Double): V3? { quickTraces++; return trace(from, direction(a, b), target) }
+			var a = 0.0
+			var b = 0.0
+			var settled = false
+			var r = miss(a, b) ?: continue
+			for (step in 0 until steps) {
+				if (r.length < tolerance) break
+				val h = QUICK_STEP
+				val ja = ((miss(a + h, b) ?: break) - r) * (1.0 / h)
+				val jb = ((miss(a, b + h) ?: break) - r) * (1.0 / h)
+				val aa = ja dot ja
+				val ab = ja dot jb
+				val bb = jb dot jb
+				val det = aa * bb - ab * ab
+				if (abs(det) < 1e-30) break
+				val ra = -(ja dot r)
+				val rb = -(jb dot r)
+				var da = (bb * ra - ab * rb) / det
+				var db = (aa * rb - ab * ra) / det
+				var stepped = false
+				for (halving in 0 until QUICK_HALVINGS) {
+					val next = miss(a + da, b + db)
+					if (next != null && next.length < r.length) {
+						a += da; b += db; r = next
+						stepped = true
+						break
+					}
+					da *= 0.5; db *= 0.5
+				}
+				if (!stepped) break
+				if (sqrt(da * da + db * db) < angle) { settled = true; break }
+			}
+			if (settled && r.length < 0.02 * maxOf(distance, 1.0)) return direction(a, b)
+			if (r.length < bestMiss) { bestMiss = r.length; bestD = direction(a, b) }
+			if (r.length < tolerance) break
+		}
+		return bestD?.takeIf { bestMiss < 0.02 * maxOf(distance, 1.0) }
+	}
+
+	/**
+	 * The path of light leaving [from] along [d] (as seen there): the points where it turned, then on out to [length]
+	 * along its last line; null if it's captured.
+	 */
+	fun path(from: V3, d: V3, length: Double): List<V3>? {
+		val points = arrayListOf(from)
+		val walk = Walk(start(from, d))
+		repeat(MAX_EVENTS) {
+			val w = velocity(walk.ray)
+			when (walk.step()) {
+				null -> return null
+				true -> { points += walk.ray.x + w.normalized() * length; return points }
+				false -> points += walk.ray.x
+			}
+		}
+		return null
+	}
+
+	/** Whether [x] is inside the tube. */
+	fun contains(x: V3): Boolean = regionOf(x) >= 0
+
+	/** Traces made by [quickAim] (for tests' cost counts). */
+	var quickTraces = 0L
+
+	/** Whether the straight line from [from] to [target] stays clear of the tube (both ends outside it): unbent. */
+	private fun secondaryOrClear(from: V3, target: V3): Boolean =
+		regionOf(from) < 0 && regionOf(target) < 0 && (0 until segments).none { k -> capsule(from, target - from, k)?.let { (t0, t1) -> t1 > 0 && t0 < 1 } == true }
+
+	/**
+	 * [quickAim]'s first guesses, in closed form, from inside the tube (else the straight line). A target in the same
+	 * straight piece, exactly: the direction whose light runs straight at it. One outside: as if the light left the
+	 * straight line's way through a wall facing the target (the side across from it, or the end); or ([beside]) as if
+	 * it ran inside to the wall beside the target (the tube carrying it along, as a fast one does) and left there.
+	 */
+	internal fun guess(from: V3, target: V3, beside: Boolean = false): V3 {
+		val s = (target - from).normalized()
+		val k = regionOf(from)
+		if (k < 0) return s
+		val t = directions[k]
+		val f = interior
+		if (regionOf(target) == k) return straightAt(s, t) ?: s
+		if (!beside) wallGuess(from, target, k)?.let { return it }
+		if (beside) {
+			// The wall's point nearest the target.
+			var near = spine[0]
+			for (j in 0 until segments) {
+				val c = closestOnSegment(target, j)
+				if ((target - c).length < (target - near).length) near = c
+			}
+			val wall = near + (target - near).normalized() * (0.999 * radius)
+			return straightAt((wall - from).normalized(), t) ?: s
+		}
+		val rel = target - spine[k]
+		val radial = rel - t * (rel dot t)
+		// Out the side facing the target, or (beside the axis) the end.
+		val n = if (radial.length > radius) radial.normalized() else t * (if ((s dot t) >= 0) 1.0 else -1.0)
+		val pT = s - n * (s dot n)
+		val q = solve(-1.0, pT, n, k, 1.0) ?: return guess(from, target, true)
+		return f.observe(pT + n * q, -1.0, t).normalized()
+	}
+
+	/**
+	 * From inside piece [k] (taken as an endless cylinder), to [target] outside it: the light that leaves through the side
+	 * in the target's plane through the axis, by where along it leaves (the one place its line out runs at the target:
+	 * found between the camera's and the target's places along the axis by a scan and bisection, closed form each);
+	 * null if there's none.
+	 */
+	private fun wallGuess(from: V3, target: V3, k: Int): V3? {
+		val t = directions[k]
+		val a = spine[k]
+		val rel = target - a
+		val zTarget = rel dot t
+		val radial = rel - t * zTarget
+		if (radial.length <= radius) return null
+		val n = radial.normalized()
+		val zFrom = (from - a) dot t
+		// How far the light out misses the target's way along the axis, leaving at z; and how it was seen.
+		fun at(z: Double): Pair<Double, V3>? {
+			val wall = a + t * z + n * radius
+			val m = straightAt((wall - from).normalized(), t) ?: return null
+			val (p, pt) = interior.start(m, t)
+			val pT = p - n * (p dot n)
+			val q = solve(pt, pT, n, -1, 1.0) ?: return null
+			val d = velocity(Ray(wall, pT + n * q, pt, -1)).normalized()
+			return ((d dot t) - ((target - wall).normalized() dot t)) to m
+		}
+		// (Past either by as far as the target is from the axis: the light can turn back outside.)
+		val lo = minOf(zFrom, zTarget) - radial.length
+		val hi = maxOf(zFrom, zTarget) + radial.length
+		var prevZ = lo
+		var prev = at(lo)
+		for (i in 1..WALL_SCAN) {
+			val z = lo + (hi - lo) * i / WALL_SCAN
+			val here = at(z)
+			if (prev != null && here != null && (prev.first <= 0) != (here.first <= 0)) {
+				var z0 = prevZ
+				var z1 = z
+				var f0 = prev.first
+				var best: Pair<Double, V3> = here
+				repeat(WALL_BISECTIONS) {
+					val mid = 0.5 * (z0 + z1)
+					val fm = at(mid) ?: return@repeat
+					best = fm
+					if ((fm.first <= 0) == (f0 <= 0)) { z0 = mid; f0 = fm.first } else z1 = mid
+				}
+				return best.second.normalized()
+			}
+			prevZ = z
+			prev = here
+		}
+		return null
+	}
+
+	/** Inside (spine direction [t]), the direction its observers see light going whose path runs along unit [s]. */
+	private fun straightAt(s: V3, t: V3): V3? {
+		val f = interior
+		// Light seen along m runs along (m⊥, A + B m_s): solve for m_s putting that along s.
+		val aa = f.c * f.alpha - f.b
+		val bb = f.c * f.beta + f.b * f.gamma
+		val ss = s dot t
+		val across = s - t * ss
+		val sigma = across.length
+		if (sigma < 1e-9) return t * (if ((aa + bb * kotlin.math.sign(ss)) * ss >= 0) kotlin.math.sign(ss) else -kotlin.math.sign(ss))
+		val qa = bb * bb * sigma * sigma + ss * ss
+		val qb = 2 * aa * bb * sigma * sigma
+		val qc = aa * aa * sigma * sigma - ss * ss
+		val disc = qb * qb - 4 * qa * qc
+		if (disc < 0) return null
+		val root = sqrt(disc)
+		var ms = (-qb + root) / (2 * qa)
+		// (The root whose light runs toward s, not away along t̂.)
+		if ((aa + bb * ms) * ss < 0 || abs(ms) > 1) ms = (-qb - root) / (2 * qa)
+		ms = ms.coerceIn(-1.0, 1.0)
+		return t * ms + across * (sqrt(1 - ms * ms) / sigma)
+	}
+
+
+	/**
 	 * How far the light leaving [from] along [d] misses [target]: the target less the nearest point of its path (the
 	 * straight pieces between walls), or null if it's captured.
 	 */
@@ -400,5 +629,24 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 
 		/** The aim's seed grid: this many each side of the straight line, each way. */
 		private const val SEEDS = 4
+
+		/** [quickAim]'s steps, step halvings, finite-difference step (radians) and tolerance (of the distance). */
+		const val QUICK_STEPS = 6
+		private const val QUICK_HALVINGS = 4
+		private const val QUICK_STEP = 1e-4
+		private const val QUICK_TOLERANCE = 2e-4
+
+		/** [quickAim]'s scan from outside along the tube's axis: this many each way. */
+		const val AXIS_SCAN = 1
+
+		/** [wallGuess]'s scan along the axis, and its bisections after. */
+		const val WALL_SCAN = 8
+		const val WALL_BISECTIONS = 8
+
+		/** [quickAim]'s last-resort grid: this many each side of the straight line, each way. */
+		private const val QUICK_GRID = 1
+
+		/** [quickAim]'s step small enough to stop at (radians): a quarter of a pixel's. */
+		const val QUICK_ANGLE = 2.5e-4
 	}
 }

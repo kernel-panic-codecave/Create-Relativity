@@ -163,6 +163,39 @@ class TubeLensTest {
 		return (axis * cos(t) + e1 * (sin(t) * cos(a)) + e2 * (sin(t) * sin(a))).normalized()
 	}
 
+	/** [TubeModule.quickAim] (the shaders' aim) against [TubeModule.aim]: how often it finds the image, and at what cost. */
+	@Test
+	fun quickAimFindsImages() {
+		val random = java.util.Random(13)
+		val report = StringBuilder("Quick tube aim against the full aim:\n")
+		val failures = ArrayList<String>()
+		for (scene in scenes) {
+			val module = scene.module(radius)
+			var both = 0
+			var lost = 0
+			var other = 0
+			var spurious = 0
+			var overCap = 0
+			module.quickTraces = 0
+			repeat(200) {
+				val target = V3(random.nextDouble() * 60 - 30, random.nextDouble() * 24 - 12, random.nextDouble() * 24 - 12)
+				val full = module.aim(scene.camera, target, false)
+				val before = module.quickTraces
+				val quick = module.quickAim(scene.camera, target)
+				if (module.quickTraces - before > 10) overCap++
+				when {
+					full != null && quick != null -> { both++; if (acos((full dot quick).coerceIn(-1.0, 1.0)) > 1e-3) other++ }
+					full != null -> { lost++; if (lost <= 3) report.append("    lost: target $target inside ${module.contains(target)}, image %.3f rad from straight\n".format(acos((full dot (target - scene.camera).normalized()).coerceIn(-1.0, 1.0)))) }
+					quick != null -> spurious++
+				}
+			}
+			report.append("  %-22s found %d (%d another image), lost %d, found where the full aim didn't %d; %.1f traces each, %d past 10\n".format(scene.name, both, other, lost, spurious, module.quickTraces / 200.0, overCap))
+			if (lost > 10) failures += scene.name
+		}
+		println(report)
+		assertTrue(failures.isEmpty(), "losing images: $failures")
+	}
+
 	/** [TubeModule.aim]'s directions, followed by the module itself, reach their targets: beside, behind and inside the tube. */
 	@Test
 	fun aimReachesTargets() {

@@ -272,8 +272,10 @@ object BlackHoleLens {
 				is FieldSource.Mass -> 2.0 * kotlin.math.abs(source.mass) > MIN_BENDING * source.center.distance(at)
 				is FieldSource.Bubble -> source.center.distance(at) < 4.0 * Minecraft.getInstance().gameRenderer.renderDistance + source.radius
 				is BlackHole -> source.schwarzschildRadius > MIN_BENDING * source.center.distanceTo(camera)
-				// (Drawn by the field lens's tube module, not here.)
-				is FieldSource.Tube, is FieldSource.Ellipsoid, is FieldSource.Krasnikov -> false
+				// (Tubes: the field lens's tube module, in view out to the render distance.)
+				is FieldSource.Tube -> source.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.radius
+				is FieldSource.Krasnikov -> source.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.radius
+				is FieldSource.Ellipsoid -> false
 			}
 		}
 	}
@@ -298,7 +300,8 @@ object BlackHoleLens {
 			if (kotlin.math.abs(hole.spin) >= 0.05) general = true // kerr.glsl MIN_KERR_SPIN
 		}
 		for (source in others) {
-			general = true
+			// (Tubes aren't the tracer's: the field lens's.)
+			if (source !is FieldSource.Tube && source !is FieldSource.Krasnikov) general = true
 			when (source) {
 				is FieldSource.Mass -> put(source.center, 2f, { set(source.mass.toFloat(), source.softening.toFloat(), 0f, 0f) })
 				is FieldSource.Bubble -> {

@@ -69,6 +69,20 @@ internal object LensReference {
 	}
 
 	/**
+	 * As [traceField], but with light following [module] (a tube lens module, in game coordinates relative to the eye) as
+	 * it does: straight between its walls, on out to [maxLength].
+	 */
+	fun traceTube(minecraft: Minecraft, module: net.kernelpanicsoft.relativity.physics.lens.field.TubeModule, columns: Int, rows: Int, maxLength: Double, fogFree: Double, only: IntRange = 0 until rows): Array<Array<Kind?>> {
+		val eye = minecraft.gameRenderer.mainCamera.position
+		return traceWith(minecraft, eye, columns, rows, fogFree, only) { _, direction ->
+			val game = GameFrame.toGame(direction, 0, Vector3d())
+			val path = module.path(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, net.kernelpanicsoft.relativity.physics.lens.field.V3(game.x, game.y, game.z), maxLength)
+			if (path == null) NullRay.Path(listOf(DoubleArray(3)), NullRay.End.CAPTURED)
+			else NullRay.Path(path.map { p -> DoubleArray(3).also { GameFrame.toPhysics(Vector3d(p.x, p.y, p.z), it) } }, NullRay.End.LENGTH)
+		}
+	}
+
+	/**
 	 * How far (radians, as seen from [eye]) the light seen looking along [direction] (game axes) passes from [target]:
 	 * its path traced back through [sources] (physics axes, relative to [eye]) on [ray], its closest approach to
 	 * [target] over [target]'s distance. NaN if the path is captured before getting there.

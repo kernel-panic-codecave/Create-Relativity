@@ -2231,6 +2231,156 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * A Krasnikov tube (20 c) along x over the ground test's checkerboard and pillars, the floor running through it, seen
+	 * from inside (forward, back, aside) and from beside it: the shaders' tube aim against the CPU module's for a grid of
+	 * points (the same algorithm: they must agree), and the picture against the CPU module's light per pixel. Both follow
+	 * light arriving (the spine reversed). Fails on disagreement or a picture far off; logs fps.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.krasnikovLens() {
+		if (!ClientTestInput.selected("krasnikovLens")) return
+		settleClient("Krasnikov lens, start")
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.fovEffectScale().set(0.0)
+		}
+		val k = 0.05
+		val radius = 3.0
+		val straightSpine = listOf(org.joml.Vector3d(-60.0, -58.5, 0.5), org.joml.Vector3d(60.0, -58.5, 0.5))
+		// (And bent: straight to x 8, then 45 degrees off toward +z, as track curves.)
+		val bentSpine = listOf(org.joml.Vector3d(-60.0, -58.5, 0.5), org.joml.Vector3d(8.0, -58.5, 0.5), org.joml.Vector3d(48.0, -58.5, 40.5))
+		var spine = straightSpine
+		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList()
+			else listOf(net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(spine, k, radius))
+		}
+		withTestWorld {
+			// (The world's programs compile cold on a changed lens: long, the first frames.)
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(5) { settleClient("Krasnikov lens, world") }
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear", "relativity bh clear",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				for (x in -48..48) for (z in -48..48) {
+					val block = if (Math.floorMod(Math.floorDiv(x, 2) + Math.floorDiv(z, 2), 2) == 0) Blocks.WHITE_CONCRETE else Blocks.BLUE_CONCRETE
+					level.setBlock(BlockPos(x, -61, z), block.defaultBlockState(), 2)
+				}
+				for (x in -48..48 step 8) for (z in -48..48 step 8) {
+					for (y in -60..-57) level.setBlock(BlockPos(x, y, z + 4), Blocks.RED_CONCRETE.defaultBlockState(), 2)
+				}
+			}
+			command("tick freeze")
+			SpacetimeField.addProvider(provider)
+			val failures = ArrayList<String>()
+			try {
+				// (Eye 1.62 above the feet: inside, at the spine's height.)
+				for ((name, at) in listOf(
+					"inside_forward" to "0.5 -60.12 0.5 -90 10", "inside_back" to "0.5 -60.12 0.5 90 10",
+					"inside_aside" to "0.5 -60.12 0.5 0 10", "beside" to "0.5 -54 -14.5 0 25", "bent_inside" to "-6.5 -60.12 0.5 -75 10",
+				)) {
+					spine = if (name.startsWith("bent")) bentSpine else straightSpine
+					command("tp @a $at")
+					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+					settleClient("Krasnikov lens, $name")
+					waitTicks(40)
+					val composed = computeOnClient { VertexLens.composed }
+					val (eye, rotation) = computeOnClient { minecraft ->
+						val camera = minecraft.gameRenderer.mainCamera
+						camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+					}
+					// The CPU module as the shaders have it: relative to the eye, the spine reversed.
+					val module = net.kernelpanicsoft.relativity.physics.lens.field.TubeModule(
+						spine.asReversed().map { net.kernelpanicsoft.relativity.physics.lens.field.V3(it.x - eye.x, it.y - eye.y, it.z - eye.z) },
+						net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Krasnikov(k), radius,
+					)
+					// Points: the floor (top), the pillars' faces and points inside the tube.
+					val targets = ArrayList<net.minecraft.world.phys.Vec3>()
+					for (x in -40..40 step 4) for (z in -40..40 step 4) targets += net.minecraft.world.phys.Vec3(x + 0.3, -60.0, z + 0.7)
+					for (x in -40..40 step 3) for (dy in listOf(-2.0, 0.0, 2.0)) for (dz in listOf(-2.0, 0.0, 2.0)) targets += net.minecraft.world.phys.Vec3(x + 0.6, -58.5 + dy, 0.5 + dz)
+					val views = targets.map { t -> rotation.transform(org.joml.Vector3f((t.x - eye.x).toFloat(), (t.y - eye.y).toFloat(), (t.z - eye.z).toFloat())).let { floatArrayOf(it.x, it.y, it.z) } }
+					val gpu = views.chunked(1000).flatMap { chunk -> atLength { KerrSolveCheck.run(chunk, VertexLens.lastProjection, tubes = true) } }
+					val pixel = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
+					var agree = 0
+					var both = 0
+					var onlyGpu = 0
+					var onlyCpu = 0
+					var hidden = 0
+					val off = ArrayList<Double>()
+					for ((i, t) in targets.withIndex()) {
+						val target = net.kernelpanicsoft.relativity.physics.lens.field.V3(t.x - eye.x, t.y - eye.y, t.z - eye.z)
+						val cpu = module.quickAim(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, target)
+						val g = gpu[i]
+						val found = g[3] > 0f
+						when {
+							cpu != null && found -> {
+								both++
+								val v = rotation.transform(org.joml.Vector3f(cpu.x.toFloat(), cpu.y.toFloat(), cpu.z.toFloat()))
+								val angle = kotlin.math.acos((v.x * g[0] + v.y * g[1] + v.z * g[2]).toDouble().coerceIn(-1.0, 1.0)) / pixel
+								off += angle
+								if (angle < 2.0) agree++
+								else if (off.count { it >= 2.0 } <= 3) CreateRelativity.LOGGER.info("Krasnikov lens, {}: {} off {} px (cpu {}, gpu {} {} {})", name, t, "%.1f".format(angle), cpu, g[0], g[1], g[2])
+							}
+							cpu != null -> onlyCpu++
+							found -> onlyGpu++
+							else -> hidden++
+						}
+					}
+					off.sort()
+					CreateRelativity.LOGGER.info("Krasnikov lens, {}{}: {} points, {} placed by both ({} within 2 px; median {} px, 95% {} px), {} by the CPU alone, {} by the GPU alone, {} hidden",
+						name, if (composed) "" else " (NOT composed)", targets.size, both, agree, "%.2f".format(off.getOrElse(off.size / 2) { 0.0 }),
+						"%.2f".format(off.getOrElse((off.size * 0.95).toInt().coerceAtMost(off.size - 1)) { 0.0 }), onlyCpu, onlyGpu, hidden)
+					if (!composed) failures += "$name: not composed"
+					if (both > 0 && agree < 0.95 * both) failures += "$name: GPU and CPU aims agree for $agree of $both"
+					// (The GPU's aim stops at VertexLens.tubeTraces traces, the CPU's not: from outside, light grazing the tube's
+					// silhouette or through it at length can take more, and the GPU leaves those hidden.)
+					val lostAllowed = if (name.startsWith("inside")) 0.02 else 0.15
+					if (onlyCpu + onlyGpu > lostAllowed * targets.size) failures += "$name: ${onlyCpu + onlyGpu} points placed by one of GPU and CPU only"
+					// The picture against the CPU module's light.
+					val columns = 120
+					val rows = computeOnClient { columns * it.window.height / it.window.width }
+					val reference = Array(rows) { arrayOfNulls<LensReference.Kind>(columns) }
+					for (first in 0 until rows step 8) {
+						val part = atLength { minecraft -> LensReference.traceTube(minecraft, module, columns, rows, 200.0, 60.0, first until minOf(first + 8, rows)) }
+						for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
+					}
+					val fps = computeOnClient { it.fps }
+					val shot = takeScreenshot("krasnikov_$name")
+					val wrong = LensReference.compare(reference, shot)
+					CreateRelativity.LOGGER.info("Krasnikov lens, {}: {}% of pixels in the wrong class, {}% counting white and blue as one; {} fps",
+						name, "%.1f".format(wrong * 100), "%.1f".format(LensReference.compare(reference, shot, floorAsOne = true) * 100), fps)
+					if (wrong > 0.06) failures += "$name: ${"%.1f".format(wrong * 100)}% of pixels in the wrong class"
+					// The frame rate without the tube, for its cost.
+					SpacetimeField.removeProvider(provider)
+					waitTicks(40)
+					val bare = computeOnClient { it.fps }
+					SpacetimeField.addProvider(provider)
+					waitTicks(40)
+					CreateRelativity.LOGGER.info("Krasnikov lens, {}: {} fps with the tube, {} without", name, computeOnClient { it.fps }, bare)
+				}
+			} finally {
+				SpacetimeField.removeProvider(provider)
+				command("tick unfreeze")
+			}
+			if (failures.isNotEmpty()) throw AssertionError(failures.joinToString("; "))
+		}
+	}
+
+	/** [action] on the client thread, waited for at length (a program compiling cold, a long trace). */
+	private fun <T> atLength(action: (net.minecraft.client.Minecraft) -> T): T {
+		val minecraft = net.minecraft.client.Minecraft.getInstance()
+		val result = java.util.concurrent.CompletableFuture<T>()
+		minecraft.execute { try { result.complete(action(minecraft)) } catch (e: Throwable) { result.completeExceptionally(e) } }
+		return result.get(600, java.util.concurrent.TimeUnit.SECONDS)
+	}
+
+	/**
 	 * Waits for the client thread directly, at length, and logs how long it took: the first frames after a change of
 	 * lens compile programs (the terrain's, the tracer's) that can take longer than a harness call allows.
 	 */

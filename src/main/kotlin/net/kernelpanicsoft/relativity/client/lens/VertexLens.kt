@@ -45,7 +45,7 @@ object VertexLens {
 	private val TEXTURE_UNIT: Int by lazy { GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - 1 }
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
-	private const val BLOCK_BYTES = 720 // 45 vec4s: see vertex_lens_core.glsl's RelativityLensData
+	private const val BLOCK_BYTES = 1952 // 122 vec4s: see vertex_lens_core.glsl's RelativityLensData
 
 	/** The field lens's sources (vertex_lens_core.glsl's RELATIVITY_MAX_FIELD), nearest first. */
 	const val MAX_FIELD_SOURCES = 8
@@ -55,6 +55,82 @@ object VertexLens {
 
 	/** This frame's sources for the field lens (camera-relative positions are taken at upload). */
 	private var fieldSources: List<net.kernelpanicsoft.relativity.spacetime.FieldSource> = emptyList()
+
+	/** The field lens's tubes (vertex_lens_core.glsl's RELATIVITY_MAX_TUBES), and their spines' points in all. */
+	const val MAX_TUBES = 4
+	const val MAX_TUBE_POINTS = 64
+
+	/** The tube walk's most events (walls and joints crossed) in the shaders. */
+	private const val TUBE_EVENTS = 16
+
+	/** How far (blocks) a tube's spine as uploaded may stray from its own, at the least: straight runs become one segment. */
+	private const val TUBE_TOLERANCE = 0.05
+
+	/** The tube aim's most traces a point (a group of vertices waits for its slowest). */
+	@JvmField
+	var tubeTraces = 16
+
+	/** This frame's tubes for the field lens, nearest first. */
+	private var tubeSources: List<net.kernelpanicsoft.relativity.spacetime.FieldSource> = emptyList()
+
+	private fun isTube(source: net.kernelpanicsoft.relativity.spacetime.FieldSource) =
+		source is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov || source is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube
+
+	private fun spineOf(source: net.kernelpanicsoft.relativity.spacetime.FieldSource): List<org.joml.Vector3dc> = when (source) {
+		is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov -> source.spine
+		is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> source.spine
+		else -> emptyList()
+	}
+
+	private fun tubeRadius(source: net.kernelpanicsoft.relativity.spacetime.FieldSource): Double = when (source) {
+		is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov -> source.radius
+		is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> source.radius
+		else -> 0.0
+	}
+
+	/** The point of [spine] nearest [at]. */
+	private fun nearestOnSpine(spine: List<org.joml.Vector3dc>, at: org.joml.Vector3dc): org.joml.Vector3d {
+		var best = org.joml.Vector3d(spine.first())
+		for (k in 0 until spine.size - 1) {
+			val a = spine[k]
+			val d = org.joml.Vector3d(spine[k + 1]).sub(a)
+			val l2 = d.lengthSquared()
+			val u = if (l2 > 0) (org.joml.Vector3d(at).sub(a).dot(d) / l2).coerceIn(0.0, 1.0) else 0.0
+			val p = org.joml.Vector3d(a).fma(u, d)
+			if (p.distanceSquared(at) < best.distanceSquared(at)) best = p
+		}
+		return best
+	}
+
+	/** [spine] with every point dropped that lies within [tolerance] of the line its kept neighbours make (Douglas-Peucker). */
+	private fun simplify(spine: List<org.joml.Vector3dc>, tolerance: Double): List<org.joml.Vector3dc> {
+		if (spine.size <= 2) return spine
+		val keep = BooleanArray(spine.size)
+		keep[0] = true
+		keep[spine.size - 1] = true
+		val spans = ArrayDeque<Pair<Int, Int>>()
+		spans += 0 to spine.size - 1
+		while (spans.isNotEmpty()) {
+			val (from, to) = spans.removeLast()
+			val a = spine[from]
+			val d = org.joml.Vector3d(spine[to]).sub(a)
+			val l2 = d.lengthSquared()
+			var worst = -1
+			var worstD = tolerance
+			for (i in from + 1 until to) {
+				val rel = org.joml.Vector3d(spine[i]).sub(a)
+				val u = if (l2 > 0) (rel.dot(d) / l2).coerceIn(0.0, 1.0) else 0.0
+				val off = rel.sub(org.joml.Vector3d(d).mul(u)).length()
+				if (off > worstD) { worstD = off; worst = i }
+			}
+			if (worst >= 0) {
+				keep[worst] = true
+				spans += from to worst
+				spans += worst to to
+			}
+		}
+		return spine.filterIndexed { i, _ -> keep[i] }
+	}
 
 	/** Whether this frame's sources are composed in the shaders (the field lens): several, of the kinds it has modules for. */
 	var composed = false
@@ -91,7 +167,8 @@ object VertexLens {
 			return Centre(hole.x, hole.y, hole.z, hole.schwarzschildRadius, 1.05 * horizon, hole, hole.id)
 		}
 		val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
-		// (Tubes aren't drawn by this lens: the field lens's tube module.)
+		// (Tubes are the field lens's tube module's: with nothing else in view, the lens centres on the nearest.)
+		val tube = others.filter { isTube(it) }.minByOrNull { nearestOnSpine(spineOf(it), at).distanceSquared(at) }
 		val strongest = others.filter { it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube && it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid && it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov }.maxByOrNull { source ->
 			when (source) {
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> 2.0 * abs(source.mass) / maxOf(source.center.distance(at), 1.0)
@@ -99,7 +176,10 @@ object VertexLens {
 				is BlackHole -> source.schwarzschildRadius / maxOf(source.center.distanceTo(camera), 1.0)
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov -> 0.0
 			}
-		} ?: return null
+		} ?: return tube?.let {
+			val p = nearestOnSpine(spineOf(it), at)
+			Centre(p.x, p.y, p.z, tubeRadius(it), 0.05, null, "tubes")
+		}
 		return when (strongest) {
 			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> {
 				val c = strongest.center
@@ -278,12 +358,15 @@ object VertexLens {
 		// Several sources the field lens has modules for (non-spinning holes, masses): composed in the shaders, with
 		// nothing traced or solved per frame.
 		val fieldCapable = holes.size + others.size >= 1 && holes.all { abs(it.spin) < MIN_KERR_SPIN } &&
-			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass } && fieldLens
-		val fieldWanted = fieldCapable && holes.size + others.size > 1
+			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass || isTube(it) } && fieldLens
+		// (Tubes are drawn by the field lens alone: a lone one too.)
+		val fieldWanted = fieldCapable && (holes.size + others.size > 1 || others.any { isTube(it) })
 		if (!perspective) {
 			composed = fieldWanted
 			fieldSky = fieldCapable
-			fieldSources = (holes + others).sortedBy { s ->
+			val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
+			tubeSources = others.filter { isTube(it) }.sortedBy { nearestOnSpine(spineOf(it), at).distanceSquared(at) }
+			fieldSources = (holes + others.filter { !isTube(it) }).sortedBy { s ->
 				when (s) {
 					is BlackHole -> s.center.distanceToSqr(camera)
 					is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> s.center.distanceSquared(camera.x, camera.y, camera.z)
@@ -606,6 +689,47 @@ object VertexLens {
 			data.put(params[0]).put(params[1]).put(0f).put(0f)
 		}
 		repeat(MAX_FIELD_SOURCES - sources.size) { repeat(8) { data.put(0f) } }
+		uploadTubes(data, camX, camY, camZ, view)
+	}
+
+	/**
+	 * [45..121]: the field lens's tubes (vertex_lens_core.glsl's relativityTubeCount and on), when [fieldSky]: how many,
+	 * their points, the walk's and aim's bounds; each tube's radius, its inside's metric and observers
+	 * (TubeModule.Interior); then every spine point in view space and its tube. Each spine simplified (as little as lets
+	 * them all fit) and reversed: the shaders follow light the way the camera sees it, arriving, and time reversal turns
+	 * a tube's push round.
+	 */
+	private fun uploadTubes(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
+		val tubes = if (fieldSky) tubeSources.take(MAX_TUBES) else emptyList()
+		var spines: List<List<org.joml.Vector3dc>> = emptyList()
+		var tolerance = TUBE_TOLERANCE
+		for (attempt in 0 until 8) {
+			spines = tubes.map { simplify(spineOf(it), tolerance).asReversed() }
+			if (spines.sumOf { it.size } <= MAX_TUBE_POINTS) break
+			tolerance *= 2.0
+		}
+		// (Still too many: the nearest that fit.)
+		var points = 0
+		val kept = spines.takeWhile { points += it.size; points <= MAX_TUBE_POINTS }
+		points = kept.sumOf { it.size }
+		data.put(kept.size.toFloat()).put(points.toFloat()).put(TUBE_EVENTS.toFloat()).put(net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.QUICK_STEPS.toFloat())
+		for (j in kept.indices) {
+			val tube = tubes[j]
+			val inside = when (tube) {
+				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Krasnikov(tube.k)
+				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Warp(tube.speed)
+				else -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Flat
+			}
+			data.put(tubeRadius(tube).toFloat()).put(if (j == 0) tubeTraces.toFloat() else 0f).put(0f).put(0f)
+			data.put(inside.a.toFloat()).put(inside.b.toFloat()).put(inside.c.toFloat()).put(inside.alpha.toFloat())
+			data.put(inside.beta.toFloat()).put(inside.gamma.toFloat()).put(0f).put(0f)
+		}
+		repeat(MAX_TUBES - kept.size) { repeat(12) { data.put(0f) } }
+		for ((j, spine) in kept.withIndex()) for (p in spine) {
+			val at = view.transform(Vector3f((p.x() - camX).toFloat(), (p.y() - camY).toFloat(), (p.z() - camZ).toFloat()))
+			data.put(at.x).put(at.y).put(at.z).put(j.toFloat())
+		}
+		repeat(MAX_TUBE_POINTS - points) { repeat(4) { data.put(0f) } }
 	}
 
 	/** Creates the buffer and, once the table is built, its texture. False until both exist. */

@@ -404,7 +404,13 @@ outrunning light.
   default; its clocks stay defined below the cone), accelerating to it over ten seconds at the least.
 - **Fuel** (once the particle accelerator exists): field pylons beside the line, fed by ordinary pipes from fixed tanks
   of Exotic Matter, powering the tube near them; nothing aboard needs fuel.
-- **Visuals**: the tilted cones lens one way along the guideway (the tube lens module, its Krasnikov interior).
+- **Visuals** (done): the field lens's tube module in the shaders (vertex_lens_core.glsl relativityTube*, mirroring
+  physics-core's TubeModule.quickAim): thin walls, light followed arriving (each spine uploaded reversed: time reversal
+  turns a tube round). A rider sees the half-space ahead spread over the whole sky; from beside, one way along the tube
+  it's a mirror (light that way can't get in). Each vertex: closed-form guesses (inside, exact in one straight piece;
+  out through the side, a scan along the wall) then a few Gauss-Newton steps on one traced path, at most 16 traces; the
+  pixel check is one trace. Known gaps: from outside, light grazing the silhouette or running far through the tube
+  can need more traces than the cap (left hidden: a thin seam); the camera is a static observer, not the moving rider.
 
 ### No time travel
 A single tube, or opposed pairs at rest together, can't reach the past: the cone tips at most to flat (instant), never
