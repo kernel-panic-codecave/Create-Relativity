@@ -2004,26 +2004,30 @@ class LensClientGameTest {
 			waitTicks(40)
 			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
 			val tracks = listOf(
-				60 to net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState(),
+				60 to net.kernelpanicsoft.relativity.content.RelativityBlocks.KRASNIKOV_TRACK.get().defaultBlockState(),
 				66 to net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:track")).defaultBlockState(),
 			)
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
-				for ((x, track) in tracks) for (z in -20..20) level.setBlock(BlockPos(x, -60, z), track.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.ZO), 3)
+				// (The maglev line is Krasnikov track, on to a second station 100 blocks north.)
+				for ((x, track) in tracks) for (z in (if (x == 60) -110 else -20)..20) level.setBlock(BlockPos(x, -60, z), track.setValue(com.simibubi.create.content.trains.track.TrackBlock.SHAPE, com.simibubi.create.content.trains.track.TrackShape.ZO), 3)
 			}
+			// (Midway up the line: both stations within ticking distance.)
+			command("tp @a 63.5 -55 -50.5")
 			waitTicks(20)
 			// Stations: selected on the track, placed beside it.
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
 				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
-				for ((x, _) in tracks) {
+				for ((x, z) in tracks.map { it.first to 0 } + listOf(60 to -100)) {
 					val stack = net.minecraft.world.item.ItemStack(net.minecraft.core.registries.BuiltInRegistries.ITEM.get(net.minecraft.resources.ResourceLocation.parse("create:track_station")))
 					player.setItemInHand(net.minecraft.world.InteractionHand.MAIN_HAND, stack)
-					player.moveTo(x + 0.5, -59.0, -2.5, 0f, 30f) // facing +z
-					val track = BlockPos(x, -60, 0)
+					// (Facing +z; the far station -z, the way the train arrives.)
+					if (z == 0) player.moveTo(x + 0.5, -59.0, z - 2.5, 0f, 30f) else player.moveTo(x + 0.5, -59.0, z + 2.5, 180f, 30f)
+					val track = BlockPos(x, -60, z)
 					stack.useOn(net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND,
 						net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(track), net.minecraft.core.Direction.UP, track, false)))
-					val ground = BlockPos(x + 2, -61, 0)
+					val ground = BlockPos(x + 2, -61, z)
 					stack.useOn(net.minecraft.world.item.context.UseOnContext(player, net.minecraft.world.InteractionHand.MAIN_HAND,
 						net.minecraft.world.phys.BlockHitResult(net.minecraft.world.phys.Vec3.atCenterOf(ground).add(0.0, 0.5, 0.0), net.minecraft.core.Direction.UP, ground, false)))
 					CreateRelativity.LOGGER.info("Train test: station at x {}: {}", x + 2, level.getBlockState(ground.above()))
@@ -2049,23 +2053,13 @@ class LensClientGameTest {
 					for (k in 1..6) level.setBlock(BlockPos(x, -58, 0).relative(dir, k), net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:railway_casing")).defaultBlockState(), 3)
 					val controls = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(net.minecraft.resources.ResourceLocation.parse("create:controls")).defaultBlockState()
 					level.setBlock(BlockPos(x, -57, 0).relative(dir, 1), controls.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING, dir), 3)
-					// The maglev train carries a warp drive on its deck, set to warp 2.
-					val warp = track.block === net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get()
-					if (warp) {
-						val core = BlockPos(x, -56, 0).relative(dir, 4)
-						level.setBlock(core, net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_CORE.get().defaultBlockState()
-							.setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.FACING, dir), 3)
-						for (pos in net.kernelpanicsoft.relativity.content.WarpDrive.shell(core)) level.setBlock(pos, net.kernelpanicsoft.relativity.content.RelativityBlocks.WARP_COIL.get().defaultBlockState(), 3)
-						(level.getBlockEntity(core.relative(dir)) as net.kernelpanicsoft.relativity.content.WarpCoilBlockEntity).setting.value = 20
-					}
 					// Glued together, as a player glues a train (only what's on a bogey sticks to it unglued).
-					val from = BlockPos(x - if (warp) 1 else 0, -59, 0).relative(dir, 1)
-					val to = BlockPos(x + if (warp) 1 else 0, if (warp) -55 else -57, 0).relative(dir, 6)
+					val from = BlockPos(x, -59, 0).relative(dir, 1)
+					val to = BlockPos(x, -57, 0).relative(dir, 6)
 					level.addFreshEntity(com.simibubi.create.content.contraptions.glue.SuperGlueEntity(level, net.minecraft.world.phys.AABB.encapsulatingFullBlocks(from, to)))
 				}
 			}
-			// (The drive forms.)
-			waitTicks(30)
+			waitTicks(10)
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
 				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
@@ -2082,33 +2076,61 @@ class LensClientGameTest {
 			server.runOnServer { minecraft ->
 				val carriages = minecraft.overworld().getEntities(com.simibubi.create.AllEntityTypes.CARRIAGE_CONTRAPTION.get()) { true }
 				CreateRelativity.LOGGER.info("Train test: {} carriage(s) at {}", carriages.size, carriages.map { it.position() })
-				// The maglev train (wholly on maglev bogeys) takes curves faster than Create's, by the config; carrying a warp
-				// drive, it runs at its warp and accelerates to get there.
+				// The maglev train (wholly on maglev bogeys) is faster and has less friction than Create's, by the config.
 				val trains = com.simibubi.create.Create.RAILWAYS.trains.values
 				val maglev = trains.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
 				val standard = trains.single { !net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
 				val config = net.kernelpanicsoft.relativity.config.RelativityConfig.Server.Trains
-				val drive = net.kernelpanicsoft.relativity.content.MaglevWarp.drive(maglev)
-				assertTrue(drive == 2.0) { "The maglev train's drive reads warp $drive, set to 2" }
-				val warpTop = net.kernelpanicsoft.relativity.physics.WarpScale.speed(2.0) * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(minecraft.overworld().dimension()) / 20.0
 				for ((what, ratio, expected) in listOf(
-					Triple("top speed", maglev.maxSpeed() / warpTop, 1.0),
+					Triple("top speed", (maglev.maxSpeed() / standard.maxSpeed()).toDouble(), config.maglevTopSpeed),
 					Triple("turning speed", (maglev.maxTurnSpeed() / standard.maxTurnSpeed()).toDouble(), config.maglevTurningSpeed),
-					Triple("acceleration", maglev.acceleration() / (warpTop / 200.0), 1.0),
+					Triple("acceleration", (maglev.acceleration() / standard.acceleration()).toDouble(), config.maglevAcceleration),
 				)) {
 					CreateRelativity.LOGGER.info("Train test: maglev {} x{}", what, "%.2f".format(ratio))
-					assertTrue(kotlin.math.abs(ratio - expected) < 1e-3) { "Maglev $what is x$ratio, expected x$expected" }
+					assertTrue(kotlin.math.abs(ratio - expected) < 1e-3) { "Maglev $what is x$ratio Create's, expected x$expected" }
+				}
+				// Standing, no tube.
+				assertTrue(net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.overworld()).isEmpty()) { "A Krasnikov tube with no train under way" }
+			}
+			// Sent to the station up the Krasnikov line (once its edge point is up: its block entity makes it in a tick).
+			var sent = false
+			for (attempt in 0 until 40) {
+				server.runOnServer { minecraft ->
+					val station = (minecraft.overworld().getBlockEntity(BlockPos(62, -60, -100)) as com.simibubi.create.content.trains.station.StationBlockEntity).station ?: return@runOnServer
+					val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+					val path = maglev.navigation.findPathTo(station, Double.MAX_VALUE)
+					assertTrue(path != null) { "No route to the far station" }
+					maglev.navigation.startNavigation(path)
+					sent = true
+				}
+				if (sent) break
+				waitTicks(5)
+			}
+			assertTrue(sent) { "The far station never got its edge point" }
+			// Its tube forms: its front running out at c, its tilt easing in over a second; on it, the train may run at up
+			// to 90% of the tube's light speed.
+			for (wait in listOf(5, 20)) {
+				waitTicks(wait)
+				server.runOnServer { minecraft ->
+					val level = minecraft.overworld()
+					val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+					val tubes = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(level)
+					val length = tubes.sumOf { t -> t.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) } }
+					CreateRelativity.LOGGER.info("Train test: tubes {} k {} length {}, train speed {} top {}", tubes.size, tubes.map { "%.3f".format(it.k) }, "%.1f".format(length), maglev.speed, maglev.maxSpeed())
+					assertTrue(tubes.size == 1) { "${tubes.size} Krasnikov tubes, expected the routed train's" }
 				}
 			}
-			// Under way, the maglev train carries a warp tube round its carriages; Create's doesn't.
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
-				val trains = com.simibubi.create.Create.RAILWAYS.trains.values
-				for (train in trains) train.speed = 1.5
-				val tubes = net.kernelpanicsoft.relativity.content.MaglevWarp.compute(level)
-				CreateRelativity.LOGGER.info("Train test: server tubes {}", tubes.map { "speed %.2f radius %.1f spine %s".format(it.speed, it.radius, it.spine.map { p -> "(%.1f %.1f %.1f)".format(p.x(), p.y(), p.z()) }) })
-				assertTrue(tubes.size == 1) { "${tubes.size} warp tubes under way, expected the maglev train's alone" }
-				for (train in trains) train.speed = 0.0
+				val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				val k = net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()
+				val tube = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(level).single()
+				assertTrue(kotlin.math.abs(tube.k - k) < 1e-9) { "The tube's k is ${tube.k} a second and more on, expected $k" }
+				// Along its route to the station (its front long past it).
+				val length = tube.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) }
+				assertTrue(length > 60.0) { "The tube runs $length blocks, the route about 100" }
+				val top = 0.9 * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension()) / k / 20.0
+				assertTrue(kotlin.math.abs(maglev.maxSpeed() / top - 1.0) < 1e-3) { "In its tube, the train's top speed is ${maglev.maxSpeed()}, expected $top" }
 			}
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).

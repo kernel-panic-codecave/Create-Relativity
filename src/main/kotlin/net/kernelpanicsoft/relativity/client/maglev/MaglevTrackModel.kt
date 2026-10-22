@@ -101,7 +101,7 @@ class MaglevTrackModel(private val delegate: BakedModel, private val shape: Trac
 
 		/** [state]'s centre lines, seen from above, offset by ([dx], [dz]) (none if it isn't maglev track). */
 		fun centreLines(state: BlockState, dx: Int, dz: Int): List<MaglevGuideway.Line> {
-			if (!state.`is`(RelativityBlocks.MAGLEV_TRACK.get())) return emptyList()
+			if (!isGuideway(state)) return emptyList()
 			return PATHS[state.getValue(TrackBlock.SHAPE)]?.map { MaglevGuideway.Line(listOf(it.x0 + dx, it.z0 + dz, it.x1 + dx, it.z1 + dz)) } ?: emptyList()
 		}
 
@@ -123,19 +123,34 @@ class MaglevTrackModel(private val delegate: BakedModel, private val shape: Trac
 			TrackShape.TN to listOf(ZO), TrackShape.TS to listOf(ZO), TrackShape.TE to listOf(XO), TrackShape.TW to listOf(XO),
 		)
 
-		/** Maglev track's texture (once models are baked). */
-		lateinit var sprite: TextureAtlasSprite
-			private set
+		/** Whether [state] is guideway track (maglev or Krasnikov): its walls and others' meet. */
+		fun isGuideway(state: BlockState): Boolean = state.`is`(RelativityBlocks.MAGLEV_TRACK.get()) || state.`is`(RelativityBlocks.KRASNIKOV_TRACK.get())
 
-		/** Swaps maglev track's block models for this one (keeping theirs for the item, particles, and the atlas). */
+		/** Each guideway material's texture (once models are baked). */
+		private val sprites = HashMap<com.simibubi.create.content.trains.track.TrackMaterial, TextureAtlasSprite>()
+
+		/** [material]'s texture (maglev's for any other). */
+		fun spriteFor(material: com.simibubi.create.content.trains.track.TrackMaterial?): TextureAtlasSprite =
+			sprites[material] ?: sprites.getValue(net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+
+		/** Maglev track's texture. */
+		val sprite: TextureAtlasSprite get() = spriteFor(net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+
+		/** Swaps the guideway tracks' block models for this one (keeping theirs for the item, particles, and the atlas). */
 		fun onModifyBakingResult(event: ModelEvent.ModifyBakingResult) {
-			sprite = event.textureGetter.apply(Material(InventoryMenu.BLOCK_ATLAS, CreateRelativity.id("block/maglev_track")))
-			for (state in RelativityBlocks.MAGLEV_TRACK.get().stateDefinition.possibleStates) {
-				val shape = state.getValue(TrackBlock.SHAPE)
-				if (shape !in PATHS) continue
-				val key = BlockModelShaper.stateToModelLocation(state)
-				val delegate = event.models[key] ?: continue
-				event.models[key] = MaglevTrackModel(delegate, shape, sprite)
+			for ((block, material, texture) in listOf(
+				Triple(RelativityBlocks.MAGLEV_TRACK.get(), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL, "block/maglev_track"),
+				Triple(RelativityBlocks.KRASNIKOV_TRACK.get(), net.kernelpanicsoft.relativity.content.Maglev.KRASNIKOV, "block/krasnikov_track"),
+			)) {
+				val sprite = event.textureGetter.apply(Material(InventoryMenu.BLOCK_ATLAS, CreateRelativity.id(texture)))
+				sprites[material] = sprite
+				for (state in block.stateDefinition.possibleStates) {
+					val shape = state.getValue(TrackBlock.SHAPE)
+					if (shape !in PATHS) continue
+					val key = BlockModelShaper.stateToModelLocation(state)
+					val delegate = event.models[key] ?: continue
+					event.models[key] = MaglevTrackModel(delegate, shape, sprite)
+				}
 			}
 		}
 	}

@@ -164,7 +164,8 @@ def tie():
     return m
 
 
-def texture():
+def texture(north=(176, 58, 58), south=(58, 93, 176), seam=None):
+    """The guideway's texture; [north]/[south] the magnets' pole colours, [seam] a glow down the floor's middle."""
     random.seed(7)
     img = Image.new('RGBA', (TEX_W, TEX_H))
     px = img.load()
@@ -176,12 +177,12 @@ def texture():
             if y < 30:  # floor: light concrete, a seam down the middle, darker toward the walls
                 edge = min(y, 29 - y)
                 base = (178, 184, 192) if edge > 2 else (150, 156, 166)
-                if y in (14, 15): base = (140, 146, 156)
+                if y in (14, 15): base = seam if seam else (140, 146, 156)
                 if x % 16 == 0: base = tuple(c - 14 for c in base)  # expansion joint each block
                 px[x, y] = noisy(base, 5)
             elif y < 39:  # slope: a row of magnets (after Simulated's redstone magnet), poles alternating, coils wound round
                 phase = x % 8
-                pole = (176, 58, 58) if (x // 8) % 2 == 0 else (58, 93, 176)
+                pole = north if (x // 8) % 2 == 0 else south
                 frame = (60, 63, 70)
                 if y in (30, 38):
                     base = frame
@@ -208,12 +209,11 @@ def texture():
     return img
 
 
-def item_texture():
+def item_texture(north=(176, 58, 58, 255), south=(58, 93, 176, 255)):
     img = Image.new('RGBA', (16, 16), (0, 0, 0, 0))
     px = img.load()
     # The profile, end on, shaded: walls, slopes with their magnets, the floor; and the floor running back.
     concrete, dark, steel = (184, 190, 198, 255), (130, 136, 146, 255), (96, 106, 122, 255)
-    north, south = (176, 58, 58, 255), (58, 93, 176, 255)
     for x in range(16):
         for y in range(9, 13): px[x, y] = concrete if y > 9 else (205, 209, 215, 255)
     for y in range(12, 15):
@@ -270,7 +270,25 @@ def main():
     json.dump({"variants": variants}, open(os.path.join(ROOT, 'blockstates', 'maglev_track.json'), 'w'), indent=2)
 
     texture().save(os.path.join(ROOT, 'textures', 'block', 'maglev_track.png'))
+    # Krasnikov track: the same guideway, its magnets violet and teal, a violet glow down the floor (the tube's).
+    texture((150, 70, 200), (40, 170, 160), seam=(190, 120, 255)).save(os.path.join(ROOT, 'textures', 'block', 'krasnikov_track.png'))
+    krasnikov = os.path.join(ROOT, 'models', 'block', 'krasnikov_track')
+    os.makedirs(krasnikov, exist_ok=True)
+    for f in os.listdir(krasnikov): os.remove(os.path.join(krasnikov, f))
+    json.dump({"parent": f"{NS}:block/maglev_track/obj_track", "render_type": "minecraft:cutout_mipped",
+               "textures": {"0": f"{NS}:block/krasnikov_track", "particle": f"{NS}:block/krasnikov_track"}},
+              open(os.path.join(krasnikov, 'obj_track.json'), 'w'), indent=2)
+    for f in os.listdir(MODELS):
+        if not f.endswith('.obj'): continue
+        name = f[:-4]
+        json.dump({"parent": f"{NS}:block/krasnikov_track/obj_track", "loader": "neoforge:obj", "flip_v": True,
+                   "model": f"{NS}:models/block/maglev_track/{name}.obj"}, open(os.path.join(krasnikov, name + '.json'), 'w'), indent=2)
+    with open(os.path.join(ROOT, 'blockstates', 'maglev_track.json')) as f:
+        state = f.read().replace(f'{NS}:block/maglev_track/', f'{NS}:block/krasnikov_track/')
+    with open(os.path.join(ROOT, 'blockstates', 'krasnikov_track.json'), 'w') as f:
+        f.write(state)
     item_texture().save(os.path.join(ROOT, 'textures', 'item', 'maglev_track.png'))
+    item_texture((150, 70, 200, 255), (40, 170, 160, 255)).save(os.path.join(ROOT, 'textures', 'item', 'krasnikov_track.png'))
     for old in ('maglev_track_mip.png', 'maglev_track_crossing.png'):
         p = os.path.join(ROOT, 'textures', 'block', old)
         if os.path.exists(p): os.remove(p)

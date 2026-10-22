@@ -46,7 +46,7 @@ object MaglevCurves {
 	private const val RANK = 4
 
 	@JvmStatic
-	fun isMaglev(curve: BezierConnection): Boolean = curve.material === Maglev.MATERIAL
+	fun isMaglev(curve: BezierConnection): Boolean = Maglev.isGuideway(curve.material)
 
 	/** [curve]'s centre line, seen from above, relative to [origin]. (Its points are relative to its first block.) */
 	fun centreLine(curve: BezierConnection, origin: BlockPos): MaglevGuideway.Line {
@@ -172,7 +172,7 @@ object MaglevCurves {
 	/** [curve]'s quads, relative to its first block. */
 	fun quads(level: Level, curve: BezierConnection): List<BakedQuad> {
 		val quads = ArrayList<BakedQuad>()
-		MaglevGuideway.build(MaglevGuideway.refined(frames(curve), 4), others(level, curve), RANK, MaglevTrackModel.sprite, quads)
+		MaglevGuideway.build(MaglevGuideway.refined(frames(curve), 4), others(level, curve), RANK, MaglevTrackModel.spriteFor(curve.material), quads)
 		return quads
 	}
 

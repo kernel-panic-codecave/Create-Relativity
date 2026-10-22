@@ -41,7 +41,30 @@ object Maglev {
 		)
 		.build()
 
-	/** Loads this (the material registers itself with Create on construction). */
+	/**
+	 * Krasnikov track ([KrasnikovTubes]): maglev track carrying a Krasnikov tube, laid by a train's first run along it.
+	 * The same track type: maglev trains run on it, and it joins plain maglev track.
+	 */
+	val KRASNIKOV: TrackMaterial = TrackMaterialFactory.make(CreateRelativity.id("krasnikov"))
+		.lang("Krasnikov")
+		.block(NonNullSupplier { NonNullSupplier<TrackBlock> { RelativityBlocks.KRASNIKOV_TRACK.get() } })
+		.particle(CreateRelativity.id("block/krasnikov_track"))
+		.trackType(TRACK_TYPE)
+		.sleeper(Items.SMOOTH_STONE_SLAB)
+		.rails(Items.IRON_NUGGET)
+		.noRecipeGen()
+		.customModels(
+			Supplier { Supplier { MaglevModels.TIE } },
+			Supplier { Supplier { MaglevModels.LEFT } },
+			Supplier { Supplier { MaglevModels.RIGHT } },
+		)
+		.build()
+
+	/** Track drawn as the guideway trough: maglev's and Krasnikov's. */
+	@JvmStatic
+	fun isGuideway(material: TrackMaterial?): Boolean = material === MATERIAL || material === KRASNIKOV
+
+	/** Loads this (the materials register themselves with Create on construction). */
 	fun init() = Unit
 
 	/** [state]'s track type, if it's track. */

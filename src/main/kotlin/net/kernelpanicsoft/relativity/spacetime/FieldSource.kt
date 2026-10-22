@@ -3,6 +3,7 @@ package net.kernelpanicsoft.relativity.spacetime
 import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
+import net.kernelpanicsoft.relativity.physics.spacetime.field.KrasnikovTube
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpEllipsoid
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube
 import net.minecraft.world.level.Level
@@ -11,7 +12,7 @@ import org.joml.Vector3dc
 
 /**
  * Something that curves spacetime in a level, in game terms (block coordinates, game axes): a [BlackHole], a [Mass], a
- * [Bubble], a [Tube] or an [Ellipsoid]. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
+ * [Bubble], a [Tube], an [Ellipsoid] or a [Krasnikov] tube. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
  * [SpacetimeField.addProvider] (gravity generators, warp drives, tests); [SpacetimeField.sources] gives both. Every
  * system that asks [SpacetimeField] sees them: free fall, clocks, the lens.
  */
@@ -142,6 +143,28 @@ sealed interface FieldSource {
 
 		// As a bubble's: of order speed over its size within a wall's reach of it, nothing past.
 		override fun strengthAt(position: Vector3dc): Double = if (radius(position) < 1.5) kotlin.math.abs(speed) / reach else 0.0
+	}
+
+	/**
+	 * A Krasnikov tube ([KrasnikovTube]): static, of [radius] blocks round the polyline [spine] (game coordinates), light
+	 * along it running at 1 / [k] times c: Krasnikov track's, along the routes trains are scheduled over it.
+	 */
+	data class Krasnikov(val spine: List<Vector3dc>, val k: Double, val radius: Double) : FieldSource {
+		override fun toPhysics(origin: Vector3dc): MetricSource {
+			val flat = DoubleArray(3 * spine.size)
+			val p = DoubleArray(3)
+			for ((i, point) in spine.withIndex()) {
+				GameFrame.toPhysics(Vector3d(point).sub(origin), p)
+				flat[3 * i] = p[0]; flat[3 * i + 1] = p[1]; flat[3 * i + 2] = p[2]
+			}
+			return KrasnikovTube(flat, k, radius)
+		}
+
+		/** Its distance from [position] (to the nearest point of the spine). */
+		fun distance(position: Vector3dc): Double = Tube(spine, 0.0, radius).distance(position)
+
+		// Of order (1 − k) / radius within a wall's reach of it, nothing past.
+		override fun strengthAt(position: Vector3dc): Double = if (distance(position) < 1.5 * radius) (1.0 - k) / radius else 0.0
 	}
 
 	/** Supplies a level's sources each time they're asked for (cheap: called per query). */

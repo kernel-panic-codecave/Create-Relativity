@@ -1,0 +1,61 @@
+{
+  "variants": {
+    "shape=zo": {
+      "model": "create_relativity:block/krasnikov_track/zo"
+    },
+    "shape=xo": {
+      "model": "create_relativity:block/krasnikov_track/xo"
+    },
+    "shape=pd": {
+      "model": "create_relativity:block/krasnikov_track/pd"
+    },
+    "shape=nd": {
+      "model": "create_relativity:block/krasnikov_track/nd"
+    },
+    "shape=as": {
+      "model": "create_relativity:block/krasnikov_track/as"
+    },
+    "shape=an": {
+      "model": "create_relativity:block/krasnikov_track/an"
+    },
+    "shape=ae": {
+      "model": "create_relativity:block/krasnikov_track/ae"
+    },
+    "shape=aw": {
+      "model": "create_relativity:block/krasnikov_track/aw"
+    },
+    "shape=cr_o": {
+      "model": "create_relativity:block/krasnikov_track/cr_o"
+    },
+    "shape=cr_d": {
+      "model": "create_relativity:block/krasnikov_track/cr_d"
+    },
+    "shape=cr_pdx": {
+      "model": "create_relativity:block/krasnikov_track/cr_pdx"
+    },
+    "shape=cr_pdz": {
+      "model": "create_relativity:block/krasnikov_track/cr_pdz"
+    },
+    "shape=cr_ndx": {
+      "model": "create_relativity:block/krasnikov_track/cr_ndx"
+    },
+    "shape=cr_ndz": {
+      "model": "create_relativity:block/krasnikov_track/cr_ndz"
+    },
+    "shape=none": {
+      "model": "minecraft:block/air"
+    },
+    "shape=tn": {
+      "model": "create_relativity:block/krasnikov_track/zo"
+    },
+    "shape=ts": {
+      "model": "create_relativity:block/krasnikov_track/zo"
+    },
+    "shape=te": {
+      "model": "create_relativity:block/krasnikov_track/xo"
+    },
+    "shape=tw": {
+      "model": "create_relativity:block/krasnikov_track/xo"
+    }
+  }
+}

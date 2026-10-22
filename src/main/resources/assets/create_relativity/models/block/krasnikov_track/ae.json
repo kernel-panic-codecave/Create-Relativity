@@ -1,0 +1,6 @@
+{
+  "parent": "create_relativity:block/krasnikov_track/obj_track",
+  "loader": "neoforge:obj",
+  "flip_v": true,
+  "model": "create_relativity:models/block/maglev_track/ae.obj"
+}

@@ -115,5 +115,8 @@
   "config.create_relativity.trains.max_warp.comment": "The highest warp factor a warp drive can be set to (the Next Generation scale: warp 1 is light speed, warp 9 about 1516 c, warp 10 infinitely fast). Below 10.",
   "block.create_relativity.warp_core": "Warp Core",
   "block.create_relativity.warp_coil": "Warp Coil",
-  "create_relativity.warp_drive.max_warp": "Maximum Warp"
+  "create_relativity.warp_drive.max_warp": "Maximum Warp",
+  "config.create_relativity.trains.krasnikov_speed": "Krasnikov Tube Speed",
+  "config.create_relativity.trains.krasnikov_speed.comment": "How fast light runs along a Krasnikov tube, in multiples of c; trains in one go at up to 90% of that. Finite: an instant tube would let light reach its own past.",
+  "block.create_relativity.krasnikov_track": "Krasnikov Track"
 }

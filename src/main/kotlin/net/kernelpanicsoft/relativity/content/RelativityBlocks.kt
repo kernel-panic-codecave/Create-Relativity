@@ -34,6 +34,15 @@ object RelativityBlocks {
 		)
 	}
 
+	/** Krasnikov track ([KrasnikovTubes]): maglev track carrying a Krasnikov tube. */
+	val KRASNIKOV_TRACK: DeferredBlock<TrackBlock> = BLOCKS.register("krasnikov_track") { ->
+		Maglev.KRASNIKOV.createBlock(
+			BlockBehaviour.Properties.of().mapColor(MapColor.COLOR_PURPLE).strength(0.8f).sound(SoundType.METAL)
+				.noOcclusion().forceSolidOn().pushReaction(PushReaction.BLOCK).lightLevel { 4 },
+		)
+	}
+	val KRASNIKOV_TRACK_ITEM: DeferredItem<TrackBlockItem> = ITEMS.register("krasnikov_track") { -> TrackBlockItem(KRASNIKOV_TRACK.get(), Item.Properties()) }
+
 	/** Maglev bogey ([MaglevBogeyBlock]): no item, laid with a train casing as Create's are. */
 	val MAGLEV_BOGEY: DeferredBlock<MaglevBogeyBlock> = BLOCKS.register("maglev_bogey") { ->
 		MaglevBogeyBlock(BlockBehaviour.Properties.of().mapColor(MapColor.METAL).strength(2.0f).sound(SoundType.NETHERITE_BLOCK).noOcclusion())
@@ -69,6 +78,7 @@ object RelativityBlocks {
 			.icon { ItemStack(MAGLEV_TRACK_ITEM.get()) }
 			.displayItems { _, output ->
 				output.accept(MAGLEV_TRACK_ITEM.get())
+				output.accept(KRASNIKOV_TRACK_ITEM.get())
 				output.accept(WARP_CORE_ITEM.get())
 				output.accept(WARP_COIL_ITEM.get())
 			}
@@ -77,7 +87,7 @@ object RelativityBlocks {
 
 	fun register() {
 		Maglev.init()
-		MaglevWarp.init()
+		KrasnikovTubes.init()
 		BLOCKS.register(MOD_BUS)
 		ITEMS.register(MOD_BUS)
 		TABS.register(MOD_BUS)
