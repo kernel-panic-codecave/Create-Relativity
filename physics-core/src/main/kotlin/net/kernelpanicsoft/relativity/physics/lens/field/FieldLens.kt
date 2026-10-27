@@ -82,6 +82,9 @@ class FieldLens(val modules: List<LensModule>) {
 	 */
 	fun sky(camera: V3, direction: V3): LightLine? = propagate(LightLine(camera, coordinate(camera, direction)))
 
+	/** As [sky], from a coordinate tangent [coordinateDirection] (no observer's direction converted). */
+	fun skyCoordinate(camera: V3, coordinateDirection: V3): LightLine? = propagate(LightLine(camera, coordinateDirection.normalized()))
+
 	/**
 	 * The direction from [camera] in which [target] is seen (primary image, or [secondary]), or null if a hole hides it:
 	 * each source's own exact image, chained back toward the camera. The source the light
@@ -115,13 +118,65 @@ class FieldLens(val modules: List<LensModule>) {
 		return observed(camera, direction)
 	}
 
+	/**
+	 * How far light leaving [camera] along unit [direction] passes from [target]: the target less the nearest point of
+	 * its path (its straight pieces, each from one source's closest approach to the next's, the last on without end; up
+	 * to where it's captured, if it is).
+	 */
+	fun miss(camera: V3, direction: V3, target: V3): V3 {
+		var best = Double.MAX_VALUE
+		var miss = V3(1e9, 1e9, 1e9)
+		propagate(LightLine(camera, coordinate(camera, direction))) { line, from, to ->
+			if (to > from) {
+				val near = line.at(line.along(target).coerceIn(from, to))
+				val m = target - near
+				if (m.length < best) { best = m.length; miss = m }
+			}
+		}
+		return miss
+	}
+
+	/**
+	 * The direction from [camera] whose light passes through [target], solved on the composition itself from [guess]
+	 * (Gauss-Newton on [miss], finite differences across the direction); null if it doesn't get within [tolerance] of
+	 * the target's distance in [steps] steps.
+	 */
+	fun solve(camera: V3, target: V3, guess: V3, steps: Int = 8, tolerance: Double = 2e-4, step: Double = 1e-6): V3? {
+		var d = guess.normalized()
+		val limit = tolerance * maxOf((target - camera).length, 1.0)
+		repeat(steps) {
+			val r = miss(camera, d, target)
+			if (r.length < limit) return d
+			val (e1, e2) = tangents(d)
+			val j1 = (miss(camera, (d + e1 * step).normalized(), target) - r) * (1.0 / step)
+			val j2 = (miss(camera, (d + e2 * step).normalized(), target) - r) * (1.0 / step)
+			val a = j1 dot j1
+			val b = j1 dot j2
+			val c = j2 dot j2
+			val det = a * c - b * b
+			if (abs(det) < 1e-30) return null
+			val g1 = -(j1 dot r)
+			val g2 = -(j2 dot r)
+			var s1 = (c * g1 - b * g2) / det
+			var s2 = (a * g2 - b * g1) / det
+			val size = sqrt(s1 * s1 + s2 * s2)
+			if (size > 0.1) { s1 *= 0.1 / size; s2 *= 0.1 / size }
+			d = (d + e1 * s1 + e2 * s2).normalized()
+		}
+		return if (miss(camera, d, target).length < limit) d else null
+	}
+
 	/** A camera direction as a coordinate tangent: each source's conversion in turn. */
-	private fun coordinate(camera: V3, d: V3): V3 = modules.fold(d) { v, m -> m.toCoordinate(camera, v) }
+	fun coordinate(camera: V3, d: V3): V3 = modules.fold(d) { v, m -> m.toCoordinate(camera, v) }
 
 	private fun observed(camera: V3, d: V3): V3 = modules.asReversed().fold(d) { v, m -> m.toObserved(camera, v) }
 
-	/** Light along [start] past every source in turn: the line it ends on, or null if a source captures it. */
-	private fun propagate(start: LightLine): LightLine? {
+	/**
+	 * Light along [start] past every source in turn: the line it ends on, or null if a source captures it. [pieces], if
+	 * given, gets each straight piece of the path (its line, and from and to along it).
+	 */
+	private fun propagate(start: LightLine, pieces: ((LightLine, Double, Double) -> Unit)? = null): LightLine? {
+		var pieceStart = start.origin
 		var line = start
 		val left = modules.toMutableList()
 		val passed = ArrayList<LensModule>()
@@ -143,6 +198,41 @@ class FieldLens(val modules: List<LensModule>) {
 		}
 		while (left.isNotEmpty()) {
 			val next = left.minBy { line.along(it.centre) }
+			// A hole whose near sphere overlaps another's: light there is bent hard by both at once, so the pair (or
+			// more) is marched together through their superposed orbit field, from where the light first
+			// enters any of their near spheres to where it has left them all.
+			val group = coupled(next, left)
+			if (group.size > 1 || (forceMarch && next is HoleModule)) {
+				val entries = group.map { m ->
+					val tc = line.along(m.centre)
+					val impact = (line.at(tc) - m.centre).length
+					val radius = near(m)
+					if (impact < radius) maxOf(tc - sqrt(radius * radius - impact * impact), line.along(start.origin)) else Double.MAX_VALUE
+				}
+				val entry = entries.min()
+				if (entry < Double.MAX_VALUE) {
+					val arriving = if (entry > 0.0) weakly(entry, left) else LightLine(line.at(entry), line.direction)
+					val from = if (entry > 0.0) arriving.at(entry) else arriving.origin
+					pieces?.invoke(arriving, arriving.along(pieceStart), arriving.along(from))
+					left.removeAll(group)
+					val out = march(group.map { it as HoleModule }, from, arriving.direction, pieces) ?: return null
+					// The rest of each one's bend from where the march left off, exactly (heading away from them all,
+					// each bends it there much as it would alone); and the tails of those passed before, moved from the
+					// old line to the new one.
+					var heading = out.direction
+					for (m in group.sortedBy { (it.centre - out.origin).length }) {
+						heading = (m.pass(LightLine(out.origin, heading.normalized())) ?: return null).direction
+					}
+					for (m in passed) {
+						heading += m.field(out.origin, out.at(FAR)).first
+						heading -= m.field(out.origin, out.origin + arriving.direction * FAR).first
+					}
+					passed += group
+					line = LightLine(out.origin, heading.normalized())
+					pieceStart = out.origin
+					continue
+				}
+			}
 			// This one exactly from where the light enters its near sphere (behind where it is now, if that's inside:
 			// started level with an earlier source beside it, its orbit began by its photon sphere, and the weak field
 			// standing in before that is no good there: the order the two came in showed, a straight cut through a
@@ -154,6 +244,7 @@ class FieldLens(val modules: List<LensModule>) {
 			val entry = if (impact < radius) maxOf(tc - sqrt(radius * radius - impact * impact), line.along(start.origin)) else 0.0
 			val arriving = if (entry > 0.0) weakly(entry, left) else LightLine(line.at(entry), line.direction)
 			left.remove(next)
+			pieces?.invoke(arriving, arriving.along(pieceStart), arriving.along(next.centre))
 			val out = next.pass(arriving) ?: return null
 			// The sources already passed counted their weak tails along the old line, out to infinity: from the turn on
 			// the light runs along the new one instead.
@@ -164,8 +255,69 @@ class FieldLens(val modules: List<LensModule>) {
 			}
 			passed += next
 			line = LightLine(out.origin, heading.normalized())
+			pieceStart = line.at(line.along(next.centre))
 		}
+		pieces?.invoke(line, line.along(pieceStart), Double.MAX_VALUE)
 		return line
+	}
+
+	/** [first] and every hole in [left] whose near sphere overlaps its, or one that does, and so on (if [first] is a hole). */
+	private fun coupled(first: LensModule, left: List<LensModule>): List<LensModule> {
+		if (first !is HoleModule) return listOf(first)
+		if (forceMarch) return left.filterIsInstance<HoleModule>()
+		val group = arrayListOf(first)
+		var grew = true
+		while (grew) {
+			grew = false
+			for (m in left) {
+				if (m !is HoleModule || m in group) continue
+				if (group.any { (it.centre - m.centre).length < near(it) + near(m) }) { group += m; grew = true }
+			}
+		}
+		return group
+	}
+
+	/**
+	 * Light from [from] heading [direction] (a coordinate tangent) marched through the superposed field of [holes] (each
+	 * its photon orbit's, in Cartesian form: -3/2 r_s h^2 x / r^5, h = |x × v|; [OrbitField]'s), RK4, steps [MARCH_STEP] of
+	 * the distance to the nearest centre: until it has left every hole's near sphere heading away from each (the line it's on
+	 * then), or null if it falls into one (inside its photon sphere heading in). [pieces] gets each step as a piece of the
+ * path.
+	 */
+	private fun march(holes: List<HoleModule>, from: V3, direction: V3, pieces: ((LightLine, Double, Double) -> Unit)?): LightLine? {
+		var x = from
+		var v = direction.normalized()
+		val field = OrbitField(holes, emptyList())
+		fun acceleration(x: V3, v: V3) = field.acceleration(x, v)
+		repeat(MARCH_LIMIT) {
+			var nearest = Double.MAX_VALUE
+			var outside = true
+			for (h in holes) {
+				val d = x - h.centre
+				val r = d.length
+				// (Inside the photon sphere heading in: falling in, for a hole alone; near another, as good as.)
+				if (r <= 1.5 * h.rs && (d dot v) < 0.0) return null
+				nearest = minOf(nearest, r)
+				if (r < near(h) || (d dot v) <= 0.0) outside = false
+			}
+			if (outside) return LightLine(x, v.normalized())
+			val step = MARCH_STEP * nearest
+			// RK4: four field evaluations a step, but fourth order (for a given accuracy far fewer evaluations than
+			// velocity-Verlet's second order: FieldLensTest.marchCost).
+			val a1 = acceleration(x, v)
+			val x2 = x + v * (0.5 * step); val v2 = v + a1 * (0.5 * step)
+			val a2 = acceleration(x2, v2)
+			val x3 = x + v2 * (0.5 * step); val v3 = v + a2 * (0.5 * step)
+			val a3 = acceleration(x3, v3)
+			val x4 = x + v3 * step; val v4 = v + a3 * step
+			val a4 = acceleration(x4, v4)
+			val next = x + (v + v2 * 2.0 + v3 * 2.0 + v4) * (step / 6.0)
+			pieces?.invoke(LightLine(x, v.normalized()), 0.0, (next - x).length)
+			v += (a1 + a2 * 2.0 + a3 * 2.0 + a4) * (step / 6.0)
+			x = next
+			marchEvaluations += 4
+		}
+		return null
 	}
 
 	/** How far round [m] its field isn't weak: [NEAR] of its sizes for a hole (its exact pass starts there), none else. */
@@ -204,6 +356,18 @@ class FieldLens(val modules: List<LensModule>) {
 	companion object {
 		/** A hole's near sphere (its sizes): where its weak field stops standing in for its orbit. */
 		const val NEAR = 20.0
+
+		/** The march's step, of the distance to the nearest hole's centre, and its most steps (light still inside is lost). */
+		const val MARCH_STEP = 0.2
+		const val MARCH_LIMIT = 2000
+
+		/** Debug (tests): field evaluations the march has made in all. */
+		@JvmStatic
+		var marchEvaluations = 0L
+
+		/** Debug (tests): every hole marched, even alone. */
+		@JvmStatic
+		var forceMarch = false
 
 		/** "Out past everything" (blocks): weak fields' remaining turn beyond is negligible. */
 		private const val FAR = 1e8

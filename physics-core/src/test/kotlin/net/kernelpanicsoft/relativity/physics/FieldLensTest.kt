@@ -5,6 +5,7 @@ import net.kernelpanicsoft.relativity.physics.lens.field.FieldLens
 import net.kernelpanicsoft.relativity.physics.lens.field.HoleModule
 import net.kernelpanicsoft.relativity.physics.lens.field.LensModule
 import net.kernelpanicsoft.relativity.physics.lens.field.MassModule
+import net.kernelpanicsoft.relativity.physics.lens.field.OrbitField
 import net.kernelpanicsoft.relativity.physics.lens.field.V3
 import net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime
 import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
@@ -18,9 +19,9 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 /**
- * [FieldLens] (sources composed along the light) against light followed exactly through the same spacetime
- * ([HamiltonianRay] through a [ComposedSpacetime]): where the sky seen in each direction lies, and where points are
- * seen. Errors in pixels of a 2256-px-wide screen at 70 degrees.
+ * [FieldLens] (sources composed along the light) against the lens's own model followed finely ([OrbitField]: each
+ * hole's photon orbit field and each mass's weak field, superposed), from the same camera direction: where the sky seen
+ * in each direction lies, and where points are seen. Errors in pixels of a 2256-px-wide screen at 70 degrees.
  */
 class FieldLensTest {
 	private val pixel = Math.toRadians(70.0) / 2256.0
@@ -49,6 +50,10 @@ class FieldLensTest {
 		scene("hole + mass", V3(-18.0, 2.0, 1.0), V3(4.0, -3.0, 0.0), hole(V3.ZERO, 2.0), mass(V3(8.0, -6.0, 0.0), 0.2, 2.0)),
 		scene("binary, 6 r_s apart", V3(-25.0, 2.0, 3.0), V3(3.0, 0.0, 0.0), hole(V3.ZERO, 2.0), hole(V3(6.0, 0.0, 0.0), 2.0)),
 		scene("camera between holes", V3(0.0, 0.0, 0.0), V3(1.0, 0.0, 0.0), hole(V3(-12.0, 0.0, 0.0), 2.0), hole(V3(14.0, 3.0, 0.0), 2.0)),
+		// The client test twoHoles' scene (r_s 2 at the origin, 1.5 at (16, 0, -7)) from its three poses.
+		scene("twoHoles side", V3(-15.0, 0.0, 0.0), V3(0.0, -2.6, 0.0), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5)),
+		scene("twoHoles above", V3(-10.0, 8.0, 0.0), V3(0.0, -2.0, 0.0), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5)),
+		scene("twoHoles between", V3(8.0, 0.0, 6.0), V3(13.0, -0.9, -2.7), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5)),
 	)
 
 	@Test
@@ -56,18 +61,20 @@ class FieldLensTest {
 		val report = StringBuilder()
 		val failures = ArrayList<String>()
 		for (scene in scenes) {
-			val spacetime = ComposedSpacetime(scene.sources)
 			val lens = FieldLens(scene.modules)
+			val model = OrbitField(scene.modules)
 			val random = java.util.Random(7)
 			val skyErrors = ArrayList<Double>()
 			var captureMismatch = 0
 			val imageErrors = ArrayList<Double>()
+			val solvedErrors = ArrayList<Double>()
+			var solvedMissing = 0
 			var imageMissing = 0
 			var otherImages = 0
 			val forward = (scene.look - scene.camera).normalized()
 			for (n in 0 until 240) {
 				val d = coneDirection(forward, Math.toRadians(35.0), random)
-				val exact = trace(spacetime, scene.camera, d)
+				val exact = model(lens, model, scene.camera, d)
 				val composed = lens.sky(scene.camera, d)
 				if ((exact.escape == null) != (composed == null)) { captureMismatch++; continue }
 				if (exact.escape != null) skyErrors += angle(exact.escape, composed!!.direction) / pixel
@@ -77,6 +84,17 @@ class FieldLensTest {
 					if (candidates.isEmpty()) continue
 					val p = candidates[random.nextInt(candidates.size)].first
 					val seen = listOfNotNull(lens.image(scene.camera, p, false), lens.image(scene.camera, p, true))
+					// The composition solved from the chain's guesses (or the straight line).
+					val solved = (seen.ifEmpty { listOf((p - scene.camera).normalized()) }).mapNotNull { lens.solve(scene.camera, p, it) }
+					if (solved.isEmpty()) solvedMissing++ else {
+						val best = solved.minBy { angle(it, d) }
+						var error = angle(best, d) / pixel
+						if (error > 5.0) {
+							val other = model(lens, model, scene.camera, best).points.minOfOrNull { (it.first - p).length } ?: Double.MAX_VALUE
+							error = minOf(error, other / (p - scene.camera).length / pixel)
+						}
+						solvedErrors += error
+					}
 					if (seen.isEmpty()) imageMissing++ else {
 						val best = seen.minBy { angle(it, d) }
 						var error = angle(best, d) / pixel
@@ -84,7 +102,7 @@ class FieldLensTest {
 						// right if light really leaves that way to the point. Measured by how close the exact light
 						// from it passes the point (as an angle from the camera).
 						if (error > 5.0) {
-							val other = trace(spacetime, scene.camera, best).points.minOfOrNull { (it.first - p).length } ?: Double.MAX_VALUE
+							val other = model(lens, model, scene.camera, best).points.minOfOrNull { (it.first - p).length } ?: Double.MAX_VALUE
 							val asAngle = other / (p - scene.camera).length / pixel
 							if (asAngle < error) { otherImages++; error = asAngle }
 						}
@@ -96,13 +114,43 @@ class FieldLensTest {
 				if (percentile(skyErrors, 0.95) > sky || percentile(imageErrors, 0.95) > images) failures += scene.name
 			}
 			report.append(String.format(
-				"%-22s sky px: median %.2f, 95%% %.2f, max %.1f; capture mismatches %d | images px: median %.2f, 95%% %.2f, max %.1f; missing %d of %d; other images %d%n",
+				"%-22s sky px: median %.2f, 95%% %.2f, max %.1f; capture mismatches %d | images px: median %.2f, 95%% %.2f, max %.1f; missing %d of %d; other images %d | solved px: median %.2f, 95%% %.2f, max %.1f; missing %d%n",
 				scene.name, percentile(skyErrors, 0.5), percentile(skyErrors, 0.95), skyErrors.maxOrNull() ?: 0.0, captureMismatch,
 				percentile(imageErrors, 0.5), percentile(imageErrors, 0.95), imageErrors.maxOrNull() ?: 0.0, imageMissing, imageErrors.size + imageMissing, otherImages,
+				percentile(solvedErrors, 0.5), percentile(solvedErrors, 0.95), solvedErrors.maxOrNull() ?: 0.0, solvedMissing,
 			))
 		}
 		println(report)
 		assertTrue(failures.isEmpty(), "past their gates: $failures")
+	}
+
+	/** The march's accuracy against the model followed finely, and its cost (field evaluations per ray). */
+	@Test
+	fun marchCost() {
+		for (scene in scenes.filter { it.name.startsWith("twoHoles") || it.name.startsWith("binary") }) {
+			val lens = FieldLens(scene.modules)
+			val model = OrbitField(scene.modules)
+			val random = java.util.Random(7)
+			val errors = ArrayList<Double>()
+			FieldLens.marchEvaluations = 0
+			repeat(150) {
+				val d = coneDirection((scene.look - scene.camera).normalized(), Math.toRadians(35.0), random)
+				val exact = model(lens, model, scene.camera, d)
+				val composed = lens.sky(scene.camera, d)
+				if (exact.escape != null && composed != null) errors += angle(exact.escape, composed.direction) / pixel
+			}
+			println(String.format("march, %s: sky px median %.2f, 95%% %.1f; %.0f field evaluations per ray", scene.name, percentile(errors, 0.5), percentile(errors, 0.95), FieldLens.marchEvaluations / 150.0))
+			assertTrue(percentile(errors, 0.95) < 15.0, "${scene.name}: the march's sky is off")
+		}
+	}
+
+	/** Light from [camera] along camera direction [d], followed finely through [model] (from the lens's own coordinate direction). */
+	private fun model(lens: FieldLens, model: OrbitField, camera: V3, d: V3): Traced {
+		val traced = model.trace(camera, lens.coordinate(camera, d), record = true)
+		var length = 0.0
+		var last = camera
+		val points = traced.points.map { p -> length += (p - last).length; last = p; p to length }
+		return Traced(traced.escape, points)
 	}
 
 	private class Traced(val escape: V3?, val points: List<Pair<V3, Double>>)

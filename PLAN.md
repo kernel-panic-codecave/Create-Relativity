@@ -315,6 +315,9 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
 
 ## 8. Wormholes
 
+- **Composed with the other sources' lens modules**: warp trains go through wormholes, so the field lens composes wormhole
+  throats with both tube types (Krasnikov and warp tubes) and bubbles, as it does holes with tubes.
+
 - **The fuels: two fluids.** *Degenerate Matter* (positive energy density) drives positive gravity: gravity generators
   pulling, artificial gravity. *Exotic Matter* (negative energy density) drives negative gravity: wormhole throats,
   warp bubble walls, repulsors. Both are consumed as they're used. They render like the end gateway's starfield:
@@ -473,8 +476,12 @@ amplitude, phase and frequency to the end of the inspiral waveform.
 - **BH + Neutronium-star mergers** (stretch): tidal disruption before merger, with a kilonova particle burst.
 
 ### Rendering a binary
-The Schwarzschild LUT shortcut (§9.2) only works with spherical symmetry. A binary uses the full per-pixel ray marcher with
-the superposed two-body metric (approximate), at half resolution. The shadow becomes two lobes and the Einstein rings tangle.
+The Schwarzschild LUT shortcut (§9.2) only works with spherical symmetry. Holes whose strong regions overlap (a binary, or
+any close pair) are lensed by the **superposed orbit field**: each hole's exact light bending (its photon orbit's, in
+Cartesian form) added, marched with velocity-Verlet through the overlap and handed back to each hole's exact pass once out
+(decided 2026-10-27, over marching the composed metric the physics uses: cheaper, exact for a lone hole, and free of the
+summed Kerr-Schild metric's coordinate artifacts; the two differ by ~100 px near close pairs). The lens tests' reference
+traces the same model finely. The shadow becomes two lobes and the Einstein rings tangle.
 
 ### Tests
 - Circular-orbit decay time matches Peters (1964): `t = (5/256) c⁵ a⁴ / (G³ m₁ m₂ M)`.
