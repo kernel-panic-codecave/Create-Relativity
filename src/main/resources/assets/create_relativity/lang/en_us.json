@@ -8,9 +8,6 @@
   "config.create_relativity.physics.unit_radius_mass.comment": "Sable mass whose Schwarzschild radius is one block; sets the gravitational constant. Default block mass is 1.0.",
   "config.create_relativity.physics.speed_of_light_overrides": "Speed of Light per Dimension",
   "config.create_relativity.physics.speed_of_light_overrides.comment": "Dimension id -> c in blocks/s, for dimensions whose c differs from the default (e.g. a planet, whose gravity at Minecraft-scale c would make it nearly a black hole).",
-  "config.create_relativity.debug": "Debug",
-  "config.create_relativity.debug.show_radii": "Show Black Hole Radii",
-  "config.create_relativity.debug.show_radii.comment": "Draw horizon (purple), photon orbits (yellow) and ISCOs (cyan; dimmer = retrograde) around every black hole.",
   "commands.create_relativity.bh.created": "Black hole at %s %s %s: r_s=%s, spin=%s, mass=%s",
   "commands.create_relativity.bh.list": "%s black hole(s) in this dimension:",
   "commands.create_relativity.bh.removed": "Removed black hole at %s %s %s",
@@ -127,5 +124,5 @@
   "commands.create_relativity.bubble.cleared": "Removed %s bubble(s)",
   "debug.create_relativity.spacetime_grid.on": "Spacetime grid: shown",
   "debug.create_relativity.spacetime_grid.off": "Spacetime grid: hidden",
-  "debug.create_relativity.spacetime_grid.help": "F3 + Z = Show spacetime grid (space's flow round every source, coloured by clock rate)"
+  "debug.create_relativity.spacetime_grid.help": "F3 + Z = Show spacetime grid (space's flow round every source, coloured by clock rate, and each source's outline)"
 }

@@ -370,7 +370,11 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   to encompass the whole ship, and a static one has a configurable extent.
 - **Falling out of a superluminal bubble** is fatal, with Star Trek flavoured death messages ("... was disassembled at
   the subatomic level by a collapsing warp field", "... experienced a warp core breach", ...).
-- **Warp trains** are not a drive aboard: trains go faster than light on **Krasnikov tube track** (§8c).
+- **Warp trains** come two ways: **Krasnikov tube track** (§8c), the infrastructure (nothing aboard; but tubes of
+  trains whose routes intersect interfere), or a **warp drive aboard** (the train's controls throttle it), needing no
+  track of its own.
+- **Fuel**: a running drive burns both fuels (Degenerate and Exotic Matter). On a train it draws them automatically from
+  fluid tanks anywhere on the train; on a ship (Sable) they must be piped into the drive.
 - **No steering from inside at superluminal speed**: the front wall is causally cut off from the crew (a horizon).
   Course and stop point are set before engaging. That's real physics, and it's a good gameplay constraint.
 - **The arrival hazard** (McMonigal, Lewis & O'Byrne 2012): particles swept up at the front wall pile up as
@@ -396,7 +400,7 @@ outrunning light.
 - **Krasnikov track**: a maglev track variant (the same track type: maglev trains run on it, and it joins plain maglev
   track) that carries a tube for each maglev train **scheduled** over it: along the Krasnikov track of the train's route
   ahead (station to station), fast the way it's going, and only while it runs that route. Routes may cross, merge and
-  share track freely: each train's tube is its own (opposed tubes at rest together can't reach the past).
+  share track freely: each train's tube is its own (opposed tubes at rest together can't reach the past). Where two trains' routes intersect their tubes interfere: the case for a warp drive aboard instead (§8a).
 - **Forming and fading**: a tube's front runs out along the route from the train at the tube's own light speed, c / k
   (extended from inside itself, where signals are that fast: at c, a faster-than-light train would catch it), its tilt
   easing in over a second; when the route ends it eases back to flat. Nothing appears or vanishes at once.

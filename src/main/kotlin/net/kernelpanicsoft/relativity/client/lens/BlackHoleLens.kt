@@ -355,6 +355,9 @@ object BlackHoleLens {
 		uniform("HoleSpins") { setVectors(*spinUniforms) }
 		val (sourceCount, general) = packSources(holes, visibleSources(level), camera, sourceUniforms)
 		uniform("SourceCount") { setInt(sourceCount) }
+		uniform("SceneCaptureReady") { setInt(SceneCapture.ready) }
+		uniform("SceneCaptureFaces") { setVectors(*SceneCapture.columns()) }
+		uniform("SceneCaptureRange") { setVector(SceneCapture.NEAR, SceneCapture.far) }
 		uniform("Sources") { setVectors(*sourceUniforms) }
 		uniform("GeneralSpacetime") { setInt(if (general) 1 else 0) }
 		uniform("KerrTableEnabled") { setInt(kerrMode.ordinal) }

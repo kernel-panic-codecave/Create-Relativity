@@ -10,6 +10,12 @@
 
 uniform sampler2D DiffuseSampler0;
 uniform sampler2D LensLookup;
+uniform sampler2D SceneCapture;      // SceneCapture: the level round the camera, unlensed, on a cube's six faces side by side
+uniform sampler2D SceneCaptureDepth; // its depth (1: nothing drawn, sky)
+uniform int SceneCaptureReady;       // which faces hold a capture (bit per face)
+uniform vec4 SceneCaptureFaces[24];  // each face's projection times view rotation, by column (game axes, directions)
+uniform vec2 SceneCaptureRange;      // the faces' near and far planes (blocks)
+const int SCENE_CAPTURE_STEPS = 40;  // the march along a leg (sceneCaptureAlong): steps growing by a quarter
 uniform vec4 Disk;      // nearest hole's accretion disk: x brightness (0 = none), y/z inner/outer radius (blocks),
                         // w spin sense (+1 counter-clockwise from above, -1 clockwise)
 uniform float DiskTime; // seconds x c (blocks of light travel), for the disk's rotating turbulence
@@ -259,6 +265,82 @@ SceneHit sceneNearest(vec3 dir, vec2 uv, float sceneDist) {
     return nearest;
 }
 
+// The face of the scene capture that holds world direction d most squarely: where in the atlas, and the distance
+// along d (blocks from the camera) to what it shows there (1e30 for sky); false if no face holding it is captured yet.
+bool sceneCaptureFace(vec3 d, out vec2 at, out float dist) {
+    at = vec2(0.0);
+    dist = 1e30;
+    // (The faces look along +x, -x, +y, -y, +z, -z: d's largest axis picks its face.)
+    vec3 a = abs(d);
+    int best = a.x >= a.y && a.x >= a.z ? (d.x > 0.0 ? 0 : 1) : (a.y >= a.z ? (d.y > 0.0 ? 2 : 3) : (d.z > 0.0 ? 4 : 5));
+    if ((SceneCaptureReady & (1 << best)) == 0) return false;
+    mat4 m = mat4(SceneCaptureFaces[4 * best], SceneCaptureFaces[4 * best + 1], SceneCaptureFaces[4 * best + 2], SceneCaptureFaces[4 * best + 3]);
+    vec4 clip = m * vec4(d, 0.0);
+    float bestW = clip.w;
+    vec2 bestNdc = clamp(clip.xy / clip.w, -1.0, 1.0);
+    vec2 cell = vec2(float(best - 3 * (best / 3)), float(best / 3));
+    at = (cell + bestNdc * 0.5 + 0.5) / vec2(3.0, 2.0);
+    float depth = texture(SceneCaptureDepth, at).r;
+    if (depth < 1.0) {
+        // (Depth to the face's view depth, then along d: clip.w is d's view depth, d being a unit vector.)
+        float n = SceneCaptureRange.x;
+        float f = SceneCaptureRange.y;
+        float viewZ = 2.0 * n * f / ((f + n) - (2.0 * depth - 1.0) * (f - n));
+        dist = viewZ / (bestW / length(d));
+    }
+    return true;
+}
+
+// What light reaching the camera along a last straight leg from o (world axes, camera-relative) heading e shows, by the
+// scene capture: the first captured surface the leg passes behind (marched out from o, a coarse step then halved
+// back); false if it meets none (sky) or the capture isn't ready. A leg from the camera itself is a single lookup.
+bool sceneCaptureAlong(vec3 o, vec3 e, out vec3 color) {
+    color = vec3(0.0);
+    vec2 at;
+    float dist;
+    if (dot(o, o) < 1e-6) {
+        if (!sceneCaptureFace(e, at, dist) || dist >= 1e29) return false;
+        color = texture(SceneCapture, at).rgb;
+        return true;
+    }
+    float t = 0.0;
+    float stepLength = max(0.25, 0.02 * length(o));
+    // (Whether the last sample lay in front of what the capture shows its way: only a leg crossing from in front to
+    // behind a surface meets it; one already behind is passing behind something nearer the camera.)
+    bool before = sceneCaptureFace(normalize(o), at, dist) && length(o) < dist;
+    for (int i = 0; i < SCENE_CAPTURE_STEPS; i += 1) {
+        float next = t + stepLength;
+        vec3 x = o + e * next;
+        float r = length(x);
+        if (!sceneCaptureFace(x / r, at, dist)) return false;
+        bool front = r < dist;
+        if (before && !front) {
+            // Crossed: found closer by halving, and a hit only if it lands on the surface (not on a silhouette's edge,
+            // where what's shown jumps from near to far).
+            float a = t;
+            float b = next;
+            for (int k = 0; k < 6; k += 1) {
+                float m = 0.5 * (a + b);
+                vec3 y = o + e * m;
+                float ry = length(y);
+                float dy;
+                vec2 aty;
+                if (sceneCaptureFace(y / ry, aty, dy) && ry >= dy) b = m; else a = m;
+            }
+            vec3 y = o + e * b;
+            float ry = length(y);
+            if (sceneCaptureFace(y / ry, at, dist) && abs(ry - dist) < max(0.5, 0.02 * ry) + (b - a)) {
+                color = texture(SceneCapture, at).rgb;
+                return true;
+            }
+        }
+        before = front;
+        t = next;
+        stepLength *= 1.25;
+    }
+    return false;
+}
+
 // The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
 // game or a shader pack drew them, already through its tonemapping), else the sky probe's, else a plain gradient.
 vec3 skyAt(vec3 d) {
@@ -417,31 +499,18 @@ void main() {
     // to the horizon: it closes round a camera falling in). Nothing marched, no tables built.
     if (relativityFieldCount() >= 1 || relativityWalls()) {
         vec3 scene = original.rgb;
-        float far = relativityFarField();
-        if (far > 0.0 && sceneDist >= far) {
-            // The far field (its band too, where it's drawn half bent: only so its triangles stay whole): the light this
-            // pixel sees, followed back past every source, looked up where its last leg points (far enough that where it
-            // set off from barely matters): in the frame, if it's on screen and past the band there (drawn where it is;
-            // else hidden by nearer geometry), otherwise as sky. Every image order alike.
+        if (sceneDist >= 1e29) {
             vec3 escape;
             vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
+            // (Where the light ends heading: the capture's geometry if it has any there, else the sky. The pixels the vertex
+            // lens leaves empty are here too: the Einstein ring's flip, higher images, the seams at tubes' and bubbles'
+            // walls.)
             scene = vec3(0.0);
-            if (relativityFieldSky(viewDir, escape)) {
+            vec3 from;
+            if (relativityFieldLeg(viewDir, from, escape)) {
                 vec3 world = normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz);
-                scene = skyAt(world);
-                vec4 clip = VeilCamera.ProjMat * vec4(escape, 0.0);
-                if (clip.w > 0.0) {
-                    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
-                    if (all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0))) && sceneDistance(uv) >= far * RELATIVITY_FAR_BAND) {
-                        scene = texture(DiffuseSampler0, uv).rgb;
-                    }
-                }
+                if (!sceneCaptureAlong((VeilCamera.IViewMat * vec4(from, 0.0)).xyz, world, scene)) scene = skyAt(world);
             }
-        } else if (sceneDist >= 1e29) {
-            vec3 escape;
-            vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
-            if (relativityFieldSky(viewDir, escape)) scene = skyAt(normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz));
-            else scene = vec3(0.0);
         }
         // (The nearest hole's disk as before, for now.)
         vec4 fieldDisk = vec4(0.0);

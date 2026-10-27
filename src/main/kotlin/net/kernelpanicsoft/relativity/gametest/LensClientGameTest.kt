@@ -18,6 +18,7 @@ import net.kernelpanicsoft.relativity.client.lens.KerrImageMap
 import net.kernelpanicsoft.relativity.client.lens.KerrSlots
 import net.kernelpanicsoft.relativity.client.lens.KerrPaths
 import net.kernelpanicsoft.relativity.client.lens.KerrSecondImageMap
+import net.kernelpanicsoft.relativity.client.lens.SceneCapture
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos
 import net.minecraft.world.level.block.Blocks
@@ -2355,9 +2356,9 @@ class LensClientGameTest {
 					val fps = computeOnClient { it.fps }
 					val shot = takeScreenshot("krasnikov_$name")
 					val wrong = LensReference.compare(reference, shot)
-					CreateRelativity.LOGGER.info("Krasnikov lens, {}: {}% of pixels in the wrong class, {}% counting white and blue as one; {} fps",
-						name, "%.1f".format(wrong * 100), "%.1f".format(LensReference.compare(reference, shot, floorAsOne = true) * 100), fps)
+					CreateRelativity.LOGGER.info("Krasnikov lens, {}: {}% of pixels in the wrong class; {} fps", name, "%.1f".format(wrong * 100), fps)
 					if (wrong > 0.06) failures += "$name: ${"%.1f".format(wrong * 100)}% of pixels in the wrong class"
+					withoutCapture("Krasnikov lens, $name", "krasnikov_$name", reference)
 					// The frame rate without the tube, for its cost.
 					SpacetimeField.removeProvider(provider)
 					waitTicks(40)
@@ -2468,6 +2469,7 @@ class LensClientGameTest {
 					val wrong = LensReference.compare(reference, shot)
 					CreateRelativity.LOGGER.info("Bubble lens, {}: {}% of pixels in the wrong class; {} fps", name, "%.1f".format(wrong * 100), computeOnClient { it.fps })
 					if (wrong > 0.06) failures += "$name: ${"%.1f".format(wrong * 100)}% of pixels in the wrong class"
+					withoutCapture("Bubble lens, $name", "bubble_$name", reference)
 				}
 			} finally {
 				SpacetimeField.removeProvider(provider)
@@ -2561,15 +2563,41 @@ class LensClientGameTest {
 		}
 	}
 
+	/** The post pass's GPU time (ms), the median over 20 ticks. */
+	private fun ClientGameTestContext.postPassMillis(): Double {
+		runOnClient { BlackHoleLens.timeGpu = true }
+		try {
+			return (0 until 20).map { waitTick(); computeOnClient { BlackHoleLens.gpuMillis } }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] }
+		} finally {
+			runOnClient { BlackHoleLens.timeGpu = false }
+		}
+	}
+
+	/** The same view without the scene capture (SceneCapture.enabled off): the share of pixels in the wrong class, logged. */
+	private fun ClientGameTestContext.withoutCapture(label: String, shotName: String, reference: Array<Array<LensReference.Kind?>>) {
+		val with = postPassMillis()
+		// (fps over the last second: after the timing's 20 ticks, past the reference's tracing, which stalls the client.)
+		CreateRelativity.LOGGER.info("{}: a capture face drew in {} ms; {} fps", label, "%.1f".format(computeOnClient { SceneCapture.lastMillis }), computeOnClient { it.fps })
+		runOnClient { SceneCapture.enabled = false }
+		try {
+			waitTicks(30)
+			val shot = takeScreenshot("${shotName}_nocapture")
+			CreateRelativity.LOGGER.info("{} without the capture: {}% of pixels in the wrong class; post pass {} ms without, {} ms with; {} fps without",
+				label, "%.1f".format(LensReference.compare(reference, shot) * 100), "%.2f".format(postPassMillis()), "%.2f".format(with), computeOnClient { it.fps })
+		} finally {
+			runOnClient { SceneCapture.enabled = true }
+			waitTicks(10)
+		}
+	}
+
 	/**
-	 * The far field in screen space (prototype, VertexLens.farField): the ground test's scene round a hole of r_s 2, from
-	 * beside and above, with the far field off and starting 48 and 24 blocks out: each against the exact light per pixel
-	 * (LensReference), and the post pass's cost. Logged (nothing asserted yet).
+	 * The scene capture round a hole: the ground test's scene round a hole of r_s 2, from beside and above, with the
+	 * capture and without, each against the exact light per pixel (LensReference). Logged.
 	 */
 	@ClientGameTest
-	fun ClientGameTestContext.farFieldLens() {
-		if (!ClientTestInput.selected("farFieldLens")) return
-		settleClient("Far field, start")
+	fun ClientGameTestContext.captureLens() {
+		if (!ClientTestInput.selected("captureLens")) return
+		settleClient("Capture lens, start")
 		runOnClient { minecraft ->
 			minecraft.options.hideGui = true
 			SpacetimeDebugRenderer.hidden = true
@@ -2579,10 +2607,10 @@ class LensClientGameTest {
 		withTestWorld {
 			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear", "relativity testscene ground", "tick freeze")) command(command)
 			try {
-				for ((name, at) in listOf("side" to "-14.5 -54 0.5 -90 10", "above" to "-9.5 -46 0.5 -90 45")) {
+				for ((name, at) in listOf("side" to "-14.5 -54 0.5 -90 10", "above" to "-9.5 -46 0.5 -90 45", "close" to "-7.5 -55 0.5 -90 5")) {
 					command("tp @a $at")
 					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
-					repeat(2) { settleClient("Far field, $name") }
+					repeat(2) { settleClient("Capture lens, $name") }
 					waitTicks(40)
 					val columns = 120
 					val rows = computeOnClient { columns * it.window.height / it.window.width }
@@ -2594,19 +2622,12 @@ class LensClientGameTest {
 						}
 						for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
 					}
-					for (far in listOf(0.0, 48.0, 24.0)) {
-						runOnClient { VertexLens.farField = far; BlackHoleLens.timeGpu = true }
-						repeat(2) { settleClient("Far field, $name, $far") }
-						waitTicks(20)
-						val millis = (0 until 20).map { waitTick(); computeOnClient { BlackHoleLens.gpuMillis } }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] }
-						val shot = takeScreenshot("far_field_${name}_${far.toInt()}")
-						CreateRelativity.LOGGER.info("Far field, {}, from {} blocks: {}% of pixels in the wrong class, {}% counting white and blue as one; post pass {} ms, {} fps",
-							name, far.toInt(), "%.1f".format(LensReference.compare(reference, shot) * 100), "%.1f".format(LensReference.compare(reference, shot, floorAsOne = true) * 100),
-							"%.2f".format(millis), computeOnClient { it.fps })
-					}
+					val shot = takeScreenshot("capture_$name")
+					CreateRelativity.LOGGER.info("Capture lens, {}: {}% of pixels in the wrong class; {} fps", name,
+						"%.1f".format(LensReference.compare(reference, shot) * 100), computeOnClient { it.fps })
+					withoutCapture("Capture lens, $name", "capture_$name", reference)
 				}
 			} finally {
-				runOnClient { VertexLens.farField = 0.0; BlackHoleLens.timeGpu = false }
 				command("tick unfreeze")
 			}
 		}
@@ -2745,9 +2766,8 @@ class LensClientGameTest {
 					val label = if (field) (if (weak) "field_vertex_only" else "field") else "tracer"
 					val shot = takeScreenshot("two_holes_${name}_$label")
 					if (!weak) wrong[field] = LensReference.compare(reference, shot)
-					CreateRelativity.LOGGER.info("Two holes, {} ({}{}): {}% of pixels in the wrong class, {}% counting white and blue as one; GPU lens {} ms, {} fps",
-						name, label, if (field && !composed) ", NOT composed" else "", "%.1f".format(LensReference.compare(reference, shot) * 100),
-						"%.1f".format(LensReference.compare(reference, shot, floorAsOne = true) * 100), "%.2f".format(millis), fps)
+					CreateRelativity.LOGGER.info("Two holes, {} ({}{}): {}% of pixels in the wrong class; GPU lens {} ms, {} fps",
+						name, label, if (field && !composed) ", NOT composed" else "", "%.1f".format(LensReference.compare(reference, shot) * 100), "%.2f".format(millis), fps)
 				}
 				if (wrong[true]!! > wrong[false]!! + 0.02) failures += "$name: field lens ${"%.1f".format(wrong[true]!! * 100)}% wrong, tracer ${"%.1f".format(wrong[false]!! * 100)}%"
 			}
@@ -2824,13 +2844,10 @@ class LensClientGameTest {
 			val median = DoubleArray(1) { k -> samples.map { it[k] }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] } }
 			val shot = takeScreenshot("ground_${name}_$mode")
 			val wrong = LensReference.compare(reference, shot)
-			// (And with white and blue as one class: the Einstein ring's checkerboard, finer than the reference's grid, is
-			// compared too, and what it measures is whether there's floor there at all: gaps.)
-			val gaps = LensReference.compare(reference, shot, floorAsOne = true)
 			wrongBy[mode] = wrong
 			CreateRelativity.LOGGER.info(
-				"Lens vs reference, {} ({}): {}% of pixels in the wrong class, {}% counting white and blue as one; GPU lens {} ms (slots blending {})",
-				name, mode, "%.1f".format(wrong * 100), "%.1f".format(gaps * 100), "%.2f".format(median[0]), computeOnClient { KerrSlots.blending },
+				"Lens vs reference, {} ({}): {}% of pixels in the wrong class; GPU lens {} ms (slots blending {})",
+				name, mode, "%.1f".format(wrong * 100), "%.2f".format(median[0]), computeOnClient { KerrSlots.blending },
 			)
 		}
 		runOnClient { BlackHoleLens.rawFrame = false; KerrSlots.enabled = true }

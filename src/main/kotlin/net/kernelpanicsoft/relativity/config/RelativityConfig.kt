@@ -169,14 +169,6 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				default = KGradient.even(KColor.ofRgb(0xFFFFFF), KColor.ofRgb(0x9FD8FF), KColor.ofRgb(0x7B4DFF), KColor.ofRgb(0x2A0A5E)),
 			)
 		}
-
-		object Debug : CategorySpec(Component.translatable("config.create_relativity.debug"), "debug") {
-			val showRadii by boolean(
-				title = Component.translatable("config.create_relativity.debug.show_radii"),
-				comment = Component.translatable("config.create_relativity.debug.show_radii.comment"),
-				default = true,
-			)
-		}
 	}
 
 	/**

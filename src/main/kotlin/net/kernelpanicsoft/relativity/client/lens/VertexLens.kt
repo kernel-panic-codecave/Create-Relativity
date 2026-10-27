@@ -447,14 +447,6 @@ object VertexLens {
 		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || approximated || perFrameSecond || (slotted && KerrSlots.secondBlending))
 	}
 
-	/**
-	 * Where the far field starts (blocks from the camera; 0: none), with the field lens: geometry past it is drawn where
-	 * it is and lensed per pixel by the post pass, every image order (vertex_lens_core.glsl relativityFarField).
-	 * Prototype: off by default.
-	 */
-	@JvmField
-	var farField = 0.0
-
 	/** Several sources composed in the shaders (the field lens) where it has modules for them; off, the per-frame tracer. */
 	@JvmField
 	var fieldLens = true
@@ -690,12 +682,13 @@ object VertexLens {
 	}
 
 	/**
-	 * [28..44]: the field lens's sources (vertex_lens_core.glsl's relativityFieldCount and on), when [fieldSky]: each
+	 * [28..44]: the field lens's sources (vertex_lens_core.glsl's relativityFieldCount and on), when [fieldSky], and
+	 * whether the post pass fills what the pixel check throws away from the scene capture ([28].y, relativityCaptureFills): each
 	 * centre in view space and its type (1 hole, 2 mass), then its parameters (hole: r_s; mass: mass, softening).
 	 */
 	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val sources = if (fieldSky) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
-		data.put(sources.size.toFloat()).put(if (fieldSky) farField.toFloat() else 0f).put(0f).put(0f)
+		data.put(sources.size.toFloat()).put(if (SceneCapture.enabled && fieldSky && (sources.isNotEmpty() || tubeSources.isNotEmpty() || bubbleSources.isNotEmpty())) 1f else 0f).put(0f).put(0f)
 		for (source in sources) {
 			val (centre, type, params) = when (source) {
 				is BlackHole -> Triple(source.center.let { org.joml.Vector3d(it.x, it.y, it.z) }, 1f, floatArrayOf(source.schwarzschildRadius.toFloat(), 0f))
