@@ -27,7 +27,6 @@
     "client.network.PacketEntityIdAccessors$SectionBlocks",
     "client.GameRendererPickMixin",
     "client.FrustumMixin",
-    "client.CompositePostPipelineMixin",
     "client.flywheel.VisualizationManagerImplMixin",
     "client.flywheel.CompilationMixin",
     "client.flywheel.ProgramLinkerMixin",

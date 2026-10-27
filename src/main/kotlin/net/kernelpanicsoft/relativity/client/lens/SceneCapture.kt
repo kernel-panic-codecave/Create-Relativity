@@ -17,8 +17,9 @@ import org.lwjgl.opengl.GL30
 
 /**
  * The lens's rough capture: the level round the camera, unlensed, on the six faces of a cube at low resolution, for the
- * light the vertex lens can't place (the Einstein ring's flip, higher images, the seams at tubes' and bubbles' walls):
- * the post pass follows such a pixel's light back past every source and looks it up here by where it ends heading.
+ * lens's asymptotes, where triangles can't follow the mapping (the Einstein ring's caustic, the photon ring, the
+ * shadow's edge): the post pass follows such a pixel's light back past every source and looks it up here by where it
+ * ends heading.
  * Drawn by the level's own renderer (Veil's perspective render: translucent passes too, and with Iris the pack, which
  * runs a pipeline of its own for it), one face a frame; a face a few frames old barely shows in what's smeared that thin.
  * Faces side by side in one framebuffer, its colour [TEXTURE] and depth [DEPTH] (black_hole_lens.fsh's SceneCapture,

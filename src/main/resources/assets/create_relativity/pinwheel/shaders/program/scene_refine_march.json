@@ -1,4 +1,0 @@
-{
-  "vertex": "veil:blit_screen",
-  "fragment": "create_relativity:scene_refine_march"
-}

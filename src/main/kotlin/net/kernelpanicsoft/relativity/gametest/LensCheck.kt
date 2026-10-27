@@ -12,23 +12,21 @@ import org.lwjgl.opengl.GL30
 import org.lwjgl.system.MemoryStack
 
 /**
- * Debug (GameTests): runs the vertex lens's bend on the GPU for a list of view-space points (kerr_solve_check.fsh), so
- * its Kerr solve can be checked point by point. Uses the block and tables the vertex lens set up this frame.
+ * Debug (GameTests): runs the vertex lens's maths on the GPU for a list of view-space points (lens_check.fsh), so it
+ * can be checked point by point. Uses the block and tables the vertex lens set up this frame.
  */
-object KerrSolveCheck {
+object LensCheck {
 	private var program = 0
 
-	/** Per point: the solve's outcome (1 found, 0 Schwarzschild, -1 hidden, 2 none), bent NDC x, y, and 1 if hidden. */
 	/**
-	 * With [guesses] (view-space directions, one per point): the solve run from each guess (code as [direct]; y the angle
-	 * from the guess to the image found, w the magnification).
+	 * Per point: 1 placed or -1 hidden, and its bent NDC x, y. With [why]: why it's hidden (lens_check.fsh); [tubes]:
+	 * the tubes' aim; [sky]: where the field lens's light from the camera along it ends heading.
 	 */
-	fun run(points: List<FloatArray>, projection: Matrix4f, direct: Boolean = false, mapAlpha: Boolean = false, guesses: List<FloatArray>? = null, why: Boolean = false, exact: Boolean = false, tubes: Boolean = false, sky: Boolean = false): List<FloatArray> {
+	fun run(points: List<FloatArray>, projection: Matrix4f, why: Boolean = false, tubes: Boolean = false, sky: Boolean = false): List<FloatArray> {
 		if (program == 0) program = link() ?: return emptyList()
 		VertexLens.linkProgram(program)
 		val width = points.size
 		val input = GL11.glGenTextures()
-		val guessTexture = GL11.glGenTextures()
 		val output = GL11.glGenTextures()
 		val framebuffer = GL30.glGenFramebuffers()
 		val vao = GL30.glGenVertexArrays()
@@ -39,16 +37,6 @@ object KerrSolveCheck {
 			data.flip()
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, input)
 			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, width, 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, data)
-			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
-			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
-			val guessData = stack.mallocFloat(width * 4)
-			for (i in 0 until width) {
-				val g = guesses?.get(i) ?: floatArrayOf(0f, 0f, -1f)
-				guessData.put(g[0]).put(g[1]).put(g[2]).put(0f)
-			}
-			guessData.flip()
-			GL11.glBindTexture(GL11.GL_TEXTURE_2D, guessTexture)
-			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_RGBA32F, width, 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, guessData)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
 			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, output)
@@ -66,14 +54,10 @@ object KerrSolveCheck {
 			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE0)
 			GL11.glBindTexture(GL11.GL_TEXTURE_2D, input)
 			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Points"), 0)
-			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE1)
-			GL11.glBindTexture(GL11.GL_TEXTURE_2D, guessTexture)
-			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Guesses"), 1)
-			GlStateManager._activeTexture(org.lwjgl.opengl.GL13.GL_TEXTURE0)
 			val matrix = stack.mallocFloat(16)
 			projection.get(matrix)
 			GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(program, "Projection"), false, matrix)
-			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (sky) 8 else if (tubes) 7 else if (exact) 6 else if (why) 4 else if (guesses != null) 3 else if (mapAlpha) 2 else if (direct) 1 else 0)
+			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (sky) 8 else if (tubes) 7 else if (why) 4 else 0)
 			GL30.glBindVertexArray(vao)
 			GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
 			val out = stack.mallocFloat(width * 4)
@@ -85,7 +69,6 @@ object KerrSolveCheck {
 			GlStateManager._viewport(viewport[0], viewport[1], viewport[2], viewport[3])
 		}
 		GL11.glDeleteTextures(input)
-		GL11.glDeleteTextures(guessTexture)
 		GL11.glDeleteTextures(output)
 		GL30.glDeleteFramebuffers(framebuffer)
 		GL30.glDeleteVertexArrays(vao)
@@ -97,22 +80,22 @@ object KerrSolveCheck {
 		fun text(path: String) = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path)).orElse(null)
 			?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
 		val core = text("pinwheel/shaders/include/vertex_lens_core.glsl") ?: return null
-		val body = text("shaders/relativity/kerr_solve_check.fsh") ?: return null
+		val body = text("shaders/relativity/lens_check.fsh") ?: return null
 		fun compile(type: Int, source: String): Int {
 			val shader = GL20.glCreateShader(type)
 			GL20.glShaderSource(shader, source)
 			GL20.glCompileShader(shader)
-			if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) CreateRelativity.LOGGER.error("KerrSolveCheck: {}", GL20.glGetShaderInfoLog(shader))
+			if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) CreateRelativity.LOGGER.error("LensCheck: {}", GL20.glGetShaderInfoLog(shader))
 			return shader
 		}
 		val vertex = compile(GL20.GL_VERTEX_SHADER, "#version 330 core\nvoid main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }")
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n#define RELATIVITY_PATHS\n$core\n$body")
+		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n$core\n$body")
 		val id = GL20.glCreateProgram()
 		GL20.glAttachShader(id, vertex)
 		GL20.glAttachShader(id, fragment)
 		GL20.glLinkProgram(id)
 		if (GL20.glGetProgrami(id, GL20.GL_LINK_STATUS) != GL11.GL_TRUE) {
-			CreateRelativity.LOGGER.error("KerrSolveCheck link: {}", GL20.glGetProgramInfoLog(id))
+			CreateRelativity.LOGGER.error("LensCheck link: {}", GL20.glGetProgramInfoLog(id))
 			return null
 		}
 		return id

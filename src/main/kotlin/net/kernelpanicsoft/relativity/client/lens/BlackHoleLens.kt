@@ -20,25 +20,20 @@ import net.minecraft.world.level.Level
 import net.neoforged.neoforge.client.event.ClientTickEvent
 import net.neoforged.neoforge.common.NeoForge
 import org.joml.Matrix4f
-import org.joml.Quaternionf
-import org.joml.Vector3f
 import org.joml.Vector4f
 import java.util.concurrent.CompletableFuture
 
 /**
- * The post pass of the black-hole lens, as a Veil post pipeline (black_hole_lens.json), after the vertex lens
- * ([VertexLens]) has drawn the world where its light appears: the shadow over what lies beyond the hole, the
- * accretion disk, and in the sky (where nothing was drawn) each view ray's bent path (lens_scene.glsl; the nearest
- * spinning hole through Kerr) to the sky (never geometry: the vertex lens draws all of that): the Einstein ring and the
- * images round it. The paths come from quarter-resolution tables (kerr_table.fsh, scene_table.fsh), which the lens
- * pass interpolates, marching per pixel only where neighbouring entries disagree. [SchwarzschildLens]' table (built
- * once at startup, normalised by r_s) gives the shadow's edge.
+ * The post pass of the lens, as a Veil post pipeline (black_hole_lens.json), after the vertex lens ([VertexLens]) has
+ * drawn the world where its light appears: in every pixel it left empty, the light followed back past every source by
+ * the field lens, black where a hole captures it (the shadow), else looked up in [SceneCapture] or the sky; then the
+ * nearest hole's accretion disk. [SchwarzschildLens]' escape table (built once at startup, normalised by r_s) is the
+ * field lens's for holes. Every hole is lensed as a non-spinning one.
  */
 object BlackHoleLens {
 	val PIPELINE = CreateRelativity.id("black_hole_lens")
 	val LOOKUP_TEXTURE = CreateRelativity.id("lens_lookup")
 	private val SHADER = CreateRelativity.id("black_hole_lens")
-	private val TABLE_SHADERS = listOf(CreateRelativity.id("kerr_table"), CreateRelativity.id("scene_table"), CreateRelativity.id("scene_refine"), CreateRelativity.id("scene_refine_march"))
 
 	/** Must match LUT_SIZE in black_hole_lens.fsh. */
 	private const val LUT_WIDTH = 512
@@ -50,59 +45,20 @@ object BlackHoleLens {
 	 */
 	private const val MIN_BENDING = 1e-3
 
-	/** Must match MAX_HOLES in black_hole_lens.fsh. */
+	/** Must match MAX_HOLES in lens_scene.glsl. */
 	private const val MAX_HOLES = 8
 
 	private var table: CompletableFuture<FloatArray>? = null
 	private var textureReady = false
 	private val holeUniforms = Array(MAX_HOLES) { Vector4f() }
-	private val spinUniforms = Array(MAX_HOLES) { Vector4f() }
-
-	/** Must match MAX_SOURCES in kerr.glsl. */
-	const val MAX_SOURCES = 8
-	private val sourceUniforms = Array(3 * MAX_SOURCES) { Vector4f() }
-
-	/** Paints each pixel by how its bent path ended, every pixel marched (black_hole_lens.fsh, LensMode 1); only GameTests change it. */
-	@JvmField
-	var marchDebug = false
-
-	/** Paints each pixel by its full-resolution march's step count (LensMode 2, white at 64); only GameTests change it. */
-	@JvmField
-	var marchStepsDebug = false
-
-	/** Marches every pixel instead of using the scene table (the reference); only GameTests change it. */
-	@JvmField
-	var marchEveryPixel = false
 
 	/** Passes the frame through untouched (to see what vertex lensing drew); only GameTests change it. */
 	@JvmField
 	var rawFrame = false
 
-	/** Paints pixels re-marched at full resolution (LensMode 6): red scene, blue Kerr; only GameTests change it. */
-	@JvmField
-	var remarchDebug = false
-
-	/** Disables parts of the march for profiling (lens_scene.glsl's ProfileFlags); only GameTests change it. */
+	/** Leaves parts of the pass out for profiling (lens_scene.glsl's ProfileFlags); only GameTests change it. */
 	@JvmField
 	var profileFlags = 0
-
-	/** With [rawFrame], also skips the tables (LensMode 5): the pipeline's fixed cost, for profiling. */
-	@JvmField
-	var skipTables = false
-
-	/** How the nearest spinning hole's rays are found; only GameTests change it. */
-	@JvmField
-	var kerrMode = KerrMode.TABLE
-
-	enum class KerrMode {
-		/** Every pixel marched at full resolution (the reference). */
-		FULL_MARCH,
-		TABLE,
-		/** [TABLE], with the pixels marched at full resolution painted red. */
-		TABLE_DEBUG,
-		/** The table's error against a full march, per pixel, as colour (see black_hole_lens.fsh). */
-		TABLE_ERROR,
-	}
 
 	/** GPU time of the whole lens pipeline in the latest finished frame (ms), measured while [timeGpu] is set; else NaN. */
 	@Volatile
@@ -141,14 +97,6 @@ object BlackHoleLens {
 	private fun onClientTick() {
 		QuadSubdivision.tick()
 		val minecraft = Minecraft.getInstance()
-		// Once loaded (the title screen): the vertex lens's own programs, which the driver takes a while to compile.
-		if (!warmedUp && minecraft.overlay == null) {
-			warmedUp = true
-			val start = System.nanoTime()
-			PathTableSolver.warmUp()
-			ImageMapSolver.warmUp()
-			CreateRelativity.LOGGER.info("Lens programs compiled in {} ms", (System.nanoTime() - start) / 1_000_000)
-		}
 		if (!textureReady) {
 			val data = table?.getNow(null) ?: return
 			val texture = LensLookupTexture(LUT_WIDTH, LUT_HEIGHT, data)
@@ -164,44 +112,6 @@ object BlackHoleLens {
 		val post = VeilRenderSystem.renderer().postProcessingManager
 		if (wanted && !post.isActive(PIPELINE)) post.add(PIPELINE)
 		else if (!wanted && post.isActive(PIPELINE)) post.remove(PIPELINE)
-	}
-
-	private var warmedUp = false
-
-	/**
-	 * The tables' view (lens_scene.glsl's TableToWorld / TableFromWorld): the screen's, [SCALE] times wider each way, in
-	 * an orientation kept while every screen corner stays inside it, so the camera turning within it reuses the tables;
-	 * turned to the camera's when it doesn't.
-	 */
-	object TableFrame {
-		const val SCALE = 1.35f
-		var rotation = Quaternionf()
-			private set
-		val toWorld = Matrix4f()
-		val fromWorld = Matrix4f()
-		private val projection = Matrix4f()
-
-		fun update(view: Quaternionf, screen: Matrix4f) {
-			val wide = Matrix4f(screen)
-			wide.m00(screen.m00() / SCALE)
-			wide.m11(screen.m11() / SCALE)
-			val screenToWorld = Matrix4f(screen).rotate(view).invert()
-			val changedProjection = !wide.equals(projection, 1e-6f)
-			var covered = !changedProjection
-			if (covered) {
-				for ((x, y) in listOf(-1f to -1f, 1f to -1f, -1f to 1f, 1f to 1f, 0f to 0f)) {
-					val d = org.joml.Vector4f(x, y, 1f, 1f).mul(screenToWorld)
-					val dir = Vector3f(d.x / d.w, d.y / d.w, d.z / d.w).normalize()
-					val clip = org.joml.Vector4f(dir.x, dir.y, dir.z, 1f).mul(fromWorld)
-					if (clip.w <= 0f || kotlin.math.abs(clip.x / clip.w) > 1f || kotlin.math.abs(clip.y / clip.w) > 1f) covered = false
-				}
-			}
-			if (covered) return
-			rotation = Quaternionf(view)
-			projection.set(wide)
-			fromWorld.set(wide).rotate(view)
-			toWorld.set(fromWorld).invert()
-		}
 	}
 
 	/** True while the lens pipeline is running this frame. */
@@ -223,24 +133,43 @@ object BlackHoleLens {
 	 * at its ISCO, outer edge four times that, which way it turns, and time for the disk's rotating turbulence.
 	 */
 	private fun uploadDisk(uniform: (String, ShaderUniformAccess.() -> Unit) -> Unit, level: Level, hole: BlackHole?, minecraft: Minecraft) {
-		// Where the disk is drawn as geometry (DiskMesh), here only in sky pixels: the holes in the mesh's images.
-		uniform("DiskFillOnly") { setInt(if (DiskMesh.drawsDisk(hole)) 1 else 0) }
-		// The colour scheme (DiskMesh.shade's), so what's filled matches the mesh.
 		uniform("DiskScheme") { setInt(RelativityConfig.Client.Render.diskScheme.ordinal) }
-		val stops = DiskMesh.schemeGradient().take(8)
-		uniform("DiskGradient") { setVectors(*Array(8) { k -> stops.getOrNull(k)?.let { org.joml.Vector4f(it[0].toFloat(), it[1].toFloat(), it[2].toFloat(), 1f) } ?: org.joml.Vector4f(0f) }) }
+		val stops = schemeGradient().take(8)
+		uniform("DiskGradient") { setVectors(*Array(8) { k -> stops.getOrNull(k)?.let { Vector4f(it[0].toFloat(), it[1].toFloat(), it[2].toFloat(), 1f) } ?: Vector4f(0f) }) }
 		if (hole == null || hole.accretionRate <= 0.0) {
 			uniform("Disk") { setVector(0f, 0f, 0f, 0f) }
 			return
 		}
 		val ratio = hole.accretionRate / RelativityConfig.eddingtonRate(hole.schwarzschildRadius)
-		val inner = hole.equatorialExtent(hole.isco(prograde = true))
+		// (Lensed as non-spinning: the ISCO at 3 r_s.)
+		val inner = 3.0 * hole.schwarzschildRadius
 		uniform("Disk") {
 			setVector(ratio.coerceIn(0.05, 2.0).toFloat(), inner.toFloat(), (4.0 * inner).toFloat(), if (hole.spin < 0.0) -1f else 1f)
 		}
 		val c = RelativityConfig.speedOfLight(level.dimension())
 		val seconds = (level.gameTime % 72000L + minecraft.timer.getGameTimeDeltaPartialTick(false)) / 20.0
 		uniform("DiskTime") { setFloat((seconds * c).toFloat()) }
+	}
+
+	/** The disk's colour scheme's colours, hottest first (RGB 0-1): the custom gradient sampled evenly, else the film look's. */
+	private fun schemeGradient(): List<DoubleArray> = when (RelativityConfig.Client.Render.diskScheme) {
+		// (Its stops can sit anywhere.)
+		RelativityConfig.DiskScheme.CUSTOM -> RelativityConfig.Client.Render.diskGradient.let { g -> List(8) { k -> g.sample(k / 7f).let { c -> doubleArrayOf(c.red / 255.0, c.green / 255.0, c.blue / 255.0) } } }
+		else -> MOVIE_GRADIENT
+	}
+
+	/** The film look's colours, hottest first: white-hot, gold, orange, ember. */
+	private val MOVIE_GRADIENT = listOf(0xFFF3DC, 0xFFC56A, 0xFF7A1C, 0x6A1E04).map { c ->
+		doubleArrayOf(((c shr 16) and 255) / 255.0, ((c shr 8) and 255) / 255.0, (c and 255) / 255.0)
+	}
+
+	/** A 1 x 1 x 1 3D texture for 3D samplers with nothing to read yet (one left unbound invalidates the draw). */
+	private val placeholder3d: Int by lazy {
+		val id = GL11.glGenTextures()
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, id)
+		GL12.glTexImage3D(GL12.GL_TEXTURE_3D, 0, GL11.GL_RGBA8, 1, 1, 1, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, null as java.nio.ByteBuffer?)
+		GL11.glBindTexture(GL12.GL_TEXTURE_3D, 0)
+		id
 	}
 
 	/** Starts this frame's GPU timer query, first reading the one from two frames ago (long finished by now). */
@@ -263,14 +192,17 @@ object BlackHoleLens {
 		return SpacetimeField.blackHoles(level).filter { it.schwarzschildRadius > MIN_BENDING * it.center.distanceTo(camera) }
 	}
 
-	/** Sources other than holes that bend light noticeably as seen from the camera (as holes: r_s 2|m| for a mass). */
+	/**
+	 * Sources other than holes that bend light noticeably as seen from the camera (as holes: r_s 2|m| for a mass), and
+	 * that the field lens has modules for (a round bubble it hasn't: left out).
+	 */
 	fun visibleSources(level: Level): List<FieldSource> {
 		val camera = Minecraft.getInstance().gameRenderer.mainCamera.position
 		val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
 		return SpacetimeField.fieldSources(level).filter { source ->
 			when (source) {
 				is FieldSource.Mass -> 2.0 * kotlin.math.abs(source.mass) > MIN_BENDING * source.center.distance(at)
-				is FieldSource.Bubble -> source.center.distance(at) < 4.0 * Minecraft.getInstance().gameRenderer.renderDistance + source.radius
+				is FieldSource.Bubble -> false
 				is BlackHole -> source.schwarzschildRadius > MIN_BENDING * source.center.distanceTo(camera)
 				// (Tubes: the field lens's tube module, in view out to the render distance.)
 				is FieldSource.Tube -> source.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.radius
@@ -281,41 +213,6 @@ object BlackHoleLens {
 	}
 
 	/**
-	 * Every source as kerr.glsl's Sources (camera-relative, game axes): [holes] first, then [others]. Whether light
-	 * then needs the general tracer (a spinning hole, or anything but holes).
-	 */
-	fun packSources(holes: List<BlackHole>, others: List<FieldSource>, camera: net.minecraft.world.phys.Vec3, into: Array<Vector4f>): Pair<Int, Boolean> {
-		var count = 0
-		var general = false
-		fun put(center: org.joml.Vector3dc, type: Float, a: Vector4f.() -> Unit, b: Vector4f.() -> Unit = { set(0f) }) {
-			if (count >= MAX_SOURCES) return
-			into[3 * count].set((center.x() - camera.x).toFloat(), (center.y() - camera.y).toFloat(), (center.z() - camera.z).toFloat(), type)
-			into[3 * count + 1].a()
-			into[3 * count + 2].b()
-			count += 1
-		}
-		for (hole in holes) {
-			val m = hole.mass
-			put(org.joml.Vector3d(hole.x, hole.y, hole.z), 1f, { set(m.toFloat(), (hole.spin * m).toFloat(), 0f, 0f) })
-			if (kotlin.math.abs(hole.spin) >= 0.05) general = true // kerr.glsl MIN_KERR_SPIN
-		}
-		for (source in others) {
-			// (Tubes aren't the tracer's: the field lens's.)
-			if (source !is FieldSource.Tube && source !is FieldSource.Krasnikov && source !is FieldSource.Ellipsoid) general = true
-			when (source) {
-				is FieldSource.Mass -> put(source.center, 2f, { set(source.mass.toFloat(), source.softening.toFloat(), 0f, 0f) })
-				is FieldSource.Bubble -> {
-					val n = org.joml.Vector3d(source.direction).normalize()
-					put(source.center, 3f, { set(source.radius.toFloat(), (8.0 / source.radius).toFloat(), source.speed.toFloat(), 0f) }, { set(n.x.toFloat(), n.y.toFloat(), n.z.toFloat(), 0f) })
-				}
-				is BlackHole -> put(org.joml.Vector3d(source.x, source.y, source.z), 1f, { set(source.mass.toFloat(), (source.spin * source.mass).toFloat(), 0f, 0f) })
-				is FieldSource.Tube, is FieldSource.Ellipsoid, is FieldSource.Krasnikov -> {}
-			}
-		}
-		return count to general
-	}
-
-	/**
 	 * Uploads the nearest holes, relative to the camera, right before our pass runs. The pass runs at the end
 	 * of level rendering ("after_level" in the pipeline), before the hand is drawn and while depth is intact.
 	 */
@@ -323,17 +220,11 @@ object BlackHoleLens {
 		if (event.name != PIPELINE) return
 		if (timeGpu && !VeilLevelPerspectiveRenderer.isRenderingPerspective()) beginTimer()
 		val pipeline = event.pipeline
-		// Uniforms set through the pipeline reach the lens stage but not reliably the table stages (the Kerr table
-		// kept a growing hole's old radius), so the tables' are also set on their shaders directly.
-		val tables = TABLE_SHADERS.mapNotNull { VeilRenderSystem.renderer().shaderManager.getShader(it) }
-		fun uniform(name: String, set: ShaderUniformAccess.() -> Unit) {
-			pipeline.getUniformSafe(name).set()
-			for (table in tables) table.getUniform(name)?.set()
-		}
+		fun uniform(name: String, set: ShaderUniformAccess.() -> Unit) = pipeline.getUniformSafe(name).set()
 		if (VeilLevelPerspectiveRenderer.isRenderingPerspective()) {
 			// Veil runs stage passes inside perspective renders (other level views) too; they stay unlensed.
 			uniform("HoleCount") { setInt(0) }
-			uniform("SourceCount") { setInt(0) }
+			uniform("LensMode") { setInt(4) }
 			return
 		}
 		val minecraft = Minecraft.getInstance()
@@ -345,23 +236,14 @@ object BlackHoleLens {
 				(hole.x - camera.x).toFloat(), (hole.y - camera.y).toFloat(), (hole.z - camera.z).toFloat(),
 				hole.schwarzschildRadius.toFloat(),
 			)
-			spinUniforms[i].set(hole.spin.toFloat(), 0f, 0f, 0f)
 		}
 		uploadDisk(::uniform, level, holes.firstOrNull(), minecraft)
 		uniform("HoleCount") { setInt(holes.size) }
-		// A lone hole's shadow is drawn as geometry (HorizonMesh, exact, following the camera): this pass leaves it be.
-		uniform("ShadowDrawn") { setInt(if (HorizonMesh.enabled && VertexLens.loneHole && holes.isNotEmpty() && !VertexLens.fieldSky) 1 else 0) }
 		uniform("Holes") { setVectors(*holeUniforms) }
-		uniform("HoleSpins") { setVectors(*spinUniforms) }
-		val (sourceCount, general) = packSources(holes, visibleSources(level), camera, sourceUniforms)
-		uniform("SourceCount") { setInt(sourceCount) }
 		uniform("SceneCaptureReady") { setInt(SceneCapture.ready) }
 		uniform("SceneCaptureFaces") { setVectors(*SceneCapture.columns()) }
 		uniform("SceneCaptureRange") { setVector(SceneCapture.NEAR, SceneCapture.far) }
-		uniform("Sources") { setVectors(*sourceUniforms) }
-		uniform("GeneralSpacetime") { setInt(if (general) 1 else 0) }
-		uniform("KerrTableEnabled") { setInt(kerrMode.ordinal) }
-		uniform("LensMode") { setInt(if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0) }
+		uniform("LensMode") { setInt(if (rawFrame) 4 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
 		pipeline.getUniformSafe("SkyColor").setVector(sky.x.toFloat(), sky.y.toFloat(), sky.z.toFloat())
 		uniform("LensFogColor") { setVector(fogColor[0], fogColor[1], fogColor[2], fogColor[3]) }
@@ -369,66 +251,20 @@ object BlackHoleLens {
 		uniform("LensFogEnd") { setFloat(fogEnd) }
 		uniform("LensFogShape") { setInt(fogShape) }
 		uniform("ProfileFlags") { setInt(profileFlags) }
-		uniform("RenderDistance") { setFloat(minecraft.gameRenderer.renderDistance) }
-
-		// The tables' own view: kept while the screen stays inside it, so turning reuses them.
-		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
-		TableFrame.update(view, VertexLens.lastProjection)
-		uniform("TableToWorld") { setMatrix(TableFrame.toWorld) }
-		uniform("TableFromWorld") { setMatrix(TableFrame.fromWorld) }
-		uniform("TableScale") { setFloat(TableFrame.SCALE) }
 		// The last pass's touch-up: a light sharpen.
 		uniform("AaSharpen") { setFloat(0.25f) }
 
-		// Whether the tables can be last frame's (TableCache): everything they read, as a key (the table frame's
-		// orientation, not the camera's: turning inside it changes nothing they hold).
-		run {
-			val rotation = TableFrame.rotation
-			val key = ArrayList<Float>(200)
-			fun add(v: Double) {
-				val high = v.toFloat()
-				key += high
-				key += (v - high).toFloat() // (a double's low part: positions far from the origin)
-			}
-			add(camera.x); add(camera.y); add(camera.z)
-			key += rotation.x; key += rotation.y; key += rotation.z; key += rotation.w
-			key += LensResolution.scale() // (a change rebuilds the tables at the new size, empty)
-			val projection = FloatArray(16).also { VertexLens.lastProjection.get(it) }
-			for (v in projection) key += v
-			for (v in holeUniforms) { key += v.x; key += v.y; key += v.z; key += v.w }
-			for (v in spinUniforms) key += v.x
-			key += holes.size.toFloat()
-			key += sourceCount.toFloat()
-			for (v in sourceUniforms) { key += v.x; key += v.y; key += v.z; key += v.w }
-			val disk = holes.firstOrNull()?.takeIf { it.accretionRate > 0.0 }?.let { it.equatorialExtent(it.isco(prograde = true)) } ?: 0.0
-			key += disk.toFloat()
-			key += fogStart; key += fogEnd; key += fogShape.toFloat()
-			key += minecraft.gameRenderer.renderDistance
-			key += minecraft.window.width.toFloat(); key += minecraft.window.height.toFloat()
-			key += profileFlags.toFloat(); key += kerrMode.ordinal.toFloat()
-			key += (if (remarchDebug) 6 else if (rawFrame && skipTables) 5 else if (rawFrame) 4 else if (marchEveryPixel) 3 else if (marchStepsDebug) 2 else if (marchDebug) 1 else 0).toFloat()
-			TableCache.update(key.toFloatArray())
-		}
-
 		// Every sampler gets a real texture, whatever the mode: Veil binds missing ones to a placeholder on unit 0 and
 		// renumbers the rest, and a mismatch there (a 3D sampler on a 2D texture) makes the whole draw invalid.
-		KerrImageMap.ensureTexture()
 		val lens = VeilRenderSystem.renderer().shaderManager.getShader(SHADER)
-		// The lens pass runs the vertex lens's maths (where the world drew a traced point): its block, and its tables
-		// through Veil (which numbers this program's samplers itself).
+		// The lens pass runs the vertex lens's maths (the field lens): its block, and its tables through Veil (which
+		// numbers this program's samplers itself).
 		lens?.let {
 			VertexLens.linkProgram(it.program)
-			KerrPaths.ensureTexture()
-			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
-			it.setTexture("RelativityKerrPaths", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
-			KerrImageMap.ensureTexture()
-			it.setTexture("RelativityKerrMap", GL12.GL_TEXTURE_3D, KerrImageMap.texture)
+			it.setTexture("RelativityImages", GL12.GL_TEXTURE_3D, VertexLens.texture.takeIf { id -> id != 0 } ?: placeholder3d)
 			// (The field lens's holes: the escape table, here as the vertex shaders read it.)
 			escapeTexture().takeIf { id -> id != 0 }?.let { id -> it.setTexture("RelativityEscape", GL11.GL_TEXTURE_2D, id) }
-			// (Every 3D sampler it declares needs a 3D texture, even unread: one left on unit 0, with the block atlas
-			// there, invalidates the draw, and the frame shows the atlas.)
-			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
-			it.setTexture("RelativityKerrSecondMap", GL12.GL_TEXTURE_3D, KerrSlots.secondTexture.takeIf { id -> id != 0 } ?: KerrImageMap.texture)
+			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: placeholder3d)
 		}
 	}
 }

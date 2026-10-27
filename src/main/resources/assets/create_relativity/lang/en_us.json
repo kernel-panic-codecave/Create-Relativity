@@ -35,8 +35,6 @@
   "config.create_relativity.physics.planck_length": "Planck Length (blocks)",
   "config.create_relativity.physics.planck_length.comment": "Sets ħ, and with it Hawking evaporation: a hole evaporates in 5120π·M³/(l_P²·c) seconds (M = r_s/2) and vanishes in a burst when r_s reaches this.",
   "config.create_relativity.black_holes": "Black Holes",
-  "config.create_relativity.render.lens_resolution": "Lens Resolution (%)",
-  "config.create_relativity.render.lens_resolution.comment": "Resolution of the lens's light tables, as a percentage of the default (0: picked for your GPU). Lower is faster with softer edges near black holes; higher is sharper and costs roughly its square.",
   "config.create_relativity.black_holes.eat_budget": "Blocks Eaten per Tick",
   "config.create_relativity.black_holes.eat_budget.comment": "Most blocks inside a horizon removed per tick, per hole (their mass is swallowed). Growth needs the relativityBlackHoleGrowth gamerule.",
   "config.create_relativity.black_holes.rip_budget": "Blocks Ripped per Tick",

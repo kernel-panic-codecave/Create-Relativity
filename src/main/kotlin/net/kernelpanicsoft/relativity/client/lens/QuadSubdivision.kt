@@ -5,6 +5,7 @@ import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.client.Minecraft
 import net.minecraft.core.SectionPos
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.sqrt
@@ -37,39 +38,10 @@ object QuadSubdivision {
 	private const val NEAR_SCALE = 48.0
 	private const val NEAR_REACH = 8.0
 
-	/** vertex_lens_core.glsl's RELATIVITY_SHIFT_GROWTH. */
-	private const val SHIFT_GROWTH = 0.65
-
-	/**
-	 * The approximated spinning hole's lens shift, -a (up x e) (world; zeros for a hole without spin or exactly lensed):
-	 * relativityCausticCentre moves the centre by (1 + grow) of it, grow from the point's Einstein angle ([centreAt]).
-	 */
-	private fun shiftOf(hole: DoubleArray, camX: Double, camY: Double, camZ: Double): DoubleArray {
-		val spin = hole.getOrElse(4) { 0.0 }
-		if (spin == 0.0 || !VertexLens.kerrApprox) return DoubleArray(3)
-		var ex = hole[0] - camX
-		var ez = hole[2] - camZ
-		val n = sqrt(ex * ex + (hole[1] - camY) * (hole[1] - camY) + ez * ez).coerceAtLeast(1e-9)
-		ex /= n; ez /= n
-		val a = spin * 0.5 * hole[3]
-		return doubleArrayOf(-a * ez, 0.0, a * ex)
-	}
-
-	/** Where the axis tube [a]'s Einstein-ring axis runs through for world point (x, y, z): vertex_lens_core.glsl's
-	 * relativityCausticCentre. */
-	fun centreAt(a: DoubleArray, x: Double, y: Double, z: Double): DoubleArray {
-		if (a[10] == 0.0 && a[12] == 0.0) return doubleArrayOf(a[3], a[4], a[5])
-		val ux = a[3] - a[0]; val uy = a[4] - a[1]; val uz = a[5] - a[2]
-		val rc = sqrt(ux * ux + uy * uy + uz * uz).coerceAtLeast(1e-9)
-		val behind = maxOf(((x - a[3]) * ux + (y - a[4]) * uy + (z - a[5]) * uz) / rc, 1e-3)
-		val rs = a[6]
-		val u0 = minOf(rs / rc, 0.999)
-		val critical = kotlin.math.asin(minOf(2.59807621 * u0 * sqrt(1 - u0), 1.0))
-		val alphaC = kotlin.math.atan2(kotlin.math.sin(critical), kotlin.math.cos(critical) * sqrt(1 - u0))
-		val einstein = sqrt(2 * rs * behind / (rc * (rc + behind)))
-		val grow = SHIFT_GROWTH * Math.pow(alphaC / maxOf(einstein, alphaC), 1.5 + 9 * u0)
-		return DoubleArray(3) { a[3 + it] + (1 + grow) * a[10 + it] }
-	}
+	/** Where the axis tube [a]'s Einstein-ring axis runs through for world point (x, y, z): the hole's centre
+	 * (vertex_lens_core.glsl's relativityCausticCentre). */
+	@Suppress("UNUSED_PARAMETER")
+	fun centreAt(a: DoubleArray, x: Double, y: Double, z: Double): DoubleArray = doubleArrayOf(a[3], a[4], a[5])
 
 	/**
 	 * With the camera close to a hole (within [CLOSE_START] r_s) nearly everything it sees is bent hard, and block faces
@@ -86,7 +58,7 @@ object QuadSubdivision {
 		ceil(CLOSE_START / maxOf(d / hole[3], 1.0)).toInt().coerceIn(1, 4)
 	} ?: 1
 
-	/** The holes' centres, radii and spins (x, y, z, r_s, spin; world), as the chunk builder threads see them. */
+	/** The holes' centres and radii (x, y, z, r_s; world), as the chunk builder threads see them. */
 	@Volatile
 	private var holes: List<DoubleArray> = emptyList()
 	private var applied: List<DoubleArray> = emptyList()
@@ -95,7 +67,7 @@ object QuadSubdivision {
 
 	/** Quads split so far (debug). */
 	@JvmField
-	val split = java.util.concurrent.atomic.AtomicLong()
+	val split = AtomicLong()
 
 	/**
 	 * The axis tube: camera and hole centre (world), the hole's r_s, then its [AXIS_K]-scaled coefficient K (pieces a
@@ -225,7 +197,7 @@ object QuadSubdivision {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level
 		active = level != null && RelativityConfig.Client.Render.lensing
-		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius, it.spin) }
+		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius) }
 		updateAxis(minecraft, now)
 		val boost = boostFor(minecraft.gameRenderer.mainCamera.position, now)
 		if (boost != closeBoost) {
@@ -270,10 +242,7 @@ object QuadSubdivision {
 			val k = AXIS_K * sqrt(sqrt(minOf(2.0 * it[3] / distance, 1.0)))
 			// Out to where n falls to 2, and to the render distance behind the hole.
 			val reach = minecraft.options.effectiveRenderDistance * 16.0 + 16.0
-			// (Round an approximated spinning hole, the axis of the moved centre it's lensed round there, per point:
-			// [centreAt], from the shift kept at 10..12.)
-			val shift = shiftOf(it, camera.x, camera.y, camera.z)
-			doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3], k, 0.5 * k, reach, shift[0], shift[1], shift[2])
+			doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3], k, 0.5 * k, reach)
 		}
 		val old = appliedAxis
 		if (now == null && old == null) return

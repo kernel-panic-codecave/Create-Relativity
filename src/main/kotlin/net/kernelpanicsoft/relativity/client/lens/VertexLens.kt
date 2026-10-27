@@ -32,10 +32,10 @@ import kotlin.math.abs
  * vanilla's world shaders and Sodium's terrain shader through Veil, into Flywheel's (CompilationMixin) and into
  * shader packs' (TransformPatcherMixin). Each vertex moves to where its light appears, at its true distance, so depth
  * testing handles occlusion.
- * This feeds those shaders: a uniform block (the nearest lensing hole, the level's projection, the view's rotation)
- * and two textures: the Schwarzschild inverse image table ([SchwarzschildImages.forFiltering]) and, for a spinning
- * hole, this frame's Kerr path table ([KerrPaths]), which the shader inverts by Newton's method starting from the
- * Schwarzschild image. The post pass ([BlackHoleLens]) then draws the shadow, the disk and the bent sky.
+ * This feeds those shaders: a uniform block (the nearest lensing hole, the level's projection, the field lens's
+ * sources, tubes and bubbles) and the Schwarzschild image tables ([SchwarzschildImages.forFiltering]): a lone hole's
+ * images from those, anything more composed source by source (the field lens). Every hole is lensed as a non-spinning
+ * one. The post pass ([BlackHoleLens]) then draws the shadow, the disk and the bent sky.
  */
 object VertexLens {
 	private const val TABLE_U0 = 64
@@ -144,34 +144,20 @@ object VertexLens {
 		private set
 
 	/**
-	 * Whether the post pass draws this frame's sky and shadows by the field lens (sources it has modules for, any
-	 * number): the shadow then closes round a camera falling in, and HorizonMesh stands down.
+	 * Whether the post pass draws this frame's sky and shadows by the field lens (any source in view): the shadow then
+	 * closes round a camera falling in.
 	 */
 	var fieldSky = false
 		private set
-	private const val KERR_SAMPLER = "RelativityKerrPaths"
-
-	/** The Kerr image map's sampler (KerrImageMap), on the unit below the path table's. */
-	private const val KERR_MAP_SAMPLER = "RelativityKerrMap"
-
-	/** kerr.glsl's KERR_START: the least the table's paths reach from the hole (r_s). */
-	private const val KERR_START = 80.0
-
-	/** How far the path table's paths reach from a centre of [scale]: past everything drawn (the render distance round the camera). */
-	private fun pathRadius(scale: Double, cameraDistance: Double): Double =
-		maxOf(KERR_START * scale, cameraDistance + 1.5 * Minecraft.getInstance().gameRenderer.renderDistance)
-
 	/**
-	 * What the path table and image map are centred on: the nearest hole ([hole] set), or with none in view the
-	 * strongest other source. [scale] sets the table's knee (r_s of a hole), [inner] the image map's inner radius.
+	 * What the lens is centred on: the nearest hole ([hole] set), or with none in view the strongest other source (or
+	 * the nearest tube or bubble). [scale] its size (r_s of a hole), [inner] how near it the lens reaches.
 	 */
 	private class Centre(val x: Double, val y: Double, val z: Double, val scale: Double, val inner: Double, val hole: BlackHole?, val key: Any)
 
 	private fun centreOf(hole: BlackHole?, others: List<net.kernelpanicsoft.relativity.spacetime.FieldSource>, camera: net.minecraft.world.phys.Vec3): Centre? {
 		if (hole != null) {
-			val a = hole.spin * hole.mass
-			val horizon = hole.mass + kotlin.math.sqrt(maxOf(hole.mass * hole.mass - a * a, 0.0))
-			return Centre(hole.x, hole.y, hole.z, hole.schwarzschildRadius, 1.05 * horizon, hole, hole.id)
+			return Centre(hole.x, hole.y, hole.z, hole.schwarzschildRadius, 1.05 * hole.schwarzschildRadius, hole, hole.id)
 		}
 		val at = org.joml.Vector3d(camera.x, camera.y, camera.z)
 		// (Tubes are the field lens's tube module's: with nothing else in view, the lens centres on the nearest.)
@@ -203,9 +189,6 @@ object VertexLens {
 		}
 	}
 
-	/** Spin from which the hole is treated as Kerr (kerr.glsl's MIN_KERR_SPIN): images found on [KerrPaths]' table. */
-	private const val MIN_KERR_SPIN = 0.05
-
 	/** Boxes within this many r_s of the hole skip frustum culling: bent light can show them from anywhere. */
 	private const val RELAX_RADIUS = 60.0
 
@@ -213,7 +196,7 @@ object VertexLens {
 	/** The secondary-image table (SchwarzschildImages.buildSecondaryTable), and its texture once built. */
 	private var secondTable: CompletableFuture<FloatArray>? = null
 
-	/** The image tables as built (SchwarzschildImages.sample / sampleSecondary read them), for the CPU (DiskMesh). */
+	/** The image tables as built (SchwarzschildImages.sample / sampleSecondary read them), for the CPU. */
 	@Volatile
 	var primaryImages: FloatArray? = null
 		private set
@@ -243,8 +226,7 @@ object VertexLens {
 	@Volatile private var lensCentre: Centre? = null
 	private var savedSmartCull: Boolean? = null
 
-	/** Whether this frame's lensing hole is the only source in view (HorizonMesh's outline and the shader's weak near
-	 * march follow its light alone). */
+	/** Whether this frame's lensing hole is the only source in view (the shader's weak near march follows its light alone). */
 	var loneHole = false
 		private set
 
@@ -274,21 +256,6 @@ object VertexLens {
 	@JvmField
 	var pixelCheck = true
 
-	/** Bends a spinning hole as if it didn't spin (debug; GameTests). */
-	@JvmField
-	var kerrOff = false
-
-	/** Draws the Kerr path table but leaves the vertices' Kerr solve off (debug; GameTests: timing). */
-	@JvmField
-	var kerrSolveOff = false
-
-	/**
-	 * Debug (GameTests): 1 hides vertices a spinning hole's path table didn't place; 2 those it placed on paths going
-	 * out, 3 coming in; 0 none.
-	 */
-	@JvmField
-	var kerrDebug = 0
-
 	/** Turns Flywheel's visualization off, so its blocks draw through vanilla renderers (GameTests compare the two). */
 	@JvmField
 	@Volatile
@@ -305,13 +272,6 @@ object VertexLens {
 		when (event.stage) {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
-			// (Where the post pass draws the field lens's sky, the hole's own meshes stand down: shadow, disk and jets
-			// move to the post pass.)
-			RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS -> if (activeThisFrame && !fieldSky) {
-				HorizonMesh.draw(hole, event.modelViewMatrix)
-				DiskMesh.draw(hole, event.modelViewMatrix)
-				JetMesh.draw(hole, event.modelViewMatrix)
-			}
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
 				setEnabled(false)
 				secondsWanted = false
@@ -324,22 +284,6 @@ object VertexLens {
 	/** The level's projection last frame (debug; GameTests). */
 	@JvmField
 	var lastProjection = Matrix4f()
-
-	/** GPU time of the Kerr path pass and the image map pass (debug; GameTests, with BlackHoleLens.timeGpu). */
-	val pathsTimer = GpuTimer()
-	val mapTimer = GpuTimer()
-
-	/** Camera movement relative to the hole in one frame past which the Kerr tables are redrawn whole (blocks). */
-	private const val JUMP_BLOCKS = 0.5f
-	private val lastHoleGame = Vector3f(Float.MAX_VALUE)
-	private val sources = Array(3 * BlackHoleLens.MAX_SOURCES) { org.joml.Vector4f() }
-	private var jump = false
-
-	private var lastSlotted = false
-	private var virtualBuffer = 0
-
-	/** The hole the Kerr image map was last drawn for (a new one starts it over). */
-	private var mapHole: Any? = null
 
 	private fun beginLevel(projection: Matrix4f) {
 		if (!VeilLevelPerspectiveRenderer.isRenderingPerspective()) lastProjection = Matrix4f(projection)
@@ -361,15 +305,10 @@ object VertexLens {
 		}
 		// The level's view rotation (as GameRenderer builds it): the shader works in view space.
 		val view = Quaternionf(minecraft.gameRenderer.mainCamera.rotation()).conjugate()
-		// A spinning hole or anything but holes: this frame's path table through every source, which the image map
-		// inverts. (Non-spinning holes alone keep the Schwarzschild image table.)
-		val (count, general) = BlackHoleLens.packSources(holes, others, camera, sources)
-		// Several sources the field lens has modules for (non-spinning holes, masses): composed in the shaders, with
-		// nothing traced or solved per frame.
-		val fieldCapable = holes.size + others.size >= 1 && holes.all { abs(it.spin) < MIN_KERR_SPIN } &&
-			others.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass || isWall(it) } && fieldLens
-		// (Tubes and bubbles are drawn by the field lens alone: a lone one too.)
-		val fieldWanted = fieldCapable && (holes.size + others.size > 1 || others.any { isWall(it) })
+		// Every source the field lens has modules for (holes, lensed as non-spinning ones, masses, tubes, bubbles):
+		// composed in the shaders, nothing traced or solved per frame; a lone hole by its exact image tables.
+		val fieldCapable = holes.size + others.size >= 1
+		val fieldWanted = fieldCapable && !(holes.size == 1 && others.isEmpty())
 		if (!perspective) {
 			composed = fieldWanted
 			fieldSky = fieldCapable
@@ -383,90 +322,20 @@ object VertexLens {
 					else -> Double.MAX_VALUE
 				}
 			}
+			loneHole = holes.size == 1 && others.isEmpty()
 		}
-		// A lone spinning hole: the live map from baked camera slots when they're ready (KerrSlots), no solving.
-		val lone = centre?.hole
-		val loneKerr = lone != null && holes.size == 1 && others.isEmpty() && abs(lone.spin) >= MIN_KERR_SPIN && !kerrOff
-		// (Or approximated from the non-spinning lens in the shaders (kerrApprox): nothing to solve or bake at all.)
-		val approximated = loneKerr && kerrApprox
-		val slotted = !perspective && loneKerr && !approximated && !kerrSolveOff && KerrSlots.update(lone!!, camera)
-		var kerr = approximated
-		if (centre != null && general && !fieldWanted && !slotted && !approximated && !(kerrOff && others.isEmpty())) {
-			val holeGame = Vector3f((centre.x - camera.x).toFloat(), (centre.y - camera.y).toFloat(), (centre.z - camera.z).toFloat())
-			// A jump (a teleport, a fast flight) redraws the tables whole; walking catches them up a slice a frame.
-			jump = lastHoleGame.distance(holeGame) > JUMP_BLOCKS
-			lastHoleGame.set(holeGame)
-			if (BlackHoleLens.timeGpu) pathsTimer.begin()
-			kerr = KerrPaths.draw(
-				holeGame, centre.scale.toFloat(), pathRadius(centre.scale, holeGame.length().toDouble()).toFloat(),
-				sources, count, jump,
-			)
-			if (BlackHoleLens.timeGpu) pathsTimer.end()
-		}
-		if (slotted) kerr = true
-		if (fieldWanted) kerr = false
-		if (!perspective) loneHole = holes.size == 1 && others.isEmpty()
-		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null, kerr && !kerrSolveOff, if (slotted) KerrSlots.outer(lone!!) else null)
+		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null)
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture)
-		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
-		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, KerrPaths.texture)
-		GlStateManager._activeTexture(previous)
-		// The image map the vertices read, solved on the path table (the block and the table bound for it).
-		KerrImageMap.ensureTexture()
-		if (!perspective) {
-			// (Switching between the blend and solving: the blend's grid reaches further, so the solver starts over.)
-			if (!kerr || centre?.key != mapHole || slotted != lastSlotted) {
-				KerrImageMap.invalidate()
-				KerrSecondImageMap.invalidate()
-			}
-			mapHole = centre?.key
-			lastSlotted = slotted
-			if (kerr && !kerrSolveOff && !slotted && !approximated) {
-				if (BlackHoleLens.timeGpu) mapTimer.begin()
-				KerrImageMap.draw(KerrPaths.changed, jump, sources, count)
-				// The secondary images too, for the second-image pass (a lone hole: they follow its light alone).
-				if (secondImages && secondTexture != 0 && loneHole) KerrSecondImageMap.draw(KerrPaths.changed, jump, sources, count)
-				if (BlackHoleLens.timeGpu) mapTimer.end()
-			}
-		}
-		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 2)
-		GL11.glBindTexture(GL12.GL_TEXTURE_3D, KerrImageMap.texture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 5)
 		GL11.glBindTexture(GL11.GL_TEXTURE_2D, BlackHoleLens.escapeTexture())
-		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 4)
-		val perFrameSecond = kerr && !kerrSolveOff && !slotted && !approximated && loneHole
-		KerrSecondImageMap.ensureTexture()
-		GL11.glBindTexture(GL12.GL_TEXTURE_3D, if (perFrameSecond) KerrSecondImageMap.texture else KerrSlots.secondTexture)
 		GlStateManager._activeTexture(previous)
-		// Round a spinning hole: its secondary map solved per frame, or the slots' blended one.
-		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages && (!kerr || approximated || perFrameSecond || (slotted && KerrSlots.secondBlending))
+		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages
 	}
-
-	/** Several sources composed in the shaders (the field lens) where it has modules for them; off, the per-frame tracer. */
-	@JvmField
-	var fieldLens = true
-
-	/**
-	 * A lone spinning hole's images approximated from the non-spinning one (vertex_lens_core.glsl relativityKerrApprox:
-	 * displaced, turned by frame dragging), not solved: no per-frame Kerr tables, no lag. Off: the per-frame solver.
-	 */
-	@JvmField
-	var kerrApprox = true
-
-	/** With [kerrApprox]: images by the ring refined to the exact ones in closed form (relativityKerrExactImage). */
-	@JvmField
-	var kerrExact = false
-
-	/** The exact solve's reach (shadow radii) and evaluations per vertex ([7].z, w while approximated). */
-	@JvmField
-	var exactReach = 1.6f
-	@JvmField
-	var exactPasses = 24
 
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
 	@JvmField
@@ -595,30 +464,8 @@ object VertexLens {
 	private fun pixelAngle(projection: Matrix4f): Float =
 		(2.0 / (projection.m11() * Minecraft.getInstance().window.height)).toFloat()
 
-	/**
-	 * The block for a virtual camera at [cameraRel] from [hole] (game axes, blocks), looking along no particular way (the
-	 * tables don't depend on it): for the slot baker ([KerrSlots]), with the image map reaching [mapOuter]. The live
-	 * block is uploaded again after, by the frame's own [beginLevel].
-	 */
-	internal fun uploadVirtual(hole: BlackHole, cameraRel: org.joml.Vector3dc, mapOuter: Double) {
-		val centre = centreOf(hole, emptyList(), hole.center) ?: return
-		// Its own buffer: rewriting the live one while the GPU may still read it would stall.
-		if (virtualBuffer == 0) {
-			virtualBuffer = GL15.glGenBuffers()
-			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, virtualBuffer)
-			GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, BLOCK_BYTES.toLong(), GL15.GL_DYNAMIC_DRAW)
-			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
-		}
-		upload(centre, hole.x + cameraRel.x(), hole.y + cameraRel.y(), hole.z + cameraRel.z(), Quaternionf(), lastProjection, false, true, mapOuter, virtualBuffer)
-	}
-
-	/** Binds [texture] as the path table the image map program reads (the slot baker's own, while it bakes). */
-	internal fun bindPathTable(texture: Int) {
-		val previous = GlStateManager._getActiveTexture()
-		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
-		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, texture)
-		GlStateManager._activeTexture(previous)
-	}
+	/** Block entries [12..27] (once a spinning hole's shadow edge, now unused). */
+	private const val EDGE_SAMPLES = 64
 
 	/** Switches lensing in the shaders on or off without changing the hole (e.g. around gizmos drawn after the lens). */
 	fun setEnabled(enabled: Boolean) {
@@ -632,7 +479,7 @@ object VertexLens {
 		}
 	}
 
-	private fun upload(centre: Centre?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, kerr: Boolean, mapOuter: Double? = null, target: Int = buffer) {
+	private fun upload(centre: Centre?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, target: Int = buffer) {
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(BLOCK_BYTES / 4)
 			if (centre != null) {
@@ -641,37 +488,14 @@ object VertexLens {
 			} else {
 				data.put(0f).put(0f).put(0f).put(0f)
 			}
-			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(if (kerr) 1f else 0f).put(kerrDebug.toFloat())
+			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(0f).put(0f)
 			projection.get(data.position(), data)
 			data.position(data.position() + 16)
-			if (centre != null && kerr) {
-				val dx = centre.x - camX
-				val dy = centre.y - camY
-				val dz = centre.z - camZ
-				data.put(dx.toFloat()).put(dy.toFloat()).put(dz.toFloat()).put((centre.hole?.spin ?: 0.0).toFloat())
-				// [7].y: 1 if the centre is a hole (the Schwarzschild image is a fair first guess and cut there).
-				// ([7].y 2: the hole is the only source in view: the near march, which follows its light alone, may stand in
-				// for the map further out.)
-				data.put(centre.scale.toFloat()).put(if (centre.hole == null) 0f else if (loneHole) (if (kerrApprox) (if (kerrExact) 4f else 3f) else 2f) else 1f).put(if (kerrApprox && loneHole) exactReach else KerrPaths.width.toFloat()).put(if (kerrApprox && loneHole) exactPasses.toFloat() else KerrPaths.height.toFloat())
-				val viewToGame = org.joml.Matrix3f().set(Quaternionf(view).conjugate())
-				for (column in 0..2) {
-					val c = viewToGame.getColumn(column, Vector3f())
-					data.put(c.x).put(c.y).put(c.z).put(0f)
-				}
-				val camR = kotlin.math.sqrt(dx * dx + dy * dy + dz * dz)
-				val reach = mapOuter ?: pathRadius(centre.scale, camR)
-				// The pixel check's pixel angle; the image map: from just outside the horizon (or the centre's own inner
-				// radius) out to the paths' end.
-				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(centre.inner.toFloat()).put(reach.toFloat())
-				// [12..27]: an approximated lone spinning hole's exact shadow edge (HorizonMesh.edges), or 0s.
-				val hole = centre.hole
-				val edges = if (hole != null && hole.spin != 0.0 && loneHole && kerrApprox) HorizonMesh.edges(hole, camX, camY, camZ) else null
-				for (k in 0 until HorizonMesh.EDGE_SAMPLES) data.put(edges?.get(k) ?: 0f)
-			} else {
-				repeat(20) { data.put(0f) }
-				data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
-				repeat(HorizonMesh.EDGE_SAMPLES) { data.put(0f) }
-			}
+			// [6..10] unused (were a spinning hole's); [11]: the pixel check's pixel angle and the draw's flags.
+			repeat(20) { data.put(0f) }
+			data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
+			// [12..27] unused.
+			repeat(EDGE_SAMPLES) { data.put(0f) }
 			uploadField(data, camX, camY, camZ, view)
 			data.position(0).limit(BLOCK_BYTES / 4)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, target)
@@ -683,7 +507,7 @@ object VertexLens {
 
 	/**
 	 * [28..44]: the field lens's sources (vertex_lens_core.glsl's relativityFieldCount and on), when [fieldSky], and
-	 * whether the post pass fills what the pixel check throws away from the scene capture ([28].y, relativityCaptureFills): each
+	 * whether the post pass fills the lens's asymptotes from the scene capture ([28].y, relativityCaptureFills): each
 	 * centre in view space and its type (1 hole, 2 mass), then its parameters (hole: r_s; mass: mass, softening).
 	 */
 	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
@@ -833,7 +657,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, KERR_SAMPLER to TEXTURE_UNIT - 1, KERR_MAP_SAMPLER to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, "RelativityKerrSecondMap" to TEXTURE_UNIT - 4, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, SECOND_SAMPLER to TEXTURE_UNIT - 3, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {

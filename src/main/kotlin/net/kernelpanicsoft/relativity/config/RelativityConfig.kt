@@ -145,13 +145,6 @@ object RelativityConfig : ConfigContainer(CreateRelativity.MOD) {
 				comment = Component.translatable("config.create_relativity.render.lensing.comment"),
 				default = true,
 			)
-			val lensResolution by intSlider(
-				title = Component.translatable("config.create_relativity.render.lens_resolution"),
-				comment = Component.translatable("config.create_relativity.render.lens_resolution.comment"),
-				min = 0,
-				max = 300,
-				default = 0,
-			)
 			val lightDelay by boolean(
 				title = Component.translatable("config.create_relativity.render.light_delay"),
 				comment = Component.translatable("config.create_relativity.render.light_delay.comment"),

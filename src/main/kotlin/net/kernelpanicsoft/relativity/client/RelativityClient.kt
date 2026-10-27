@@ -20,7 +20,6 @@ object RelativityClient {
 		NeoForge.EVENT_BUS.addListener(RenderLevelStageEvent::class.java, SpacetimeDebugRenderer::render)
 		NeoForge.EVENT_BUS.addListener(SpacetimeGrid::onClientTick)
 		NeoForge.EVENT_BUS.addListener(net.kernelpanicsoft.relativity.client.lens.SceneCapture::onRenderFrame)
-		net.kernelpanicsoft.relativity.client.lens.RelativityPostStages.init()
 		BlackHoleLens.init()
 		net.kernelpanicsoft.relativity.client.lens.VertexLens.init()
 		NeoForge.EVENT_BUS.addListener(RenderLivingEvent.Pre::class.java, NoodleRenderer::onRenderLiving)

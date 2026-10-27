@@ -1,37 +1,6 @@
 {
   "renderStage": "after_level",
   "framebuffers": {
-    "kerr_table": {
-      "autoClear": false,
-      "width": "math.max(1, q.screen_width / 4 * q.relativity_lens_scale)",
-      "height": "math.max(1, q.screen_height / 4 * q.relativity_lens_scale)",
-      "color_buffers": [
-        {
-          "format": "RGBA32F"
-        },
-        {
-          "format": "RGBA32F"
-        },
-        {
-          "format": "RGBA32F"
-        }
-      ],
-      "depth": false
-    },
-    "scene_table": {
-      "autoClear": false,
-      "width": "math.max(1, q.screen_width / 6 * q.relativity_lens_scale)",
-      "height": "math.max(1, q.screen_height / 6 * q.relativity_lens_scale)",
-      "format": "RGBA32F",
-      "depth": false
-    },
-    "scene_refine": {
-      "autoClear": false,
-      "width": "math.max(1, q.screen_width / 3 * q.relativity_lens_scale)",
-      "height": "math.max(1, q.screen_height / 3 * q.relativity_lens_scale)",
-      "format": "RGBA32F",
-      "depth": true
-    },
     "lens_out": {
       "width": "q.screen_width",
       "height": "q.screen_height",
@@ -47,31 +16,6 @@
     }
   },
   "textures": {
-    "KerrTable0": {
-      "type": "framebuffer",
-      "name": "kerr_table",
-      "sampler": 0
-    },
-    "KerrTable1": {
-      "type": "framebuffer",
-      "name": "kerr_table",
-      "sampler": 1
-    },
-    "KerrTable2": {
-      "type": "framebuffer",
-      "name": "kerr_table",
-      "sampler": 2
-    },
-    "SceneTable": {
-      "type": "framebuffer",
-      "name": "scene_table",
-      "sampler": 0
-    },
-    "SceneTable2": {
-      "type": "framebuffer",
-      "name": "scene_refine",
-      "sampler": 0
-    },
     "SkyProbe": {
       "type": "framebuffer",
       "name": "sky_probe",
@@ -84,24 +28,6 @@
       "shader": "create_relativity:sky_probe",
       "in": "minecraft:main",
       "out": "sky_probe"
-    },
-    {
-      "type": "create_relativity:cached_blit",
-      "shader": "create_relativity:kerr_table",
-      "out": "kerr_table"
-    },
-    {
-      "type": "create_relativity:cached_blit",
-      "shader": "create_relativity:scene_table",
-      "in": "minecraft:main",
-      "out": "scene_table"
-    },
-    {
-      "type": "create_relativity:sparse_march",
-      "mark": "create_relativity:scene_refine",
-      "march": "create_relativity:scene_refine_march",
-      "in": "minecraft:main",
-      "out": "scene_refine"
     },
     {
       "type": "veil:blit",
