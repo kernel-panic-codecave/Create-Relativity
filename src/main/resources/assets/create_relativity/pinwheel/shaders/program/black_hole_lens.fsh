@@ -310,9 +310,12 @@ void main() {
     // Every pixel's light followed once (uniform control flow: neighbours' escape directions by screen-space
     // derivatives, for the asymptote test, cost no walks of their own).
     vec3 escape;
-    vec3 from;
+    vec3 from = vec3(0.0);
     vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
-    bool escaped = relativityFieldLeg(viewDir, from, escape);
+    // (From the light table where it has this direction, else followed here.)
+    bool tableCaptured;
+    bool tabled = relativityTableOn() && relativityTableEscape(viewDir, escape, tableCaptured);
+    bool escaped = tabled ? !tableCaptured : relativityFieldLeg(viewDir, from, escape);
     vec3 world = normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz);
     float captured = escaped ? 0.0 : 1.0;
     // By an asymptote: a neighbour captured where this isn't (or the other way: the shadow's edge), or the escape
@@ -325,6 +328,8 @@ void main() {
         if (escaped) {
             scene = skyAt(world);
             vec3 seen;
+            // (The leg's start for the capture's march: from the table's direction alone the camera's.)
+            if (asymptote && tabled) relativityFieldLeg(viewDir, from, escape);
             if (asymptote && sceneCaptureAlong((VeilCamera.IViewMat * vec4(from, 0.0)).xyz, world, seen)) scene = seen;
         }
     }

@@ -7,9 +7,12 @@
 // [0] the hole: xyz centre relative to the camera in view space (blocks), w Schwarzschild radius (0 = off)
 // [1] x: 1 while the level is drawn with lensing on; y: 1 skips the image table (debug); z, w unused
 // [2..5] the level's projection this frame, by column
-// [6..10] unused (all 0)
+// [6] the light table (LightTable, relativityTable*): x, y the half-tangents across and up its view, z, w its nearest and
+//     farthest spheres (blocks); [7] x, y its size (texels), z its spheres, w 1 while it's on
+// [8..10] unused (all 0)
 // [11] x: the angle one screen pixel covers (radians; the pixel check); y: bit 1 turns the pixel check off (debug), bit 2
-//      places vertices at their secondary images (VertexLens.drawSecondImages); z, w unused
+//      places vertices at their secondary images (VertexLens.drawSecondImages); z the light table's slot this pass draws
+//      (0 its primary signature); w unused
 // [12..27] unused (all 0)
 // [28..44] the field lens's sources (relativityFieldCount and on)
 // [45..121] the field lens's tubes (relativityTubeCount and on)
@@ -22,6 +25,14 @@ uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sq
 
 uniform sampler3D RelativitySecondImages; // SchwarzschildImages.buildSecondaryTable, as RelativityImages: r ln(psi - psi_c)
                                           // of the secondary image (the long way round), g whether there's one
+uniform usampler2DArray RelativityLightSeeds; // LightTable's inverse, per kept signature (slot s: layers s n to s n +
+                                              // n - 1): per straight-line direction and sphere, the quad of rays (j W
+                                              // + i: rays (i, j) to (i + 1, j + 1)) of that signature covering it there,
+                                              // the least bent kept (bend << 20 | index), all ones where none; layer
+                                              // 4 n, texels (s, 0): slot s's signature (all ones: none)
+uniform sampler2DArray RelativityLightTable; // LightTable: per view direction, where its light first crosses each sphere
+                                             // round the camera (layer 2k: xyz, w 1 if it does) and its heading there
+                                             // (2k + 1); layer 2 n: where it ends heading (w 1 out, 0 captured)
 uniform sampler2D RelativityEscape; // SchwarzschildLens' escape table (BlackHoleLens's LUT): (sqrt u0, sqrt(psi / pi)) to
                                     // the escape angle and whether the light falls in; the field lens's holes
 // Whether this draw places vertices at their secondary images ([11].y bit 2).
@@ -637,6 +648,170 @@ bool relativityFieldSolve(vec3 target, vec3 guess, out vec3 seen) {
     }
     seen = d;
     return false;
+}
+
+// ---- The light table (LightTable: light_table.comp fills it each frame) ----
+// A grid of view directions over (a little past) the screen, each one's light marched the whole way through the
+// superposed field (every hole's photon orbit, every mass weakly: physics-core's OrbitField), and where it first crosses
+// each of n spheres round the camera (radii logarithmic from [6].z to [6].w) and its heading there. A point's image is
+// the table inverted: Newton across the grid for the direction whose light reaches the point at its distance, cubic
+// (Hermite) between the spheres round it. Exact up to the table's interpolation (physics-core FieldLensTest:
+// lightTableImages), a few reads a step. View space.
+bool relativityTableOn() { return RelativityLensData[7].w > 0.5; }
+vec2 relativityTableSize() { return RelativityLensData[7].xy; }
+int relativityTableShells() { return int(RelativityLensData[7].z + 0.5); }
+float relativityTableRadius(float k) {
+    return RelativityLensData[6].z * exp(log(RelativityLensData[6].w / RelativityLensData[6].z) * k / float(relativityTableShells() - 1));
+}
+
+// The view direction through table position uv (texel units, centres at half-integers).
+vec3 relativityTableDirection(vec2 uv) {
+    vec2 t = (2.0 * uv / relativityTableSize() - 1.0) * RelativityLensData[6].xy;
+    return normalize(vec3(t, -1.0));
+}
+
+// The table position seeing straight along view direction d; false if it's behind or off the table.
+bool relativityTableUv(vec3 d, out vec2 uv) {
+    uv = vec2(0.0);
+    if (d.z >= -1e-6) return false;
+    uv = ((d.xy / -d.z) / RelativityLensData[6].xy + 1.0) * 0.5 * relativityTableSize();
+    return all(greaterThanEqual(uv, vec2(0.5))) && all(lessThanEqual(uv, relativityTableSize() - 0.5));
+}
+
+vec4 relativityTableRead(vec2 uv, int layer) {
+    return texture(RelativityLightTable, vec3(uv / relativityTableSize(), float(layer)));
+}
+
+// Where the light through uv is at distance r from the camera; false where the table has none there.
+bool relativityTablePoint(vec2 uv, float r, out vec3 p) {
+    p = vec3(0.0);
+    float s = log(r / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
+    int k = int(clamp(floor(s), 0.0, float(relativityTableShells() - 2)));
+    vec4 a = relativityTableRead(uv, 2 * k);
+    vec4 b = relativityTableRead(uv, 2 * k + 2);
+    if (a.w < 0.999 || b.w < 0.999) return false;
+    vec3 ta = normalize(relativityTableRead(uv, 2 * k + 1).xyz);
+    vec3 tb = normalize(relativityTableRead(uv, 2 * k + 3).xyz);
+    float span = length(b.xyz - a.xyz);
+    // (The parameter whose point is at distance r: from the radii's ratio, then Newton.)
+    float t = clamp((r - length(a.xyz)) / max(length(b.xyz) - length(a.xyz), 1e-6), 0.0, 1.0);
+    for (int i = 0; i < 2; i += 1) {
+        float t2 = t * t;
+        float t3 = t2 * t;
+        vec3 q = a.xyz * (2.0 * t3 - 3.0 * t2 + 1.0) + ta * ((t3 - 2.0 * t2 + t) * span) + b.xyz * (-2.0 * t3 + 3.0 * t2) + tb * ((t3 - t2) * span);
+        vec3 dq = a.xyz * (6.0 * t2 - 6.0 * t) + ta * ((3.0 * t2 - 4.0 * t + 1.0) * span) + b.xyz * (-6.0 * t2 + 6.0 * t) + tb * ((3.0 * t2 - 2.0 * t) * span);
+        float slope = dot(q, dq) / max(length(q), 1e-6);
+        if (abs(slope) > 1e-9) t = clamp(t - (length(q) - r) / slope, 0.0, 1.0);
+    }
+    float t2 = t * t;
+    float t3 = t2 * t;
+    p = a.xyz * (2.0 * t3 - 3.0 * t2 + 1.0) + ta * ((t3 - 2.0 * t2 + t) * span) + b.xyz * (-2.0 * t3 + 3.0 * t2) + tb * ((t3 - t2) * span);
+    return true;
+}
+
+// Where the camera sees view-space point p by the table: Newton across it from `guess` (a view direction: the seed
+// map's ray through p, relativityTableImage); false if it doesn't get within half a pixel's angle (by a shadow's edge,
+// or light that comes back: a second image).
+const int RELATIVITY_TABLE_STEPS = 12;
+vec4 relativityTableWhy = vec4(0.0); // debug (LensCheck): how the last inversion ended (x: 1 off the table, 2 no data, 3 no
+                                     // data a step over, 4 degenerate, 5 out of steps, 6 found), y steps, zw uv
+bool relativityTableImageFrom(vec3 p, vec3 guess, out vec3 seen) {
+    float r = length(p);
+    seen = normalize(guess);
+    vec2 uv;
+    relativityTableWhy = vec4(1.0, 0.0, 0.0, 0.0);
+    if (!relativityTableUv(seen, uv)) return false;
+    float tolerance = 0.5 * RelativityLensData[11].x * r;
+    int steps = RELATIVITY_TABLE_STEPS + relativityRuntimeZero();
+    for (int i = 0; i < steps; i += 1) {
+        vec3 q;
+        relativityTableWhy = vec4(2.0, float(i), uv);
+        if (!relativityTablePoint(uv, r, q)) return false;
+        vec3 miss = p - q;
+        if (length(miss) < tolerance) { relativityTableWhy = vec4(6.0, float(i), uv); seen = relativityTableDirection(uv); return true; }
+        vec3 qu;
+        vec3 qv;
+        relativityTableWhy = vec4(3.0, float(i), uv);
+        if (!relativityTablePoint(uv + vec2(0.25, 0.0), r, qu) || !relativityTablePoint(uv + vec2(0.0, 0.25), r, qv)) return false;
+        vec3 ju = (qu - q) * 4.0;
+        vec3 jv = (qv - q) * 4.0;
+        float a = dot(ju, ju);
+        float b = dot(ju, jv);
+        float c = dot(jv, jv);
+        float det = a * c - b * b;
+        relativityTableWhy = vec4(4.0, float(i), uv);
+        if (abs(det) < 1e-20) return false;
+        relativityTableWhy = vec4(5.0, float(i), uv);
+        vec2 step = vec2(c * dot(ju, miss) - b * dot(jv, miss), a * dot(jv, miss) - b * dot(ju, miss)) / det;
+        // (At most a dozen texels a step: far from the image the table's map is anything but linear.)
+        float size = length(step);
+        if (size > 12.0) step *= 12.0 / size;
+        uv = clamp(uv + step, vec2(0.5), relativityTableSize() - 0.5);
+    }
+    return false;
+}
+
+
+// An image's signature (LightTable.signature): bit k set if its light, seen along view direction d, passes hole k on the
+// other side from view-space point p, as seen from the camera: (c × d) · (c × p) < 0. 0 the primary image; within one
+// signature the map from points to images is continuous (broken only on a hole's camera-hole axis, an asymptote).
+uint relativityTableSignature(vec3 d, vec3 p) {
+    uint bits = 0u;
+    for (int k = 0; k < relativityFieldCount(); k += 1) {
+        if (!relativityFieldHole(k)) continue;
+        vec3 c = relativityFieldCentre(k);
+        if (dot(cross(c, d), cross(c, p)) < 0.0) bits |= 1u << uint(k);
+    }
+    return bits;
+}
+
+// The light table's slots (one geometry pass each: VertexLens.drawSecondImages); this pass's ([11].z) and its signature.
+const int RELATIVITY_TABLE_SLOTS = 4; // LightTable.SLOTS
+int relativityTableSlot() { return int(RelativityLensData[11].z + 0.5); }
+uint relativityTableSlotSignature(int slot) {
+    return texelFetch(RelativityLightSeeds, ivec3(slot, 0, RELATIVITY_TABLE_SLOTS * relativityTableShells()), 0).r;
+}
+
+// Where the camera sees view-space point p by the table in this pass's signature: seeded from that signature's inverse
+// map (the quad of rays covering p's straight-line direction at its sphere, or a neighbour's), refined by Newton, kept
+// only if the image found has the signature.
+bool relativityTableImage(vec3 p, out vec3 seen) {
+    seen = normalize(p);
+    int slot = relativityTableSlot();
+    uint signature = relativityTableSlotSignature(slot);
+    if (signature == 0xFFFFFFFFu) return false;
+    vec2 uv;
+    if (!relativityTableUv(seen, uv)) return false;
+    float r = length(p);
+    float s = log(r / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
+    int k = int(clamp(floor(s + 0.5), 0.0, float(relativityTableShells() - 1)));
+    ivec2 cell = ivec2(uv);
+    uint best = 0xFFFFFFFFu;
+    for (int n = 0; n < 9; n += 1) {
+        ivec2 at = clamp(cell + ivec2(n % 3 - 1, n / 3 - 1), ivec2(0), ivec2(relativityTableSize()) - 1);
+        best = min(best, texelFetch(RelativityLightSeeds, ivec3(at, slot * relativityTableShells() + k), 0).r);
+    }
+    if (best == 0xFFFFFFFFu) return false;
+    int index = int(best & 0xFFFFFu);
+    int width = int(relativityTableSize().x);
+    vec2 seed = vec2(float(index % width), float(index / width)) + 1.0;
+    if (!relativityTableImageFrom(p, relativityTableDirection(seed), seen)) return false;
+    return relativityTableSignature(seen, p) == signature;
+}
+
+// Where the light seen along view direction d ends heading, by the table: false if d is off it, or by a shadow's edge
+// (the texels round it disagree on capture: there the table's steps would show, so the light is followed per pixel
+// instead); captured if a source took it.
+bool relativityTableEscape(vec3 d, out vec3 escape, out bool captured) {
+    escape = d;
+    captured = false;
+    vec2 uv;
+    if (!relativityTableUv(d, uv)) return false;
+    vec4 e = relativityTableRead(uv, 2 * relativityTableShells());
+    if (e.w > 0.001 && e.w < 0.999) return false;
+    captured = e.w < 0.5;
+    escape = normalize(e.xyz);
+    return true;
 }
 
 // ---- Tubes (physics-core's TubeModule, which this mirrors): a field uniform inside a tube of thin walls round a
@@ -1542,6 +1717,7 @@ bool relativityFieldImage(vec3 target, bool secondary, bool tubes, out vec3 seen
     return true;
 }
 
+
 int relativityFarImage(vec3 p, out vec3 seen) {
     bool nearAxis = false;
     int image = relativitySchwarzschildImage(p, seen, nearAxis);
@@ -1567,7 +1743,19 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     if (relativityFieldComposed()) {
         vec3 seen;
         bool longWay = relativitySecond();
-        if (!relativityFieldImage(p, longWay, true, seen)) {
+        // (The light table where it's on, in this pass's signature: through the tubes after, as the field image takes them.)
+        bool found;
+        if (relativityTableOn()) {
+            found = relativityTableImage(p, seen);
+            if (found && relativityWalls()) {
+                vec3 through;
+                found = relativityTubeAim(seen * d, through);
+                seen = through;
+            }
+        } else {
+            found = relativityFieldImage(p, longWay, true, seen);
+        }
+        if (!found) {
             vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
             hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
             return hidden;
@@ -1665,7 +1853,15 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
         if (!relativityTubeMiss(normalize(bent), unbent, miss)) return true;
         return length(miss) > RELATIVITY_TUBE_PIXEL_SLACK * length(unbent) + RELATIVITY_TUBE_PIXEL_BLOCKS;
     }
-    // Composed: the pixel's own image (a lookup per source) against where it's drawn.
+    // Composed: by the light table, forward (one read): the light seen where the pixel's drawn, at the point's distance,
+    // must be by the point; else the pixel's own image (a lookup per source) against where it's drawn.
+    if (relativityFieldComposed() && relativityTableOn()) {
+        vec2 uv;
+        vec3 at;
+        if (!relativityTableUv(normalize(bent), uv) || !relativityTablePoint(uv, length(unbent), at)) return true;
+        if (relativityTableSignature(normalize(bent), unbent) != relativityTableSlotSignature(relativityTableSlot())) return true;
+        return length(at - unbent) > RELATIVITY_PIXEL_SLACK * RelativityLensData[11].x * length(unbent);
+    }
     if (relativityFieldComposed()) {
         vec3 own;
         if (!relativityFieldImage(unbent, relativitySecond(), false, own)) return true;

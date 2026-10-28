@@ -324,9 +324,16 @@ object VertexLens {
 			}
 			loneHole = holes.size == 1 && others.isEmpty()
 		}
+		// The light table: composed sources with any that bend light (holes, masses) in this frame's own view.
+		LightTable.prepare(!perspective && fieldWanted && fieldSources.isNotEmpty(), projection)
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null)
+		LightTable.build { linkProgram(it) }
 
 		val previous = GlStateManager._getActiveTexture()
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, LightTable.texture)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 2)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, LightTable.seeds)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT)
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, texture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 3)
@@ -334,7 +341,10 @@ object VertexLens {
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 5)
 		GL11.glBindTexture(GL11.GL_TEXTURE_2D, BlackHoleLens.escapeTexture())
 		GlStateManager._activeTexture(previous)
-		secondsWanted = !perspective && centre?.hole != null && secondTexture != 0 && secondImages
+		// (Not with the light table yet: it holds first crossings, and the chain's second images through several holes
+		// are poor.)
+		// (With the light table, its other signatures' passes; else the hole's secondary images.)
+		secondsWanted = !perspective && secondImages && (LightTable.on || (centre?.hole != null && secondTexture != 0))
 	}
 
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
@@ -412,14 +422,40 @@ object VertexLens {
 		drawingSecondImages = true
 		try {
 			setModeFlags(true)
-			// A secondary image is the mirror image (the light comes round the other side), so every triangle's winding
-			// is reversed: culling the front faces keeps the ones facing the camera along that light.
-			GL11.glCullFace(GL11.GL_FRONT)
-			draw.run()
+			if (LightTable.on) {
+				// The light table's other signatures, a pass each ([11].z its slot): some mirrored, some not, so no
+				// culling (depth sorts them).
+				val culled = GL11.glIsEnabled(GL11.GL_CULL_FACE)
+				GL11.glDisable(GL11.GL_CULL_FACE)
+				try {
+					for (slot in 1 until LightTable.SLOTS) {
+						setSlot(slot)
+						draw.run()
+					}
+				} finally {
+					setSlot(0)
+					if (culled) GL11.glEnable(GL11.GL_CULL_FACE)
+				}
+			} else {
+				// A secondary image is the mirror image (the light comes round the other side), so every triangle's
+				// winding is reversed: culling the front faces keeps the ones facing the camera along that light.
+				GL11.glCullFace(GL11.GL_FRONT)
+				draw.run()
+			}
 		} finally {
 			GL11.glCullFace(GL11.GL_BACK)
 			setModeFlags(false)
 			drawingSecondImages = false
+		}
+	}
+
+	/** The block's [11].z: the light table's slot the draw places vertices in (0 its primary signature). */
+	private fun setSlot(slot: Int) {
+		MemoryStack.stackPush().use { stack ->
+			val data = stack.mallocFloat(1).put(0, slot.toFloat())
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
+			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 11L * 16 + 8, data)
+			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
 		}
 	}
 
@@ -491,8 +527,10 @@ object VertexLens {
 			data.put(if (enabled) 1f else 0f).put(if (skipTable) 1f else 0f).put(0f).put(0f)
 			projection.get(data.position(), data)
 			data.position(data.position() + 16)
-			// [6..10] unused (were a spinning hole's); [11]: the pixel check's pixel angle and the draw's flags.
-			repeat(20) { data.put(0f) }
+			// [6], [7]: the light table's view and size; [8..10] unused; [11]: the pixel check's pixel angle and the draw's
+			// flags.
+			LightTable.put(data)
+			repeat(12) { data.put(0f) }
 			data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
 			// [12..27] unused.
 			repeat(EDGE_SAMPLES) { data.put(0f) }
@@ -657,7 +695,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, SECOND_SAMPLER to TEXTURE_UNIT - 3, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, "RelativityLightTable" to TEXTURE_UNIT - 1, "RelativityLightSeeds" to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {

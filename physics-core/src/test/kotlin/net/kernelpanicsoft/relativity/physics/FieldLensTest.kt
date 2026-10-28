@@ -55,6 +55,7 @@ class FieldLensTest {
 		scene("twoHoles side", V3(-15.0, 0.0, 0.0), V3(0.0, -2.6, 0.0), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5)),
 		scene("twoHoles above", V3(-10.0, 8.0, 0.0), V3(0.0, -2.0, 0.0), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5)),
 		scene("twoHoles between", V3(8.0, 0.0, 6.0), V3(13.0, -0.9, -2.7), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5)),
+		scene("three holes", V3(-15.0, 2.0, 0.0), V3(4.0, 0.0, 0.0), hole(V3.ZERO, 2.0), hole(V3(16.0, 0.0, -7.0), 1.5), hole(V3(6.0, 4.0, 12.0), 1.0)),
 	)
 
 	@Test
@@ -166,6 +167,51 @@ class FieldLensTest {
 				}
 				println(String.format("light table %dx%d, %s: images px median %.2f, 95%% %.1f, max %.1f; missing %d of %d; built in %.0f ms",
 					w, h, scene.name, percentile(errors, 0.5), percentile(errors, 0.95), errors.maxOrNull() ?: 0.0, missing, errors.size + missing, built))
+			}
+		}
+	}
+
+	/**
+	 * The light table's images by signature (which side of each hole an image's light passes, against the point's): for
+	 * points along exact light, the image in the signature that light has, against it; and how many signatures there are
+	 * and how much of the table the four commonest cover.
+	 */
+	@Test
+	fun lightTableSignatures() {
+		for (scene in scenes.filter { it.name.startsWith("twoHoles") || it.name.startsWith("binary") || it.name == "three holes" || it.name == "one hole" }) {
+			val lens = FieldLens(scene.modules)
+			val model = OrbitField(scene.modules)
+			val forward = (scene.look - scene.camera).normalized()
+			val (right, up0) = FieldLens.tangents(forward)
+			val up = if (up0.y < 0) -up0 else up0
+			val r = if ((right cross up) dot forward < 0) -right else right
+			val tanY = kotlin.math.tan(Math.toRadians(35.0))
+			val table = LightTable(lens, model, scene.camera, r, up, forward, tanY * 16.0 / 9.0, tanY, 240, 135)
+			val counts = table.signatureCounts.entries.sortedByDescending { it.value }
+			val total = counts.sumOf { it.value }.toDouble()
+			val random = java.util.Random(7)
+			val errors = HashMap<Int, ArrayList<Double>>()
+			val missing = HashMap<Int, Int>()
+			val why = java.util.TreeMap<String, Int>()
+			repeat(200) {
+				val d = coneDirection(forward, Math.toRadians(30.0), random)
+				val exact = model(lens, model, scene.camera, d)
+				val candidates = exact.points.filter { it.second in 4.0..60.0 }
+				if (candidates.isEmpty()) return@repeat
+				val p = candidates[random.nextInt(candidates.size)].first - scene.camera
+				val sig = table.signature(d, p)
+				val seen = table.imageIn(p, sig)
+				if (seen == null) {
+					missing.merge(sig, 1, Int::plus)
+					why.merge("$sig: ${table.lastWhy}", 1, Int::plus)
+				} else errors.getOrPut(sig) { ArrayList() } += angle(seen, d) / pixel
+			}
+			println(String.format("signatures, %s: %d in the table, the four commonest %.1f%% of crossings (%s)", scene.name, counts.size,
+				100.0 * counts.take(4).sumOf { it.value } / total, counts.take(6).joinToString { "${it.key}: ${"%.1f".format(100.0 * it.value / total)}%" }))
+			for (sig in (errors.keys + missing.keys).sorted()) {
+				val e = errors[sig] ?: arrayListOf()
+				if (sig == errors.keys.plus(missing.keys).maxOrNull()) println("  why missing: $why")
+				println(String.format("  signature %d: images px median %.2f, 95%% %.1f, max %.1f; missing %d of %d", sig, percentile(e, 0.5), percentile(e, 0.95), e.maxOrNull() ?: 0.0, missing[sig] ?: 0, e.size + (missing[sig] ?: 0)))
 			}
 		}
 	}

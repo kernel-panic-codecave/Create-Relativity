@@ -172,6 +172,26 @@ object BlackHoleLens {
 		id
 	}
 
+	/** A 1 x 1 x 1 2D array texture for the light table's sampler while there's none. */
+	private val placeholderArray: Int by lazy {
+		val id = GL11.glGenTextures()
+		GL11.glBindTexture(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, id)
+		GL12.glTexImage3D(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, 0, GL11.GL_RGBA8, 1, 1, 1, 0, GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, null as java.nio.ByteBuffer?)
+		GL11.glBindTexture(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, 0)
+		id
+	}
+
+	/** A 1 x 1 x 1 unsigned-integer 2D array texture for the light table's seeds while there are none. */
+	private val placeholderSeeds: Int by lazy {
+		val id = GL11.glGenTextures()
+		GL11.glBindTexture(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, id)
+		GL12.glTexImage3D(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, 0, org.lwjgl.opengl.GL30.GL_R32UI, 1, 1, 1, 0, org.lwjgl.opengl.GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, null as java.nio.IntBuffer?)
+		GL11.glTexParameteri(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
+		GL11.glTexParameteri(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
+		GL11.glBindTexture(org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, 0)
+		id
+	}
+
 	/** Starts this frame's GPU timer query, first reading the one from two frames ago (long finished by now). */
 	private fun beginTimer() {
 		if (timerRunning) return
@@ -265,6 +285,8 @@ object BlackHoleLens {
 			// (The field lens's holes: the escape table, here as the vertex shaders read it.)
 			escapeTexture().takeIf { id -> id != 0 }?.let { id -> it.setTexture("RelativityEscape", GL11.GL_TEXTURE_2D, id) }
 			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: placeholder3d)
+			it.setTexture("RelativityLightTable", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, LightTable.texture.takeIf { id -> id != 0 } ?: placeholderArray)
+			it.setTexture("RelativityLightSeeds", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, LightTable.seeds.takeIf { id -> id != 0 } ?: placeholderSeeds)
 		}
 	}
 }

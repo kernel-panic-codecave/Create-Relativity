@@ -10,6 +10,7 @@ import net.kernelpanicsoft.relativity.CreateRelativity
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
+import net.kernelpanicsoft.relativity.client.lens.LightTable
 import net.kernelpanicsoft.relativity.client.lens.SceneCapture
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos

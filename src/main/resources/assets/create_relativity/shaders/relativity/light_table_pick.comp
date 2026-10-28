@@ -1,0 +1,24 @@
+// The light table's slots (LightTable): slot 0 the primary signature (0), the rest the commonest others in the table
+// (light_table.comp's tally), written to the seeds' last layer (texels (s, 0)); all ones for a slot with none.
+layout(local_size_x = 1) in;
+layout(r32ui, binding = 1) uniform uimage2DArray Seeds;
+layout(r32ui, binding = 2) uniform uimage2D Counts;
+
+void main() {
+    int layer = RELATIVITY_TABLE_SLOTS * relativityTableShells();
+    imageStore(Seeds, ivec3(0, 0, layer), uvec4(0u));
+    uint taken[RELATIVITY_TABLE_SLOTS];
+    taken[0] = 0u;
+    for (int slot = 1; slot < RELATIVITY_TABLE_SLOTS; slot += 1) {
+        uint best = 0xFFFFFFFFu;
+        uint most = 0u;
+        for (uint sig = 1u; sig < 256u; sig += 1u) {
+            uint n = imageLoad(Counts, ivec2(int(sig), 0)).r;
+            bool used = false;
+            for (int t = 1; t < slot; t += 1) used = used || taken[t] == sig;
+            if (!used && n > most) { most = n; best = sig; }
+        }
+        taken[slot] = best;
+        imageStore(Seeds, ivec3(slot, 0, layer), uvec4(best));
+    }
+}

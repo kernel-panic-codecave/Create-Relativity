@@ -8,6 +8,13 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 10) {
+        // The light table's image of p (relativityTableImage): x how it ended (relativityTableWhy), y steps, zw the uv.
+        vec3 seen;
+        relativityTableImage(p, seen);
+        Result = relativityTableWhy;
+        return;
+    }
     if (Direct == 9) {
         // The field lens's image of p (relativityFieldImage): x 1 found, -1 not; y the last solve's miss (pixels; -1 none
         // ran); z the chain guess's angle from the result (pixels).
