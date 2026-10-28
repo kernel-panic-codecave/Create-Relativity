@@ -56,6 +56,10 @@ object BlackHoleLens {
 	@JvmField
 	var rawFrame = false
 
+	/** Debug (GameTests): empty pixels coloured by how the post pass's fill walk ended (black_hole_lens.fsh, LensMode 5). */
+	@JvmField
+	var fillDebug = false
+
 	/** Leaves parts of the pass out for profiling (lens_scene.glsl's ProfileFlags); only GameTests change it. */
 	@JvmField
 	var profileFlags = 0
@@ -263,7 +267,7 @@ object BlackHoleLens {
 		uniform("SceneCaptureReady") { setInt(SceneCapture.ready) }
 		uniform("SceneCaptureFaces") { setVectors(*SceneCapture.columns()) }
 		uniform("SceneCaptureRange") { setVector(SceneCapture.NEAR, SceneCapture.far) }
-		uniform("LensMode") { setInt(if (rawFrame) 4 else 0) }
+		uniform("LensMode") { setInt(if (rawFrame) 4 else if (fillDebug) 5 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
 		pipeline.getUniformSafe("SkyColor").setVector(sky.x.toFloat(), sky.y.toFloat(), sky.z.toFloat())
 		uniform("LensFogColor") { setVector(fogColor[0], fogColor[1], fogColor[2], fogColor[3]) }

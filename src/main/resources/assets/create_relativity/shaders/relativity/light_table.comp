@@ -73,8 +73,16 @@ void main() {
         x = next;
         v = vNext;
     }
-    // (Spheres it never reached: none.)
-    for (int rest = k; rest < shells; rest += 1) {
+    // (Light a hole captured: where it was last, on the first sphere it never reached, marked partial (w 0.5), so what
+    // it passed on its way in, between the last sphere and there, is found: the thin arcs by a shadow's edge.
+    // Spheres past that: none.)
+    int rest = k;
+    if (captured && k < shells) {
+        imageStore(Table, ivec3(texel, 2 * k), vec4(x, 0.5));
+        imageStore(Table, ivec3(texel, 2 * k + 1), vec4(normalize(v), 0.0));
+        rest = k + 1;
+    }
+    for (; rest < shells; rest += 1) {
         imageStore(Table, ivec3(texel, 2 * rest), vec4(0.0));
         imageStore(Table, ivec3(texel, 2 * rest + 1), vec4(0.0));
     }

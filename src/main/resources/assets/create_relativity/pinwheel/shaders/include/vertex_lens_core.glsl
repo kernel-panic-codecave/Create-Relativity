@@ -690,7 +690,8 @@ bool relativityTablePoint(vec2 uv, float r, out vec3 p) {
     int k = int(clamp(floor(s), 0.0, float(relativityTableShells() - 2)));
     vec4 a = relativityTableRead(uv, 2 * k);
     vec4 b = relativityTableRead(uv, 2 * k + 2);
-    if (a.w < 0.999 || b.w < 0.999) return false;
+    // (The far one may be partial, w 0.5: where captured light was last, short of that sphere.)
+    if (a.w < 0.999 || b.w < 0.4) return false;
     vec3 ta = normalize(relativityTableRead(uv, 2 * k + 1).xyz);
     vec3 tb = normalize(relativityTableRead(uv, 2 * k + 3).xyz);
     float span = length(b.xyz - a.xyz);

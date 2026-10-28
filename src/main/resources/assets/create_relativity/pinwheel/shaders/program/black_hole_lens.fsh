@@ -6,7 +6,9 @@
 // it left empty the light followed back past every source by the field lens (vertex_lens_core.glsl's
 // relativityFieldLeg), black where a hole captures it (the shadow), else the sky; and by the lens's asymptotes (the
 // Einstein ring's caustic, the photon ring, the shadow's edge: where triangles can't follow the mapping) looked up in
-// the scene capture, so what's there shows. Everywhere else what the vertex lens leaves empty stays sky: its own to fix.
+// the scene capture, so what's there shows. With the light table, any pixel left empty whose light meets the level on
+// its way shows the capture there (sceneCaptureTable): by the shadows a point has more images than the vertex lens can
+// find. Everywhere else what the vertex lens leaves empty stays sky: its own to fix.
 // Then the nearest hole's accretion disk on top. Every hole is lensed as a non-spinning one.
 
 uniform sampler2D DiffuseSampler0;
@@ -194,6 +196,69 @@ bool sceneCaptureAlong(vec3 o, vec3 e, out vec3 color) {
     return false;
 }
 
+// What the light seen along view direction d shows, by the light table and the scene capture: its path (the table's
+// crossings of the spheres round the camera, cubic between, two samples a span) walked out from the camera until it
+// passes behind a captured surface (then halved back to it, a hit only if it lands on the surface); false if it meets
+// none before the table's light ends (captured, or out past the last sphere), or d is off the table. Where the vertex
+// lens leaves a pixel empty but its light meets the level (the images by a shadow it can't find every one of).
+const int TABLE_FILL_SAMPLES = 1; // a span between spheres
+// Light bent less than this (radians) meets nothing the vertex lens didn't draw (its primary images): not walked.
+const float TABLE_FILL_BEND = 0.05;
+int fillWhy = 0; // debug (LensMode 5): how the walk ended (1 hit, 2 the table's light ended, 3 past the far plane,
+                 // 4 a crossing rejected, 5 off the table or no capture, 6 to the last sphere)
+bool sceneCaptureTable(vec3 d, out vec3 color) {
+    color = vec3(0.0);
+    vec2 uv;
+    fillWhy = 5;
+    if (SceneCaptureReady == 0 || !relativityTableUv(d, uv)) return false;
+    fillWhy = 6;
+    bool before = true;
+    float last = relativityTableRadius(0.0);
+    int samples = (relativityTableShells() - 1) * TABLE_FILL_SAMPLES;
+    for (int i = 1; i <= samples; i += 1) {
+        float r = relativityTableRadius(float(i) / float(TABLE_FILL_SAMPLES));
+        // (Past the capture's far plane it shows nothing.)
+        if (r > SceneCaptureRange.y) { fillWhy = 3; return false; }
+        vec3 q;
+        if (!relativityTablePoint(uv, r, q)) { fillWhy = 2; return false; }
+        vec3 w = (VeilCamera.IViewMat * vec4(q, 0.0)).xyz;
+        vec2 at;
+        float dist;
+        if (!sceneCaptureFace(w / length(w), at, dist)) return false;
+        bool front = length(w) < dist;
+        if (before && !front) {
+            float a = last;
+            float b = r;
+            for (int k = 0; k < 8; k += 1) {
+                float m = 0.5 * (a + b);
+                vec3 y;
+                if (!relativityTablePoint(uv, m, y)) break;
+                vec3 wy = (VeilCamera.IViewMat * vec4(y, 0.0)).xyz;
+                float dy;
+                vec2 aty;
+                if (sceneCaptureFace(wy / length(wy), aty, dy) && length(wy) >= dy) b = m; else a = m;
+            }
+            // A hit where the light goes into a surface, not where it passes behind something nearer the camera (a
+            // post's silhouette: the light there is far behind what the capture shows, three times as far). Loose
+            // otherwise: by the photon ring the table's path between spheres is a little off, and the crossing found
+            // lands a little short of or past the surface.
+            vec3 yb;
+            if (relativityTablePoint(uv, b, yb)) {
+                vec3 wb = (VeilCamera.IViewMat * vec4(yb, 0.0)).xyz;
+                if (sceneCaptureFace(wb / length(wb), at, dist) && length(wb) - dist < max(2.0, 0.3 * length(wb))) {
+                    color = texture(SceneCapture, at).rgb;
+                    fillWhy = 1;
+                    return true;
+                }
+            }
+            fillWhy = 4;
+        }
+        before = front;
+        last = r;
+    }
+    return false;
+}
+
 // The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
 // game or a shader pack drew them, already through its tonemapping), else the sky probe's, else a plain gradient.
 vec3 skyAt(vec3 d) {
@@ -325,7 +390,20 @@ void main() {
     bool asymptote = abs(dFdx(captured)) + abs(dFdy(captured)) > 0.0 || area < ASYMPTOTE_AREA.x || area > ASYMPTOTE_AREA.y;
     if (sceneDist >= 1e29) {
         scene = vec3(0.0);
-        if (escaped) {
+        // Light that meets the level on its way (by the table), though the vertex lens drew nothing here: the capture's.
+        vec3 met;
+        // (Also by a shadow's edge, where the table's escape lookup gives up: the walk ends where the light does.)
+        bool onTable = relativityTableOn() && (!tabled || !escaped || dot(escape, viewDir) < cos(TABLE_FILL_BEND));
+        bool meets = onTable && sceneCaptureTable(viewDir, met);
+        if (LensMode == 5) {
+            vec3 codes[7] = vec3[](vec3(0.3), vec3(1.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 1.0));
+            if (!meets && fillWhy == 0) fillWhy = 0;
+            fragColor = vec4(codes[fillWhy], 1.0);
+            return;
+        }
+        if (meets) {
+            scene = met;
+        } else if (escaped) {
             scene = skyAt(world);
             vec3 seen;
             // (The leg's start for the capture's march: from the table's direction alone the camera's.)

@@ -21,7 +21,7 @@ void main() {
     for (int n = 0; n < 4; n += 1) {
         ivec2 corner = quad + ivec2(n % 2, n / 2);
         vec4 p = imageLoad(Table, ivec3(corner, 2 * k));
-        if (p.w < 0.5) return;
+        if (p.w < 0.75) return; // (none, or partial: not on the sphere)
         uint sig = relativityTableSignature(relativityTableDirection(vec2(corner) + 0.5), p.xyz);
         if (n == 0) signature = sig;
         else if (sig != signature) return;
