@@ -16,19 +16,20 @@ import kotlin.math.sqrt
  * slab, and a face with one hidden corner disappears whole. While a chunk section near a hole is built, each quad its
  * blocks and fluids draw is split into n x n (attributes interpolated), n growing toward the hole: [levelAt].
  *
- * The levels are measured, not guessed: each floor block of the ground test scene mapped through the lens tables, split
- * until straight edges between its pieces' images stay within a pixel of where the light really appears. Most of the
- * need lies by the camera-hole axis behind the hole (n ~ 24 blocks / distance from it, up to 32); round the hole itself
- * only n = 2 out to ~8 r_s. The lens is the same at every size in units of r_s, so a block is smaller against a big
- * hole's curves: a big hole needs less splitting, not more.
+ * Each edge is split as finely as its own image curves (LensCurvature: its ends' and midpoint's images, through the
+ * lens tables, against a straight line on screen), so straight edges between its pieces' images stay within a pixel of
+ * where the light really appears; elsewhere, however close the camera, a face stays whole. The curve depends on where
+ * the camera is, so levels are measured for a snapshot of it ([view]), taken again when it has moved a step
+ * ([VIEW_STEP] of its distance to the nearest hole) or the axis tube moves; then only the sections whose levels change
+ * by a step (their [signature]) are rebuilt. Close round a hole the near rule ([nearLevel]), and in the tube round the
+ * camera-hole axis behind it the axis rule ([axisLevel]), are the least: there the table the measure reads and the
+ * shader's own images part ways (by the shadow's edge; by the axis, where the shader places points round the ring its
+ * own way), and triangles stretch across the shadow.
  *
- * It depends on where the holes are, not the camera (rebuilding meshes as the camera moves would cost far too much),
- * which is where the bending changes fastest. Sections are rebuilt when a hole moves or grows enough to change theirs.
- *
- * With one exception that does follow the camera: the tube round the camera-hole axis behind the hole ([axisLevel]).
- * What lies by that axis is imaged all round the Einstein ring, and a triangle that straddles it wraps round the ring
- * (the pixel check throws such a triangle away, leaving a band of the ring empty). There quads are split until each
- * piece is small against its distance from the axis; the few sections the tube passes through are rebuilt as it moves.
+ * The tube round the camera-hole axis behind the hole ([polarAxis]): what lies by that axis is imaged all round the
+ * Einstein ring, and a triangle that straddles it wraps round the ring (the pixel check throws such a triangle away,
+ * leaving a band of the ring empty). Faces there are split round the axis in polar pieces; the few sections the tube
+ * passes through are rebuilt as it moves.
  */
 object QuadSubdivision {
 	/** Quads are split into up to this many per side round the hole... */
@@ -43,20 +44,18 @@ object QuadSubdivision {
 	@Suppress("UNUSED_PARAMETER")
 	fun centreAt(a: DoubleArray, x: Double, y: Double, z: Double): DoubleArray = doubleArrayOf(a[3], a[4], a[5])
 
-	/**
-	 * With the camera close to a hole (within [CLOSE_START] r_s) nearly everything it sees is bent hard, and block faces
-	 * far from the hole too come out jagged: everything within [CLOSE_REACH] r_s of it is split [closeBoost] a side, up
-	 * to 4 at [CLOSE_START] / 4 r_s and nearer. In steps, so sections are rebuilt only as the camera crosses one.
-	 */
-	@Volatile
-	private var closeBoost = 1
-	private const val CLOSE_START = 12.0
-	private const val CLOSE_REACH = 40.0
+	/** Sections within this many r_s of a hole are built through the subdivider (beyond, bending is too slight to curve a face). */
+	private const val REACH = 40.0
 
-	private fun boostFor(camera: net.minecraft.world.phys.Vec3, holes: List<DoubleArray>): Int = holes.maxOfOrNull { hole ->
-		val d = sqrt((camera.x - hole[0]) * (camera.x - hole[0]) + (camera.y - hole[1]) * (camera.y - hole[1]) + (camera.z - hole[2]) * (camera.z - hole[2]))
-		ceil(CLOSE_START / maxOf(d / hole[3], 1.0)).toInt().coerceIn(1, 4)
-	} ?: 1
+	/** The camera the levels are measured for, and a pixel's angle; null until there's one. */
+	@Volatile
+	private var view: LensCurvature.View? = null
+
+	/** The view is taken again once the camera has moved this much of its distance to the nearest hole. */
+	private const val VIEW_STEP = 0.15
+
+	/** Each section's level signature as last built or marked ([signature]). */
+	private val signatures = HashMap<Long, Int>()
 
 	/** The holes' centres and radii (x, y, z, r_s; world), as the chunk builder threads see them. */
 	@Volatile
@@ -155,18 +154,42 @@ object QuadSubdivision {
 	@Volatile
 	private var active = false
 
-	/** Quads split per side at world point (x, y, z). */
-	fun levelAt(x: Double, y: Double, z: Double): Int {
-		var level = 1
-		for (hole in holes) {
-			val dx = x - hole[0]
-			val dy = y - hole[1]
-			val dz = z - hole[2]
-			val distance = sqrt(dx * dx + dy * dy + dz * dz)
-			if (distance < NEAR_REACH * hole[3]) level = maxOf(level, ceil(NEAR_SCALE / maxOf(distance, 1e-3)).toInt())
-			if (closeBoost > 1 && distance < CLOSE_REACH * hole[3]) level = maxOf(level, closeBoost)
+	/** The near rule round [hole] at world point (x, y, z): where an edge's curve can't be measured (by a shadow's edge). */
+	fun nearLevel(hole: DoubleArray, x: Double, y: Double, z: Double): Int {
+		val dx = x - hole[0]
+		val dy = y - hole[1]
+		val dz = z - hole[2]
+		val distance = sqrt(dx * dx + dy * dy + dz * dz)
+		return if (distance < NEAR_REACH * hole[3]) ceil(NEAR_SCALE / maxOf(distance, 1e-3)).toInt().coerceAtMost(MAX_LEVEL) else 1
+	}
+
+	/** Pieces the edge from (ax, ay, az) to (bx, by, bz) (world) is split into, for [view] (the near rule without one). */
+	fun edgePieces(ax: Double, ay: Double, az: Double, bx: Double, by: Double, bz: Double): Int {
+		val mx = (ax + bx) * 0.5
+		val my = (ay + by) * 0.5
+		val mz = (az + bz) * 0.5
+		val length = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay) + (bz - az) * (bz - az))
+		val near = maxOf(holes.maxOfOrNull { nearLevel(it, mx, my, mz) } ?: 1, axisLevel(mx, my, mz, length))
+		val v = view ?: return near
+		return maxOf(near, LensCurvature.pieces(v, holes, ax, ay, az, bx, by, bz) { nearLevel(it, mx, my, mz) }).coerceAtMost(MAX_LEVEL)
+	}
+
+	/**
+	 * A section's levels in steps (0 none split, then 2, 4, 8, 16, 32 a side at most) for [v]: the most a few unit
+	 * edges through it ask, along each axis from a 3 x 3 x 3 grid of its points.
+	 */
+	private fun signature(v: LensCurvature.View, holes: List<DoubleArray>, sx: Int, sy: Int, sz: Int): Int {
+		var most = 1
+		for (i in 0..2) for (j in 0..2) for (k in 0..2) {
+			val x = (sx shl 4) + i * 7.5 + 0.25
+			val y = (sy shl 4) + j * 7.5 + 0.25
+			val z = (sz shl 4) + k * 7.5 + 0.25
+			for (hole in holes) most = maxOf(most, nearLevel(hole, x, y, z))
+			most = maxOf(most, LensCurvature.pieces(v, holes, x, y, z, x + 1.0, y, z) { nearLevel(it, x, y, z) })
+			most = maxOf(most, LensCurvature.pieces(v, holes, x, y, z, x, y + 1.0, z) { nearLevel(it, x, y, z) })
+			most = maxOf(most, LensCurvature.pieces(v, holes, x, y, z, x, y, z + 1.0) { nearLevel(it, x, y, z) })
 		}
-		return level.coerceAtMost(MAX_LEVEL)
+		return 32 - Integer.numberOfLeadingZeros(minOf(most, MAX_LEVEL) - 1)
 	}
 
 	/** The consumer a section's blocks draw into: [target] itself, or a subdivider round it if the section is near a hole. */
@@ -174,13 +197,13 @@ object QuadSubdivision {
 	fun wrap(target: VertexConsumer, section: SectionPos): VertexConsumer {
 		if (!active || holes.isEmpty()) return target
 		val origin = section.origin()
-		// The section's nearest point to each hole decides whether anything in it is split.
+		// Within [REACH] of a hole (its nearest point), anything in it may be split.
 		var near = false
 		for (hole in holes) {
-			val nx = hole[0].coerceIn(origin.x.toDouble(), origin.x + 16.0)
-			val ny = hole[1].coerceIn(origin.y.toDouble(), origin.y + 16.0)
-			val nz = hole[2].coerceIn(origin.z.toDouble(), origin.z + 16.0)
-			if (levelAt(nx, ny, nz) > 1) near = true
+			val nx = hole[0].coerceIn(origin.x.toDouble(), origin.x + 16.0) - hole[0]
+			val ny = hole[1].coerceIn(origin.y.toDouble(), origin.y + 16.0) - hole[1]
+			val nz = hole[2].coerceIn(origin.z.toDouble(), origin.z + 16.0) - hole[2]
+			if (nx * nx + ny * ny + nz * nz < REACH * REACH * hole[3] * hole[3]) near = true
 		}
 		// (Or the axis tube passes within the section: its centre within the tube plus the section's half-diagonal.)
 		val a = axis
@@ -198,27 +221,17 @@ object QuadSubdivision {
 		val level = minecraft.level
 		active = level != null && RelativityConfig.Client.Render.lensing
 		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius) }
-		updateAxis(minecraft, now)
-		val boost = boostFor(minecraft.gameRenderer.mainCamera.position, now)
-		if (boost != closeBoost) {
-			closeBoost = boost
-			for (hole in now) {
-				val reach = CLOSE_REACH * hole[3]
-				val lo = SectionPos.of(floor(hole[0] - reach).toInt() shr 4, floor(hole[1] - reach).toInt() shr 4, floor(hole[2] - reach).toInt() shr 4)
-				val hi = SectionPos.of(floor(hole[0] + reach).toInt() shr 4, floor(hole[1] + reach).toInt() shr 4, floor(hole[2] + reach).toInt() shr 4)
-				try {
-					for (sx in lo.x()..hi.x()) for (sy in lo.y()..hi.y()) for (sz in lo.z()..hi.z()) minecraft.levelRenderer.setSectionDirty(sx, sy, sz)
-				} catch (_: NullPointerException) {
-				}
-			}
-		}
+		val axisMoved = updateAxis(minecraft, now)
+		applyPending(minecraft)
+		updateView(minecraft, now, axisMoved)
 		// (Turning the vertex lens on or off empties or fills the list, which counts as a change too.)
 		if (!changed(now)) return
 		holes = now
+		signatures.clear()
 		val renderer = minecraft.levelRenderer
 		for (hole in applied + now) {
-			// Sections within reach of a level above 1.
-			val reach = minOf(NEAR_REACH * hole[3], NEAR_SCALE) + 1.0
+			// Sections within reach of the subdivider.
+			val reach = REACH * hole[3] + 1.0
 			val lo = SectionPos.of(floor(hole[0] - reach).toInt() shr 4, floor(hole[1] - reach).toInt() shr 4, floor(hole[2] - reach).toInt() shr 4)
 			val hi = SectionPos.of(floor(hole[0] + reach).toInt() shr 4, floor(hole[1] + reach).toInt() shr 4, floor(hole[2] + reach).toInt() shr 4)
 			// (While a level is being swapped the renderer has no sections to mark; its next build is fresh anyway.)
@@ -234,7 +247,7 @@ object QuadSubdivision {
 	 * The tube round the axis from the camera through the nearest hole: when its far end has moved more than
 	 * [AXIS_TOLERANCE], the sections the old and the new tube pass through are rebuilt.
 	 */
-	private fun updateAxis(minecraft: Minecraft, holesNow: List<DoubleArray>) {
+	private fun updateAxis(minecraft: Minecraft, holesNow: List<DoubleArray>): Boolean {
 		val camera = minecraft.gameRenderer.mainCamera.position
 		val hole = holesNow.minByOrNull { (it[0] - camera.x) * (it[0] - camera.x) + (it[1] - camera.y) * (it[1] - camera.y) + (it[2] - camera.z) * (it[2] - camera.z) }
 		val now = hole?.let {
@@ -245,9 +258,9 @@ object QuadSubdivision {
 			doubleArrayOf(camera.x, camera.y, camera.z, it[0], it[1], it[2], it[3], k, 0.5 * k, reach)
 		}
 		val old = appliedAxis
-		if (now == null && old == null) return
+		if (now == null && old == null) return false
 		if (now != null && old != null && (now[7] - old[7]).let { it * it } < 0.01 * old[7] * old[7] && (now[9] == old[9]) && farEnd(now).zip(farEnd(old)).sumOf { (p, q) -> (p - q) * (p - q) } < AXIS_TOLERANCE * AXIS_TOLERANCE &&
-			(0..2).sumOf { (now[3 + it] - old[3 + it]).let { d -> d * d } } < AXIS_TOLERANCE * AXIS_TOLERANCE) return
+			(0..2).sumOf { (now[3 + it] - old[3 + it]).let { d -> d * d } } < AXIS_TOLERANCE * AXIS_TOLERANCE) return false
 		axis = now
 		appliedAxis = now
 		val renderer = minecraft.levelRenderer
@@ -274,6 +287,78 @@ object QuadSubdivision {
 		try {
 			for (section in dirty) renderer.setSectionDirty(SectionPos.x(section), SectionPos.y(section), SectionPos.z(section))
 		} catch (_: NullPointerException) {
+		}
+		return true
+	}
+
+	/**
+	 * The camera snapshot the levels are measured for: taken again once the camera has moved [VIEW_STEP] of its
+	 * distance to the nearest hole, or with the axis tube ([axisMoved]); then each section within [REACH] whose levels'
+	 * [signature] changes is rebuilt.
+	 */
+	private fun updateView(minecraft: Minecraft, holesNow: List<DoubleArray>, axisMoved: Boolean) {
+		if (holesNow.isEmpty() || VertexLens.primaryImages == null) {
+			view = null
+			return
+		}
+		val camera = minecraft.gameRenderer.mainCamera.position
+		val nearest = holesNow.minOf { sqrt((it[0] - camera.x) * (it[0] - camera.x) + (it[1] - camera.y) * (it[1] - camera.y) + (it[2] - camera.z) * (it[2] - camera.z)) }
+		val old = view
+		val pixel = 2.0 * kotlin.math.atan(1.0 / VertexLens.lastProjection.m11().toDouble().coerceAtLeast(1e-3)) / maxOf(minecraft.window.height, 1)
+		if (old != null && !axisMoved && holes === holesNow &&
+			sqrt((old.x - camera.x) * (old.x - camera.x) + (old.y - camera.y) * (old.y - camera.y) + (old.z - camera.z) * (old.z - camera.z)) < VIEW_STEP * nearest &&
+			kotlin.math.abs(old.pixel - pixel) < 0.1 * old.pixel) return
+		val now = LensCurvature.View(camera.x, camera.y, camera.z, pixel)
+		view = now
+		// (One job at a time: a newer view waits for the running one, then is checked in turn.)
+		if (pending != null) {
+			queued = holesNow
+			return
+		}
+		startSignatures(minecraft, now, holesNow)
+	}
+
+	/** Holes for a view taken while signatures were being worked out: checked once those are done. */
+	private var queued: List<DoubleArray>? = null
+
+	private fun startSignatures(minecraft: Minecraft, now: LensCurvature.View, holesNow: List<DoubleArray>) {
+		// (The signatures are worked out off the client thread: hundreds of sections, a few hundred images each.)
+		val minY = minecraft.level?.minSection ?: -4
+		val maxY = (minecraft.level?.maxSection ?: 20) - 1
+		pending = java.util.concurrent.CompletableFuture.supplyAsync {
+			val result = HashMap<Long, Int>()
+			for (hole in holesNow) {
+				val reach = REACH * hole[3]
+				val lo = SectionPos.of(floor(hole[0] - reach).toInt() shr 4, floor(hole[1] - reach).toInt() shr 4, floor(hole[2] - reach).toInt() shr 4)
+				val hi = SectionPos.of(floor(hole[0] + reach).toInt() shr 4, floor(hole[1] + reach).toInt() shr 4, floor(hole[2] + reach).toInt() shr 4)
+				for (sx in lo.x()..hi.x()) for (sy in maxOf(lo.y(), minY)..minOf(hi.y(), maxY)) for (sz in lo.z()..hi.z()) {
+					val key = SectionPos.asLong(sx, sy, sz)
+					if (key !in result) result[key] = signature(now, holesNow, sx, sy, sz)
+				}
+			}
+			result
+		}
+	}
+
+	/** The signatures being worked out for the latest view (the sections whose levels change are rebuilt when it's done). */
+	private var pending: java.util.concurrent.CompletableFuture<HashMap<Long, Int>>? = null
+
+	private fun applyPending(minecraft: Minecraft) {
+		val job = pending ?: return
+		if (!job.isDone) return
+		pending = null
+		queued?.let { holesNow ->
+			queued = null
+			view?.let { startSignatures(minecraft, it, holesNow) }
+		}
+		val result = try { job.get() } catch (_: Exception) { return }
+		val renderer = minecraft.levelRenderer
+		for ((key, signature) in result) {
+			if (signatures.put(key, signature) == signature) continue
+			try {
+				renderer.setSectionDirty(SectionPos.x(key), SectionPos.y(key), SectionPos.z(key))
+			} catch (_: NullPointerException) {
+			}
 		}
 	}
 
@@ -379,9 +464,8 @@ class QuadSubdivider : VertexConsumer {
 		// no vertex of one lies partway along an edge of the other (a T-junction: once bent, the edges part and leave a
 		// crack of sky). Edges in (s, t) order: s = 0 (v0-v1), t = 1 (v1-v2), s = 1 (v3-v2), t = 0 (v0-v3).
 		val edges = edgeLevels()
-		var longest = 0.0
-		for (e in 0..3) longest = maxOf(longest, edgeLength(e))
-		val n = maxOf(level(originX + cx, originY + cy, originZ + cz, longest), edges.max())
+		// (Inside, by its diagonals: a face can curve across though its edges don't.)
+		val n = maxOf(edges.max(), pieces(0, 2), pieces(1, 3))
 		if (n <= 1) {
 			for (k in 0..3) put(k)
 			return
@@ -420,16 +504,14 @@ class QuadSubdivider : VertexConsumer {
 		return sqrt(ex * ex + ey * ey + ez * ez)
 	}
 
-	/** Each edge's pieces, from its own midpoint and length (the same for the face across it). */
-	private fun edgeLevels(): IntArray = IntArray(4) { e ->
-		val p = ends[e][0] * 3
-		val q = ends[e][1] * 3
-		level(originX + (position[p] + position[q]) / 2.0, originY + (position[p + 1] + position[q + 1]) / 2.0, originZ + (position[p + 2] + position[q + 2]) / 2.0, edgeLength(e))
-	}
+	/** Each edge's pieces, from its own ends (the same for the face across it). */
+	private fun edgeLevels(): IntArray = IntArray(4) { e -> pieces(ends[e][0], ends[e][1]) }
 
-	/** Pieces a side at world point (x, y, z) for an edge (or quad) of [length]. */
-	private fun level(x: Double, y: Double, z: Double, length: Double): Int =
-		maxOf(QuadSubdivision.levelAt(x, y, z), QuadSubdivision.axisLevel(x, y, z, length))
+	/** Pieces for the segment between corners [p] and [q] (QuadSubdivision.edgePieces). */
+	private fun pieces(p: Int, q: Int): Int = QuadSubdivision.edgePieces(
+		originX + position[p * 3], originY + position[p * 3 + 1], originZ + position[p * 3 + 2],
+		originX + position[q * 3], originY + position[q * 3 + 1], originZ + position[q * 3 + 2],
+	)
 
 	/** Grid point [k] of [n] along an edge of [pieces] pieces: the nearest of its points. */
 	private fun snap(k: Int, n: Int, pieces: Int): Float = Math.round(k.toDouble() * pieces / n).toFloat() / pieces

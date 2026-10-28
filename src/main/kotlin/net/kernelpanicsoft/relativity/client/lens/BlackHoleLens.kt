@@ -25,9 +25,9 @@ import java.util.concurrent.CompletableFuture
 
 /**
  * The post pass of the lens, as a Veil post pipeline (black_hole_lens.json), after the vertex lens ([VertexLens]) has
- * drawn the world where its light appears: in every pixel it left empty, the light followed back past every source by
- * the field lens, black where a hole captures it (the shadow), else looked up in [SceneCapture] or the sky; then the
- * nearest hole's accretion disk. [SchwarzschildLens]' escape table (built once at startup, normalised by r_s) is the
+ * drawn the world where its light appears (every image): in every pixel it left empty, the light followed back past every
+ * source by the field lens, black where a hole captures it (the shadow), else the sky; then the nearest hole's accretion
+ * disk. [SchwarzschildLens]' escape table (built once at startup, normalised by r_s) is the
  * field lens's for holes. Every hole is lensed as a non-spinning one.
  */
 object BlackHoleLens {
@@ -55,10 +55,6 @@ object BlackHoleLens {
 	/** Passes the frame through untouched (to see what vertex lensing drew); only GameTests change it. */
 	@JvmField
 	var rawFrame = false
-
-	/** Debug (GameTests): empty pixels coloured by how the post pass's fill walk ended (black_hole_lens.fsh, LensMode 5). */
-	@JvmField
-	var fillDebug = false
 
 	/** Leaves parts of the pass out for profiling (lens_scene.glsl's ProfileFlags); only GameTests change it. */
 	@JvmField
@@ -264,12 +260,7 @@ object BlackHoleLens {
 		uploadDisk(::uniform, level, holes.firstOrNull(), minecraft)
 		uniform("HoleCount") { setInt(holes.size) }
 		uniform("Holes") { setVectors(*holeUniforms) }
-		uniform("SceneCaptureReady") { setInt(SceneCapture.ready) }
-		uniform("SceneCaptureFaces") { setVectors(*SceneCapture.columns()) }
-		uniform("SceneCaptureOrigins") { setVectors(*SceneCapture.origins(camera)) }
-		uniform("SceneCaptureCells") { setVectors(*SceneCapture.cells()) }
-		uniform("SceneCaptureRange") { setVector(SceneCapture.NEAR, SceneCapture.far) }
-		uniform("LensMode") { setInt(if (rawFrame) 4 else if (fillDebug) 5 else 0) }
+		uniform("LensMode") { setInt(if (rawFrame) 4 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))
 		pipeline.getUniformSafe("SkyColor").setVector(sky.x.toFloat(), sky.y.toFloat(), sky.z.toFloat())
 		uniform("LensFogColor") { setVector(fogColor[0], fogColor[1], fogColor[2], fogColor[3]) }

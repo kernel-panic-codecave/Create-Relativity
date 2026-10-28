@@ -11,7 +11,7 @@ import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.client.SpacetimeDebugRenderer
 import net.kernelpanicsoft.relativity.client.lens.BlackHoleLens
 import net.kernelpanicsoft.relativity.client.lens.LightTable
-import net.kernelpanicsoft.relativity.client.lens.SceneCapture
+import net.kernelpanicsoft.relativity.client.lens.QuadSubdivision
 import net.kernelpanicsoft.relativity.client.lens.VertexLens
 import net.minecraft.core.BlockPos
 import net.minecraft.world.level.block.Blocks
@@ -1212,7 +1212,6 @@ class LensClientGameTest {
 					val wrong = LensReference.compare(reference, shot)
 					CreateRelativity.LOGGER.info("Krasnikov lens, {}: {}% of pixels in the wrong class; {} fps", name, "%.1f".format(wrong * 100), fps)
 					if (wrong > 0.06) failures += "$name: ${"%.1f".format(wrong * 100)}% of pixels in the wrong class"
-					withoutCapture("Krasnikov lens, $name", "krasnikov_$name", reference)
 					// The frame rate without the tube, for its cost.
 					SpacetimeField.removeProvider(provider)
 					waitTicks(40)
@@ -1323,7 +1322,6 @@ class LensClientGameTest {
 					val wrong = LensReference.compare(reference, shot)
 					CreateRelativity.LOGGER.info("Bubble lens, {}: {}% of pixels in the wrong class; {} fps", name, "%.1f".format(wrong * 100), computeOnClient { it.fps })
 					if (wrong > 0.06) failures += "$name: ${"%.1f".format(wrong * 100)}% of pixels in the wrong class"
-					withoutCapture("Bubble lens, $name", "bubble_$name", reference)
 				}
 			} finally {
 				SpacetimeField.removeProvider(provider)
@@ -1427,26 +1425,9 @@ class LensClientGameTest {
 		}
 	}
 
-	/** The same view without the scene capture (SceneCapture.enabled off): the share of pixels in the wrong class, logged. */
-	private fun ClientGameTestContext.withoutCapture(label: String, shotName: String, reference: Array<Array<LensReference.Kind?>>) {
-		val with = postPassMillis()
-		// (fps over the last second: after the timing's 20 ticks, past the reference's tracing, which stalls the client.)
-		CreateRelativity.LOGGER.info("{}: a capture face drew in {} ms; {} fps", label, "%.1f".format(computeOnClient { SceneCapture.lastMillis }), computeOnClient { it.fps })
-		runOnClient { SceneCapture.enabled = false }
-		try {
-			waitTicks(30)
-			val shot = takeScreenshot("${shotName}_nocapture")
-			CreateRelativity.LOGGER.info("{} without the capture: {}% of pixels in the wrong class; post pass {} ms without, {} ms with; {} fps without",
-				label, "%.1f".format(LensReference.compare(reference, shot) * 100), "%.2f".format(postPassMillis()), "%.2f".format(with), computeOnClient { it.fps })
-		} finally {
-			runOnClient { SceneCapture.enabled = true }
-			waitTicks(10)
-		}
-	}
-
 	/**
-	 * The scene capture round a hole: the ground test's scene round a hole of r_s 2, from beside and above, with the
-	 * capture and without, each against the exact light per pixel (LensReference). Logged.
+	 * The lens round a hole: the ground test's scene round a hole of r_s 2, from beside, above and close, against the
+	 * exact light per pixel (LensReference), with the post pass's cost. Logged.
 	 */
 	@ClientGameTest
 	fun ClientGameTestContext.captureLens() {
@@ -1477,9 +1458,8 @@ class LensClientGameTest {
 						for (row in first until minOf(first + 8, rows)) reference[row] = part[row]
 					}
 					val shot = takeScreenshot("capture_$name")
-					CreateRelativity.LOGGER.info("Capture lens, {}: {}% of pixels in the wrong class; {} fps", name,
-						"%.1f".format(LensReference.compare(reference, shot) * 100), computeOnClient { it.fps })
-					withoutCapture("Capture lens, $name", "capture_$name", reference)
+					CreateRelativity.LOGGER.info("Capture lens, {}: {}% of pixels in the wrong class; post pass {} ms; {} fps", name,
+						"%.1f".format(LensReference.compare(reference, shot) * 100), "%.2f".format(postPassMillis()), computeOnClient { it.fps })
 				}
 			} finally {
 				command("tick unfreeze")
@@ -1761,7 +1741,6 @@ class LensClientGameTest {
 				BlackHoleLens.rawFrame = false
 				BlackHoleLens.profileFlags = 0
 				BlackHoleLens.timeGpu = false
-				SceneCapture.enabled = true
 			}
 			world.close()
 			runOnClient { ClientTestInput.unlock(it) }

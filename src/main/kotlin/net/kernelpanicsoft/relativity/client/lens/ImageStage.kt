@@ -23,6 +23,19 @@ object ImageStage {
 	@JvmField
 	var enabled = java.lang.Boolean.getBoolean("relativity.imageStage")
 
+	/**
+	 * How near a hole (in its r_s; the block's [28].w) vertices' other images are looked for: farther out they're thin
+	 * slivers hugging the photon ring, left to the post pass.
+	 */
+	@JvmField
+	var reach = 20f
+
+	/**
+	 * How many other images a triangle is drawn at, at most: the geometry stage's declared output, which (on Intel at
+	 * least) costs every triangle through it, drawn again or not.
+	 */
+	private const val EMITTED = 1
+
 	/** The slots other than the primary's: their images, two to a vec4. */
 	private const val OTHERS = 3
 
@@ -82,6 +95,7 @@ object ImageStage {
 		return """$text
 out vec4 relativityStageA;
 out vec2 relativityStageB;
+out vec2 relativityStageP;
 
 // Where the camera sees p in slot s (table position; 0 none).
 vec2 relativityStageImage(vec3 p, int s) {
@@ -91,11 +105,22 @@ vec2 relativityStageImage(vec3 p, int s) {
     return uv;
 }
 
+// Whether p is within the stage's reach of a hole.
+bool relativityStageNear(vec3 p) {
+    for (int k = 0; k < relativityFieldCount(); k += 1) {
+        if (relativityFieldHole(k) && length(p - relativityFieldCentre(k)) < RelativityLensData[28].w * relativityFieldParams(k).x) return true;
+    }
+    return false;
+}
+
 void main() {
     relativityStageMain();
     relativityStageA = vec4(0.0);
     relativityStageB = vec2(0.0);
-    if ($checked > 0.5 && relativityFieldComposed() && relativityTableOn() && relativitySecond()) {
+    relativityStageP = vec2(0.0);
+    if ($checked > 0.5 && relativityFieldComposed() && relativityTableOn() && relativityStageNear($unbent)) {
+        // (Its primary too, as the vertex lens found it: a triangle across a seam between slots is matched across them.)
+        relativityStageP = relativityStageImage($unbent, 0);
         relativityStageA = vec4(relativityStageImage($unbent, 1), relativityStageImage($unbent, 2));
         relativityStageB = relativityStageImage($unbent, 3);
     }
@@ -104,8 +129,8 @@ void main() {
 	}
 
 	/**
-	 * The geometry shader: the triangle passed through; then, for each other slot all three corners have an image in,
-	 * drawn there too (counter-clockwise on screen, so culling keeps it; relativityChecked 2, or 3 where that turned it
+	 * The geometry shader: the triangle passed through; then, for each image of its first corner (any slot) with the
+	 * others' nearest images (any slot) close by, drawn there too (counter-clockwise on screen, so culling keeps it; relativityChecked 2, or 3 where that turned it
 	 * round: the pixel check checks it by the table alone and turns its normal back).
 	 */
 	private fun geometrySource(source: String, outputs: List<Output>): String {
@@ -118,13 +143,15 @@ void main() {
 		val hasBent = outputs.any { it.name == "relativityBent" }
 		return """#version 150
 layout(triangles) in;
-layout(triangle_strip, max_vertices = ${3 * (OTHERS + 1)}) out;
+layout(triangle_strip, max_vertices = ${3 * (EMITTED + 1)}) out;
 $block
 $declarations
 in vec4 relativityStageA[];
 in vec2 relativityStageB[];
+in vec2 relativityStageP[];
 
 vec2 relativityStageImage(int corner, int s) {
+    if (s == 0) return relativityStageP[corner];
     if (s == 1) return relativityStageA[corner].xy;
     if (s == 2) return relativityStageA[corner].zw;
     return relativityStageB[corner];
@@ -150,13 +177,39 @@ ${copy("corner", "        ")}
         EmitVertex();
     }
     EndPrimitive();
-    for (int s = 1; s <= $OTHERS; s += 1) {
+    // Each of the first corner's images (any slot, the primary's too) with the other corners' nearest (any slot, the
+    // same first on a tie): the slots' signatures change across seams (light passing by another hole's axis) where a
+    // triangle's corners fall in different slots though their images lie side by side. All three primaries: the
+    // triangle passed through already is that one.
+    int emitted = 0;
+    for (int s = 0; s <= $OTHERS && emitted < $EMITTED; s += 1) {
         vec2 a = relativityStageImage(0, s);
-        vec2 b = relativityStageImage(1, s);
-        vec2 c = relativityStageImage(2, s);
-        if (a.x <= 0.0 || b.x <= 0.0 || c.x <= 0.0) continue;
-        // (Far apart on the table: corners whose images in the slot are on different sheets, across a fold.)
-        if (max(max(distance(a, b), distance(b, c)), distance(c, a)) > 30.0) continue;
+        if (a.x <= 0.0) continue;
+        vec2 b = vec2(0.0);
+        vec2 c = vec2(0.0);
+        int sb = -1;
+        int sc = -1;
+        float nb = 30.0;
+        float nc = 30.0;
+        for (int t = 0; t <= $OTHERS; t += 1) {
+            vec2 cb = relativityStageImage(1, t);
+            vec2 cc = relativityStageImage(2, t);
+            float db = distance(cb, a) - (t == s ? 0.5 : 0.0);
+            float dc = distance(cc, a) - (t == s ? 0.5 : 0.0);
+            if (cb.x > 0.0 && db < nb) {
+                nb = db;
+                b = cb;
+                sb = t;
+            }
+            if (cc.x > 0.0 && dc < nc) {
+                nc = dc;
+                c = cc;
+                sc = t;
+            }
+        }
+        if (sb < 0 || sc < 0 || (s == 0 && sb == 0 && sc == 0)) continue;
+        // (Far apart on the table: on different sheets, across a fold.)
+        if (distance(b, c) > 30.0) continue;
         vec3 pa = relativityStageAt(0, a);
         vec3 pb = relativityStageAt(1, b);
         vec3 pc = relativityStageAt(2, c);
@@ -173,6 +226,7 @@ ${copy("corner", "        ")}
             relativityStageEmit(1, pb, 3.0);
         }
         EndPrimitive();
+        emitted += 1;
     }
 }
 """

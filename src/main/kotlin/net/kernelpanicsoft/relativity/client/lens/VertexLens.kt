@@ -566,7 +566,7 @@ object VertexLens {
 	 */
 	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val sources = if (fieldSky) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
-		data.put(sources.size.toFloat()).put(if (SceneCapture.enabled && fieldSky && (sources.isNotEmpty() || tubeSources.isNotEmpty() || bubbleSources.isNotEmpty())) 1f else 0f).put(0f).put(0f)
+		data.put(sources.size.toFloat()).put(0f).put(0f).put(ImageStage.reach)
 		for (source in sources) {
 			val (centre, type, params) = when (source) {
 				is BlackHole -> Triple(source.center.let { org.joml.Vector3d(it.x, it.y, it.z) }, 1f, floatArrayOf(source.schwarzschildRadius.toFloat(), 0f))

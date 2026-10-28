@@ -48,9 +48,12 @@ object SceneCapture {
 	/** Each face's look: +x, −x, +y, −y, +z, −z (game axes). */
 	private val looks = listOf(Vector3f(1f, 0f, 0f), Vector3f(-1f, 0f, 0f), Vector3f(0f, 1f, 0f), Vector3f(0f, -1f, 0f), Vector3f(0f, 0f, 1f), Vector3f(0f, 0f, -1f))
 
-	/** Whether to capture (debug; GameTests compare without). */
+	/**
+	 * Whether to capture. Off: the lens draws every image with vertices and its post pass only sky and shadow; kept for
+	 * the wormhole, which will need one view (its far mouth), not these.
+	 */
 	@JvmField
-	var enabled = true
+	var enabled = false
 
 	/** A viewpoint's capture: where it's drawn from, each face's matrix (projection times view rotation, game axes in), when. */
 	private class View(val face: Int, val blockX: Int, val blockY: Int) {

@@ -2,8 +2,6 @@
   "vertex": "veil:blit_screen",
   "fragment": "create_relativity:black_hole_lens",
   "textures": {
-    "LensLookup": "create_relativity:lens_lookup",
-    "SceneCapture": "create_relativity:scene_capture",
-    "SceneCaptureDepth": "create_relativity:scene_capture_depth"
+    "LensLookup": "create_relativity:lens_lookup"
   }
 }
