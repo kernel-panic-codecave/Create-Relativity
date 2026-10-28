@@ -309,8 +309,16 @@ bool sceneCaptureMarch(vec3 d, out vec3 color) {
                 vec2 atm;
                 if (sceneCaptureFace(wm / length(wm), atm, dm) && length(wm) >= dm) b = m; else a = m;
             }
+            // A hit where the light goes into a surface, not where it passes behind a silhouette: a hair either side
+            // of the crossing the light is on what the capture shows (within a texel's footprint, a block or so
+            // across a floor seen glancing). Past a post's edge it's well in front of the floor beyond on one side
+            // and well behind the post on the other.
+            vec3 wa = (VeilCamera.IViewMat * vec4(a, 0.0)).xyz;
             vec3 wb = (VeilCamera.IViewMat * vec4(b, 0.0)).xyz;
-            if (sceneCaptureFace(wb / length(wb), at, dist) && length(wb) - dist < max(2.0, 0.3 * length(wb))) {
+            vec2 atA;
+            float distA;
+            if (sceneCaptureFace(wa / length(wa), atA, distA) && sceneCaptureFace(wb / length(wb), at, dist)
+                    && distA - length(wa) < max(1.0, 0.08 * length(wa)) && length(wb) - dist < max(1.0, 0.08 * length(wb))) {
                 color = texture(SceneCapture, at).rgb;
                 return true;
             }
@@ -456,7 +464,8 @@ void main() {
         // Light that meets the level on its way (by the table), though the vertex lens drew nothing here: the capture's.
         vec3 met;
         // (Also by a shadow's edge, where the table's escape lookup gives up: the walk ends where the light does.)
-        bool onTable = relativityTableOn() && (!tabled || !escaped || dot(escape, viewDir) < cos(TABLE_FILL_BEND));
+        // Only inside the Einstein rings (outside, the vertex lens draws what's there, and the rest is sky).
+        bool onTable = relativityTableOn() && relativityInsideRing(viewDir, 1e30);
         bool meets = onTable && sceneCaptureMarch(viewDir, met);
         if (LensMode == 5) {
             vec3 codes[7] = vec3[](vec3(0.3), vec3(1.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 1.0));

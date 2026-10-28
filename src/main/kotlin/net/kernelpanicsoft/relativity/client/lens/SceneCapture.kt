@@ -31,7 +31,7 @@ object SceneCapture {
 	val DEPTH = CreateRelativity.id("scene_capture_depth")
 
 	/** Each face's size (pixels). */
-	private const val FACE = 512
+	private const val FACE = 1024
 
 	/** Each face's field of view (degrees): a little over 90, so neighbours overlap and no direction falls between. */
 	private const val FOV = 92f
