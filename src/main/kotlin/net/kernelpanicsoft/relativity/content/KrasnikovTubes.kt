@@ -151,19 +151,43 @@ object KrasnikovTubes {
 			tube.strength = age / RAMP_TICKS
 			// Its front, out from the train at the tube's light speed (ahead of the train, at 90% of it).
 			val front = c / k * age / 20.0
-			val here = train.carriages.firstOrNull()?.leadingPoint?.getPosition(train.graph)
 			val spines = ArrayList<List<Vector3dc>>()
 			var run = ArrayList<Vector3dc>()
 			fun close() {
 				if (run.size >= 2) spines += run
 				run = ArrayList()
 			}
+			// Round the train itself first: its bogeys' points from its tail to its head (the way it's going), past its
+			// tail by its overhang; where they're on Krasnikov track.
+			val body = body(train)
+			for ((i, point) in body.withIndex()) {
+				val krasnikov = point.second
+				if (!krasnikov) {
+					close()
+					continue
+				}
+				if (run.isEmpty() && i + 1 < body.size) {
+					// (The tail's overhang: the last carriage's body past its bogey.)
+					val next = body[i + 1].first
+					val back = Vector3d(point.first).sub(next)
+					if (back.length() > 1e-6) run += Vector3d(point.first).add(back.normalize(OVERHANG))
+				}
+				if (run.isEmpty() || run.last().distance(point.first) > 0.25) run += point.first
+			}
 			var travelled = 0.0
-			var last: Vector3dc? = here?.let { Vector3d(it.x, it.y + LIFT, it.z) }
+			var last: Vector3dc? = body.lastOrNull()?.first
+			// (On the edge the head is on, only what's ahead of it: the train's own stretch is the body's.)
+			val head = if (train.speed >= 0) train.carriages.firstOrNull()?.leadingPoint else train.carriages.lastOrNull()?.trailingPoint
 			outer@ for ((i, d) in route.withIndex()) {
 				val krasnikov = edge(train, d)?.trackMaterial === Maglev.KRASNIKOV
 				if (krasnikov && i == 0) inTube[train.id] = tilt(tube.strength)
+				var along = 0.0
+				var previous: Vector3dc? = null
+				val start = if (i == 0 && head != null) (if (head.node1 === d.from) head.position else (edge(train, d)?.length ?: 0.0) - head.position) else 0.0
 				for (p in polyline(train, d)) {
+					previous?.let { along += it.distance(p) }
+					previous = p
+					if (along <= start) continue
 					last?.let { travelled += it.distance(p) }
 					last = p
 					if (!krasnikov) continue
@@ -190,6 +214,28 @@ object KrasnikovTubes {
 		}
 		gone.forEach { forming.remove(it) }
 		return Cached(tick, inTube, tubes)
+	}
+
+	/** How far (blocks) a carriage's body runs past its end bogey: the tube reaches that far behind the train. */
+	private const val OVERHANG = 2.5
+
+	/**
+	 * [train]'s bogeys' points from its tail to its head (by the way it's going, as [route] takes its head), lifted to
+	 * the carriages' middles, each with whether its track is Krasnikov.
+	 */
+	private fun body(train: Train): List<Pair<Vector3dc, Boolean>> {
+		val graph = train.graph ?: return emptyList()
+		val points = ArrayList<com.simibubi.create.content.trains.entity.TravellingPoint>()
+		// (Carriages run first to last from the train's front; each's leading point is toward it.)
+		for (carriage in train.carriages) {
+			points += carriage.leadingPoint
+			points += carriage.trailingPoint
+		}
+		if (train.speed >= 0) points.reverse()
+		return points.map { point ->
+			val p = point.getPosition(graph)
+			Vector3d(p.x, p.y + LIFT, p.z) as Vector3dc to (point.edge?.trackMaterial === Maglev.KRASNIKOV)
+		}
 	}
 
 	/** [d]'s centre line, lifted to the carriages' middles: a turn's curve sampled a block apart, else straight. */

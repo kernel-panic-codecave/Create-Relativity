@@ -1041,6 +1041,12 @@ class LensClientGameTest {
 				// Along its route to the station (its front long past it).
 				val length = tube.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) }
 				assertTrue(length > 60.0) { "The tube runs $length blocks, the route about 100" }
+				// Round the whole train, not just ahead of it: every bogey's point on the tube's spine.
+				for (carriage in maglev.carriages) for (point in listOf(carriage.leadingPoint, carriage.trailingPoint)) {
+					val p = point.getPosition(maglev.graph)
+					val off = tube.distance(org.joml.Vector3d(p.x, p.y + 1.0, p.z))
+					assertTrue(off < 1.0) { "A bogey of the train is $off blocks off its tube's spine" }
+				}
 				val top = 0.9 * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension()) / k / 20.0
 				assertTrue(kotlin.math.abs(maglev.maxSpeed() / top - 1.0) < 1e-3) { "In its tube, the train's top speed is ${maglev.maxSpeed()}, expected $top" }
 			}
