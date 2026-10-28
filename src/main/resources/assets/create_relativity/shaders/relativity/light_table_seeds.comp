@@ -1,7 +1,9 @@
 // The light table's inverse map (LightTable; vertex_lens_core.glsl's relativityTableImage reads it): per sphere, each
 // quad of four neighbouring rays all of one kept signature covers a patch of straight-line directions there; every cell
-// of that patch gets the quad (where several do, the least bent: bend << 20 | quad index), in its slot's layers. So the
-// map is dense where the lens spreads rays apart, and a cell's seed is within a texel of its image.
+// of that patch gets the quad (where several do, the least bent: bend << 20 | quad index), in its slot's layers, on the
+// cube of directions (vertex_lens_core.glsl's relativityTableCube). So the map is dense where the lens spreads rays
+// apart, a cell's seed is within a texel of its image, and points off the screen (light bent round from beside or
+// behind the camera) have theirs.
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba32f, binding = 0) uniform readonly image2DArray Table;
 layout(r32ui, binding = 1) uniform uimage2DArray Seeds;
@@ -14,9 +16,7 @@ void main() {
     ivec2 size = ivec2(relativityTableSize());
     if (quad.x >= size.x - 1 || quad.y >= size.y - 1 || k >= relativityTableShells()) return;
     int layer = RELATIVITY_TABLE_SLOTS * relativityTableShells();
-    vec2 lo = vec2(1e9);
-    vec2 hi = vec2(-1e9);
-    vec2 centre = vec2(0.0);
+    vec3 corners[4];
     uint signature = 0u;
     for (int n = 0; n < 4; n += 1) {
         ivec2 corner = quad + ivec2(n % 2, n / 2);
@@ -25,25 +25,37 @@ void main() {
         uint sig = relativityTableSignature(relativityTableDirection(vec2(corner) + 0.5), p.xyz);
         if (n == 0) signature = sig;
         else if (sig != signature) return;
-        vec2 straight;
-        if (!relativityTableUv(normalize(p.xyz), straight)) return;
-        lo = min(lo, straight);
-        hi = max(hi, straight);
-        centre += straight * 0.25;
+        corners[n] = normalize(p.xyz);
     }
     int slot = -1;
     for (int s = 0; s < RELATIVITY_TABLE_SLOTS; s += 1) {
         if (imageLoad(Seeds, ivec3(s, 0, layer)).r == signature) slot = s;
     }
     if (slot < 0) return;
-    ivec2 a = ivec2(floor(lo));
-    ivec2 b = ivec2(floor(hi));
-    if (b.x - a.x > MAX_QUAD || b.y - a.y > MAX_QUAD) return;
-    uint bend = uint(min(length(centre - (vec2(quad) + 1.0)) * 8.0, 4095.0));
-    uint key = (bend << 20) | uint(quad.y * size.x + quad.x);
-    for (int y = max(a.y, 0); y <= min(b.y, size.y - 1); y += 1) {
-        for (int x = max(a.x, 0); x <= min(b.x, size.x - 1); x += 1) {
-            imageAtomicMin(Seeds, ivec3(x, y, slot * relativityTableShells() + k), key);
+    // (How far the light bends: the quad's straight-line directions from its rays'.)
+    vec3 middle = normalize(corners[0] + corners[1] + corners[2] + corners[3]);
+    float bend = acos(clamp(dot(middle, relativityTableDirection(vec2(quad) + 1.0)), -1.0, 1.0));
+    uint key = (uint(min(bend * 1000.0, 4095.0)) << 20) | uint(quad.y * size.x + quad.x);
+    // Every face the quad lies in front of, so none is lost at a face's edge.
+    for (int f = 0; f < 6; f += 1) {
+        vec2 lo = vec2(1e9);
+        vec2 hi = vec2(-1e9);
+        bool front = true;
+        for (int n = 0; n < 4; n += 1) {
+            vec2 cell;
+            front = front && relativityTableCube(corners[n], f, cell);
+            lo = min(lo, cell);
+            hi = max(hi, cell);
+        }
+        if (!front) continue;
+        ivec2 a = ivec2(floor(lo));
+        ivec2 b = ivec2(floor(hi));
+        if (b.x < 0 || b.y < 0 || a.x >= RELATIVITY_TABLE_CUBE || a.y >= RELATIVITY_TABLE_CUBE) continue;
+        if (b.x - a.x > MAX_QUAD || b.y - a.y > MAX_QUAD) continue;
+        for (int y = max(a.y, 0); y <= min(b.y, RELATIVITY_TABLE_CUBE - 1); y += 1) {
+            for (int x = max(a.x, 0); x <= min(b.x, RELATIVITY_TABLE_CUBE - 1); x += 1) {
+                imageAtomicMin(Seeds, ivec3(x + f * RELATIVITY_TABLE_CUBE, y, slot * relativityTableShells() + k), key);
+            }
         }
     }
 }

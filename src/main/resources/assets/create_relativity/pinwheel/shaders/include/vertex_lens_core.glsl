@@ -26,10 +26,11 @@ uniform sampler3D RelativityImages; // SchwarzschildImages.forFiltering over (sq
 uniform sampler3D RelativitySecondImages; // SchwarzschildImages.buildSecondaryTable, as RelativityImages: r ln(psi - psi_c)
                                           // of the secondary image (the long way round), g whether there's one
 uniform usampler2DArray RelativityLightSeeds; // LightTable's inverse, per kept signature (slot s: layers s n to s n +
-                                              // n - 1): per straight-line direction and sphere, the quad of rays (j W
-                                              // + i: rays (i, j) to (i + 1, j + 1)) of that signature covering it there,
-                                              // the least bent kept (bend << 20 | index), all ones where none; layer
-                                              // 4 n, texels (s, 0): slot s's signature (all ones: none)
+                                              // n - 1): per straight-line direction (every way round: a cube map, its
+                                              // six faces side by side, relativityTableCube) and sphere, the quad of
+                                              // rays (j W + i: rays (i, j) to (i + 1, j + 1)) of that signature
+                                              // covering it there, the least bent kept (bend << 20 | index), all ones
+                                              // where none; layer 4 n, texels (s, 0): slot s's signature (all ones: none)
 uniform sampler2DArray RelativityLightTable; // LightTable: per view direction, where its light first crosses each sphere
                                              // round the camera (layer 2k: xyz, w 1 if it does) and its heading there
                                              // (2k + 1); layer 2 n: where it ends heading (w 1 out, 0 captured)
@@ -765,6 +766,31 @@ uint relativityTableSignature(vec3 d, vec3 p) {
     return bits;
 }
 
+// The inverse map's cube (LightTable.CUBE texels a face edge): where direction d falls on face f (0 to 5: axis f / 2, +
+// for even f), in texels of that face (beyond 0 to CUBE where d lies off it; false if d isn't in front of the face's
+// plane). So points seen by light bent round from beside or behind the camera have seeds too.
+const int RELATIVITY_TABLE_CUBE = 128; // LightTable.CUBE
+// (No ?: in these: Veil's GLSL processor writes them back without their brackets, and the face comes out 0 or 1.)
+bool relativityTableCube(vec3 d, int f, out vec2 cell) {
+    int axis = f / 2;
+    float along = d[axis];
+    if (f % 2 == 1) along = -along;
+    cell = vec2(0.0);
+    if (along <= 0.05 * length(d)) return false;
+    cell = (vec2(d[(axis + 1) % 3], d[(axis + 2) % 3]) / along * 0.5 + 0.5) * float(RELATIVITY_TABLE_CUBE);
+    return true;
+}
+// The face d falls on (its largest component's).
+int relativityTableFace(vec3 d) {
+    vec3 a = abs(d);
+    int axis = 2;
+    if (a.x >= a.y && a.x >= a.z) axis = 0;
+    else if (a.y >= a.z) axis = 1;
+    int face = 2 * axis;
+    if (d[axis] < 0.0) face += 1;
+    return face;
+}
+
 // The light table's slots (one geometry pass each: VertexLens.drawSecondImages); this pass's ([11].z) and its signature.
 const int RELATIVITY_TABLE_SLOTS = 4; // LightTable.SLOTS
 int relativityTableSlot() { return int(RelativityLensData[11].z + 0.5); }
@@ -780,23 +806,26 @@ bool relativityTableImage(vec3 p, out vec3 seen) {
     int slot = relativityTableSlot();
     uint signature = relativityTableSlotSignature(slot);
     if (signature == 0xFFFFFFFFu) return false;
+    int face = relativityTableFace(seen);
     vec2 uv;
-    if (!relativityTableUv(seen, uv)) return false;
+    relativityTableCube(seen, face, uv);
     float r = length(p);
     float s = log(r / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
     int k = int(clamp(floor(s + 0.5), 0.0, float(relativityTableShells() - 1)));
     ivec2 cell = ivec2(uv);
     uint best = 0xFFFFFFFFu;
     for (int n = 0; n < 9; n += 1) {
-        ivec2 at = clamp(cell + ivec2(n % 3 - 1, n / 3 - 1), ivec2(0), ivec2(relativityTableSize()) - 1);
-        best = min(best, texelFetch(RelativityLightSeeds, ivec3(at, slot * relativityTableShells() + k), 0).r);
+        ivec2 at = clamp(cell + ivec2(n % 3 - 1, n / 3 - 1), ivec2(0), ivec2(RELATIVITY_TABLE_CUBE - 1));
+        best = min(best, texelFetch(RelativityLightSeeds, ivec3(at.x + face * RELATIVITY_TABLE_CUBE, at.y, slot * relativityTableShells() + k), 0).r);
     }
+    relativityTableWhy = vec4(7.0, float(face), uv);
     if (best == 0xFFFFFFFFu) return false;
     int index = int(best & 0xFFFFFu);
     int width = int(relativityTableSize().x);
     vec2 seed = vec2(float(index % width), float(index / width)) + 1.0;
     if (!relativityTableImageFrom(p, relativityTableDirection(seed), seen)) return false;
-    return relativityTableSignature(seen, p) == signature;
+    if (relativityTableSignature(seen, p) != signature) { relativityTableWhy = vec4(8.0, float(relativityTableSignature(seen, p)), seed); return false; }
+    return true;
 }
 
 // Where the light seen along view direction d ends heading, by the table: false if d is off it, or by a shadow's edge

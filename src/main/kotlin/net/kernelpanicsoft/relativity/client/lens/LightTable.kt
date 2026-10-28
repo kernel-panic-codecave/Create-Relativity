@@ -30,6 +30,9 @@ object LightTable {
 	/** Signatures drawn (a geometry pass each: VertexLens.drawSecondImages): vertex_lens_core.glsl's RELATIVITY_TABLE_SLOTS. */
 	const val SLOTS = 4
 
+	/** The inverse map's cube faces' edge (texels): vertex_lens_core.glsl's RELATIVITY_TABLE_CUBE. */
+	const val CUBE = 128
+
 	/** How far past the screen's edges the table reaches (of its half-tangents). */
 	private const val MARGIN = 1.15f
 
@@ -37,7 +40,8 @@ object LightTable {
 	@JvmField
 	var enabled = true
 
-	/** The table (GL_TEXTURE_2D_ARRAY, 2 SHELLS + 1 layers), 0 until made; its inverse, the seeds (R32UI, SHELLS layers). */
+	/** The table (GL_TEXTURE_2D_ARRAY, 2 SHELLS + 1 layers), 0 until made; its inverse, the seeds (R32UI, 6 CUBE x CUBE: a
+	 * cube map's faces side by side; SHELLS layers per slot, then the slots' signatures). */
 	var texture = 0
 		private set
 	var seeds = 0
@@ -46,6 +50,12 @@ object LightTable {
 	private var pickProgram = 0
 	private var seedsProgram = 0
 	private var counts = 0
+
+	/** Last frame's slots in use (read back a frame late, so nothing waits on the GPU): a pass each beyond slot 0. */
+	var slotsInUse = BooleanArray(SLOTS) { it == 0 }
+		private set
+	private var slotBuffer = 0
+	private var slotPending = false
 	private var failed = false
 
 	/** Whether this frame has a table (the block's [7].w). */
@@ -93,12 +103,38 @@ object LightTable {
 		link(pickProgram)
 		GL20.glUseProgram(pickProgram)
 		GL43.glDispatchCompute(1, 1, 1)
-		GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+		GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GL42.GL_PIXEL_BUFFER_BARRIER_BIT)
+		readSlots()
 		link(seedsProgram)
 		GL20.glUseProgram(seedsProgram)
 		GL43.glDispatchCompute((WIDTH + 6) / 8, (HEIGHT + 6) / 8, SHELLS)
 		GL42.glMemoryBarrier(GL42.GL_TEXTURE_FETCH_BARRIER_BIT or GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
 		GL20.glUseProgram(previous)
+	}
+
+	/**
+	 * Reads last frame's slot signatures (copied into a buffer then) and copies this frame's: so which slots are in use is
+	 * known a frame late, without waiting on the GPU.
+	 */
+	private fun readSlots() {
+		if (slotBuffer == 0) {
+			slotBuffer = GL15.glGenBuffers()
+			GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, slotBuffer)
+			GL15.glBufferData(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 4L * SLOTS, GL15.GL_STREAM_READ)
+			GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0)
+		}
+		GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, slotBuffer)
+		if (slotPending) {
+			val data = GL15.glMapBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, GL15.GL_READ_ONLY)
+			if (data != null) {
+				val ints = data.asIntBuffer()
+				slotsInUse = BooleanArray(SLOTS) { it == 0 || ints.get(it) != -1 }
+				GL15.glUnmapBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER)
+			}
+		}
+		org.lwjgl.opengl.GL45.glGetTextureSubImage(seeds, 0, 0, 0, SLOTS * SHELLS, SLOTS, 1, 1, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, 4 * SLOTS, 0L)
+		GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0)
+		slotPending = true
 	}
 
 	private fun ensure(): Boolean {
@@ -114,7 +150,7 @@ object LightTable {
 		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0)
 		seeds = GL11.glGenTextures()
 		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, seeds)
-		GL12.glTexImage3D(GL30.GL_TEXTURE_2D_ARRAY, 0, GL30.GL_R32UI, WIDTH, HEIGHT, SLOTS * SHELLS + 1, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, null as java.nio.IntBuffer?)
+		GL12.glTexImage3D(GL30.GL_TEXTURE_2D_ARRAY, 0, GL30.GL_R32UI, 6 * CUBE, CUBE, SLOTS * SHELLS + 1, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, null as java.nio.IntBuffer?)
 		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
 		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
 		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0)

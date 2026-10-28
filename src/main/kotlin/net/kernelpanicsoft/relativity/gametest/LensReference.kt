@@ -57,6 +57,26 @@ internal object LensReference {
 		val eye = minecraft.gameRenderer.mainCamera.position
 		val at = Vector3d(eye.x, eye.y, eye.z)
 		val level = minecraft.level!!
+		// Holes and masses: the lens's own model, the superposed orbit field (OrbitField), followed finely, so what's
+		// measured is the lens's error and not the model's (the summed metric the physics uses differs from it).
+		val field = SpacetimeField.fieldSources(level)
+		if (field.all { it is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass || it is BlackHole }) {
+			val v3 = { x: Double, y: Double, z: Double -> net.kernelpanicsoft.relativity.physics.lens.field.V3(x - eye.x, y - eye.y, z - eye.z) }
+			val modules = SpacetimeField.blackHoles(level).map { net.kernelpanicsoft.relativity.physics.lens.field.HoleModule(v3(it.x, it.y, it.z), it.schwarzschildRadius) } +
+				field.filterIsInstance<net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass>().map {
+					net.kernelpanicsoft.relativity.physics.lens.field.MassModule(v3(it.center.x(), it.center.y(), it.center.z()), it.mass, it.softening)
+				}
+			val model = net.kernelpanicsoft.relativity.physics.lens.field.OrbitField(modules)
+			return traceWith(minecraft, eye, columns, rows, fogFree, only) { _, direction ->
+				val game = GameFrame.toGame(direction, 0, Vector3d())
+				val traced = model.trace(net.kernelpanicsoft.relativity.physics.lens.field.V3.ZERO, net.kernelpanicsoft.relativity.physics.lens.field.V3(game.x, game.y, game.z),
+					reach = maxLength, record = true, recordEvery = 0.25)
+				// (Captured: what it passes before falling in still shows; past that, the shadow.)
+				NullRay.Path(traced.points.map { p -> DoubleArray(3).also { GameFrame.toPhysics(Vector3d(p.x, p.y, p.z), it) } },
+					if (traced.escape == null) NullRay.End.CAPTURED else NullRay.End.LENGTH)
+			}
+		}
+
 		val sources = SpacetimeField.blackHoles(level).map { hole ->
 			val p = DoubleArray(3)
 			GameFrame.toPhysics(Vector3d(hole.x, hole.y, hole.z).sub(at), p)

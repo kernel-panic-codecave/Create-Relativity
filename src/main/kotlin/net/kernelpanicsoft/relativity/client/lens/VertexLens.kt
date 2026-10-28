@@ -429,6 +429,8 @@ object VertexLens {
 				GL11.glDisable(GL11.GL_CULL_FACE)
 				try {
 					for (slot in 1 until LightTable.SLOTS) {
+						// (Slots with no signature this frame: nothing to draw.)
+						if (!LightTable.slotsInUse[slot]) continue
 						setSlot(slot)
 						draw.run()
 					}
