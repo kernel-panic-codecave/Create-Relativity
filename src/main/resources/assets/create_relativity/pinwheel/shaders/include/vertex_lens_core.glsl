@@ -1909,11 +1909,12 @@ bool relativityTableBackFacing(vec3 unbent, vec3 bent, vec3 normal) {
     return dot(normal, heading) > 0.0;
 }
 
-// Whether the pixel seeing view direction d lies inside a hole's Einstein ring, for a point at distance r: its light
+// Whether the pixel seeing view direction d lies inside a hole's Einstein ring, for view-space point p: its light
 // ends up on the other side of that hole's axis (the escape direction across the plane of the camera, the hole and d),
-// or a hole captures it, and the point is beyond that hole. There the post pass draws what's seen (every image, from
-// the light itself: black_hole_lens.fsh's sceneCaptureTable); the vertex lens draws only outside, and in front.
-bool relativityInsideRing(vec3 d, float r) {
+// or a hole captures it, and the point is behind that hole (past it along the camera's line to it: a post beside the
+// hole, its light met long before the hole, isn't). There the post pass draws what's seen (every image, from the light
+// itself: black_hole_lens.fsh's sceneCaptureMarch); the vertex lens draws only outside, and in front.
+bool relativityInsideRing(vec3 d, vec3 p) {
     vec3 escape;
     bool captured;
     if (!relativityTableEscape(d, escape, captured)) {
@@ -1925,7 +1926,7 @@ bool relativityInsideRing(vec3 d, float r) {
     for (int k = 0; k < relativityFieldCount(); k += 1) {
         if (!relativityFieldHole(k)) continue;
         vec3 c = relativityFieldCentre(k);
-        if (r <= length(c)) continue;
+        if (dot(p, c) <= dot(c, c)) continue;
         if (captured || dot(cross(c, d), cross(c, escape)) < 0.0) return true;
     }
     return false;
@@ -1944,7 +1945,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // Composed: by the light table, forward (one read): the light seen where the pixel's drawn, at the point's distance,
     // must be by the point; else the pixel's own image (a lookup per source) against where it's drawn.
     if (relativityFieldComposed() && relativityTableOn()) {
-        if (relativityInsideRing(normalize(bent), length(unbent))) return true;
+        if (relativityInsideRing(normalize(bent), unbent)) return true;
         vec2 uv;
         vec3 at;
         if (!relativityTableUv(normalize(bent), uv) || !relativityTablePoint(uv, length(unbent), at)) return true;

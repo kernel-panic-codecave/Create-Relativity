@@ -266,6 +266,8 @@ object BlackHoleLens {
 		uniform("Holes") { setVectors(*holeUniforms) }
 		uniform("SceneCaptureReady") { setInt(SceneCapture.ready) }
 		uniform("SceneCaptureFaces") { setVectors(*SceneCapture.columns()) }
+		uniform("SceneCaptureOrigins") { setVectors(*SceneCapture.origins(camera)) }
+		uniform("SceneCaptureCells") { setVectors(*SceneCapture.cells()) }
 		uniform("SceneCaptureRange") { setVector(SceneCapture.NEAR, SceneCapture.far) }
 		uniform("LensMode") { setInt(if (rawFrame) 4 else if (fillDebug) 5 else 0) }
 		val sky = level.getSkyColor(camera, minecraft.timer.getGameTimeDeltaPartialTick(false))

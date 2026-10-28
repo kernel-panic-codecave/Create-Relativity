@@ -15,8 +15,11 @@ uniform sampler2D DiffuseSampler0;
 uniform sampler2D LensLookup;
 uniform sampler2D SceneCapture;      // SceneCapture: the level round the camera, unlensed, on a cube's six faces side by side
 uniform sampler2D SceneCaptureDepth; // its depth (1: nothing drawn, sky)
-uniform int SceneCaptureReady;       // which faces hold a capture (bit per face)
-uniform vec4 SceneCaptureFaces[24];  // each face's projection times view rotation, by column (game axes, directions)
+const int SCENE_CAPTURE_VIEWS = 3;   // SceneCapture.VIEWS: the camera's, then the nearest holes'
+uniform int SceneCaptureReady;       // which faces hold a capture (6 bits a view, the camera's lowest)
+uniform vec4 SceneCaptureFaces[72];  // each view's faces' projection times view rotation, by column (game axes, directions)
+uniform vec4 SceneCaptureOrigins[3]; // each view's origin, camera-relative (game axes); w 1 if in use
+uniform vec4 SceneCaptureCells[3];   // each view's faces' place in the atlas: corner, size of its three by two
 uniform vec2 SceneCaptureRange;      // the faces' near and far planes (blocks)
 const int SCENE_CAPTURE_STEPS = 40;  // the march along a leg (sceneCaptureAlong): steps growing by a quarter
 // The lens's asymptotes, by how it maps a pixel's square of sky (the escape directions' area over the view's): below
@@ -122,28 +125,62 @@ vec4 diskColor(float r, float rIn, float rOut, float g, float angle, float omega
 
 // The face of the scene capture that holds world direction d most squarely: where in the atlas, and the distance
 // along d (blocks from the camera) to what it shows there (1e30 for sky); false if no face holding it is captured yet.
-bool sceneCaptureFace(vec3 d, out vec2 at, out float dist) {
+// View v's capture in direction d (game axes, from its origin): where in the atlas, and the distance along d (blocks
+// from the origin) to what it shows there (1e30 for sky); false if the face holding d isn't captured yet.
+bool sceneCaptureFaceIn(int v, vec3 d, out vec2 at, out float dist) {
     at = vec2(0.0);
     dist = 1e30;
     // (The faces look along +x, -x, +y, -y, +z, -z: d's largest axis picks its face.)
     vec3 a = abs(d);
-    int best = a.x >= a.y && a.x >= a.z ? (d.x > 0.0 ? 0 : 1) : (a.y >= a.z ? (d.y > 0.0 ? 2 : 3) : (d.z > 0.0 ? 4 : 5));
-    if ((SceneCaptureReady & (1 << best)) == 0) return false;
-    mat4 m = mat4(SceneCaptureFaces[4 * best], SceneCaptureFaces[4 * best + 1], SceneCaptureFaces[4 * best + 2], SceneCaptureFaces[4 * best + 3]);
+    int best = 5;
+    if (a.x >= a.y && a.x >= a.z) best = 1;
+    else if (a.y >= a.z) best = 3;
+    if (best == 1 && d.x > 0.0) best = 0;
+    if (best == 3 && d.y > 0.0) best = 2;
+    if (best == 5 && d.z > 0.0) best = 4;
+    if ((SceneCaptureReady & (1 << (6 * v + best))) == 0) return false;
+    int c = 24 * v + 4 * best;
+    mat4 m = mat4(SceneCaptureFaces[c], SceneCaptureFaces[c + 1], SceneCaptureFaces[c + 2], SceneCaptureFaces[c + 3]);
     vec4 clip = m * vec4(d, 0.0);
-    float bestW = clip.w;
-    vec2 bestNdc = clamp(clip.xy / clip.w, -1.0, 1.0);
+    vec2 ndc = clamp(clip.xy / clip.w, -1.0, 1.0);
     vec2 cell = vec2(float(best - 3 * (best / 3)), float(best / 3));
-    at = (cell + bestNdc * 0.5 + 0.5) / vec2(3.0, 2.0);
+    at = SceneCaptureCells[v].xy + (cell + ndc * 0.5 + 0.5) / vec2(3.0, 2.0) * SceneCaptureCells[v].zw;
     float depth = texture(SceneCaptureDepth, at).r;
     if (depth < 1.0) {
         // (Depth to the face's view depth, then along d: clip.w is d's view depth, d being a unit vector.)
         float n = SceneCaptureRange.x;
         float f = SceneCaptureRange.y;
         float viewZ = 2.0 * n * f / ((f + n) - (2.0 * depth - 1.0) * (f - n));
-        dist = viewZ / (bestW / length(d));
+        dist = viewZ / (clip.w / length(d));
     }
     return true;
+}
+bool sceneCaptureFace(vec3 d, out vec2 at, out float dist) {
+    return sceneCaptureFaceIn(0, d, at, dist);
+}
+
+// The view whose origin is nearest camera-relative point w (game axes): the camera's (0), or a hole's.
+int sceneCaptureNearest(vec3 w) {
+    int best = 0;
+    float bestDist = length(w);
+    for (int v = 1; v < SCENE_CAPTURE_VIEWS; v += 1) {
+        if (SceneCaptureOrigins[v].w < 0.5) continue;
+        float d = length(w - SceneCaptureOrigins[v].xyz);
+        if (d < bestDist) {
+            best = v;
+            bestDist = d;
+        }
+    }
+    return best;
+}
+
+// Whether camera-relative point w (game axes) lies in front of what view v's capture shows its way (or no face holds
+// it: then in front, nothing known behind); its distance from v's origin and what's shown, for the hit test.
+bool sceneCaptureFront(int v, vec3 w, out vec2 at, out float dist, out float r) {
+    vec3 rel = w - SceneCaptureOrigins[v].xyz;
+    r = length(rel);
+    if (!sceneCaptureFaceIn(v, rel / r, at, dist)) return true;
+    return r < dist;
 }
 
 // What light reaching the camera along a last straight leg from o (world axes, camera-relative) heading e shows, by the
@@ -259,6 +296,34 @@ bool sceneCaptureTable(vec3 d, out vec3 color) {
     return false;
 }
 
+// A crossing between camera-relative points wa (in front of what view v's capture shows) and wb (behind it), halved back
+// to it: a hit where the light goes into a surface, not where it passes behind a silhouette: a hair either side of the
+// crossing the light is on what the capture shows (within a texel's footprint, a block or so across a floor seen
+// glancing). Past a post's edge it's well in front of the floor beyond on one side and well behind the post on the
+// other. The capture's colour there, if a hit.
+bool sceneCaptureHit(int v, vec3 wa, vec3 wb, out vec3 color) {
+    color = vec3(0.0);
+    vec2 at;
+    float dist;
+    float r;
+    vec3 a = wa;
+    vec3 b = wb;
+    for (int k = 0; k < 8; k += 1) {
+        vec3 m = 0.5 * (a + b);
+        if (sceneCaptureFront(v, m, at, dist, r)) a = m; else b = m;
+    }
+    vec2 atA;
+    float distA;
+    float ra;
+    sceneCaptureFront(v, a, atA, distA, ra);
+    sceneCaptureFront(v, b, at, dist, r);
+    if (distA - ra < max(1.0, 0.08 * ra) && r - dist < max(1.0, 0.08 * r)) {
+        color = texture(SceneCapture, at).rgb;
+        return true;
+    }
+    return false;
+}
+
 // What the light seen along view direction d shows, followed exactly: marched from the camera through every hole's
 // orbit field (RK4, as relativityFieldMarch), each step's short straight piece checked against the scene capture (a
 // crossing behind a captured surface halved back to it, a hit unless the light is far behind what it shows: a
@@ -268,6 +333,7 @@ bool sceneCaptureTable(vec3 d, out vec3 color) {
 const int FILL_MARCH_LIMIT = 400;
 bool sceneCaptureMarch(vec3 d, out vec3 color) {
     color = vec3(0.0);
+    fillWhy = 6;
     if (SceneCaptureReady == 0) return false;
     int group = (1 << relativityFieldCount()) - 1;
     vec3 x = vec3(0.0);
@@ -280,7 +346,7 @@ bool sceneCaptureMarch(vec3 d, out vec3 color) {
         for (int k = 0; k < relativityFieldCount(); k += 1) {
             vec3 off = x - relativityFieldCentre(k);
             float r = length(off);
-            if (relativityFieldHole(k) && r <= 1.5 * relativityFieldParams(k).x && dot(off, v) < 0.0) return false;
+            if (relativityFieldHole(k) && r <= 1.5 * relativityFieldParams(k).x && dot(off, v) < 0.0) { fillWhy = 2; return false; }
             nearest = min(nearest, r);
             if (r < relativityFieldNear(k) || dot(off, v) <= 0.0) outside = false;
         }
@@ -294,34 +360,19 @@ bool sceneCaptureMarch(vec3 d, out vec3 color) {
         vec3 v4 = v + a3 * h;
         vec3 a4 = relativityOrbitField(group, x + v3 * h, v4);
         vec3 next = x + (v + 2.0 * v2 + 2.0 * v3 + v4) * (h / 6.0);
+        // (Checked in the camera's capture; where that shows something nearer hiding the light's surface (a pillar
+        // in front of what the light comes round to), in the nearest hole's, which sees round it from there.)
+        vec3 wx = (VeilCamera.IViewMat * vec4(x, 0.0)).xyz;
         vec3 w = (VeilCamera.IViewMat * vec4(next, 0.0)).xyz;
         vec2 at;
         float dist;
-        bool front = !sceneCaptureFace(w / length(w), at, dist) || length(w) < dist;
+        float rv;
+        bool front = sceneCaptureFront(0, w, at, dist, rv);
         if (before && !front) {
-            // (Halved back along the piece: short by a hole, so straight to well under a pixel.)
-            vec3 a = x;
-            vec3 b = next;
-            for (int k = 0; k < 8; k += 1) {
-                vec3 m = 0.5 * (a + b);
-                vec3 wm = (VeilCamera.IViewMat * vec4(m, 0.0)).xyz;
-                float dm;
-                vec2 atm;
-                if (sceneCaptureFace(wm / length(wm), atm, dm) && length(wm) >= dm) b = m; else a = m;
-            }
-            // A hit where the light goes into a surface, not where it passes behind a silhouette: a hair either side
-            // of the crossing the light is on what the capture shows (within a texel's footprint, a block or so
-            // across a floor seen glancing). Past a post's edge it's well in front of the floor beyond on one side
-            // and well behind the post on the other.
-            vec3 wa = (VeilCamera.IViewMat * vec4(a, 0.0)).xyz;
-            vec3 wb = (VeilCamera.IViewMat * vec4(b, 0.0)).xyz;
-            vec2 atA;
-            float distA;
-            if (sceneCaptureFace(wa / length(wa), atA, distA) && sceneCaptureFace(wb / length(wb), at, dist)
-                    && distA - length(wa) < max(1.0, 0.08 * length(wa)) && length(wb) - dist < max(1.0, 0.08 * length(wb))) {
-                color = texture(SceneCapture, at).rgb;
-                return true;
-            }
+            if (sceneCaptureHit(0, wx, w, color)) { fillWhy = 1; return true; }
+            int hole = sceneCaptureNearest(w);
+            if (hole > 0 && sceneCaptureFront(hole, wx, at, dist, rv) && !sceneCaptureFront(hole, w, at, dist, rv) && sceneCaptureHit(hole, wx, w, color)) { fillWhy = 7; return true; }
+            fillWhy = hole > 0 ? 8 : 4;
         }
         before = front;
         v += (a1 + 2.0 * a2 + 2.0 * a3 + a4) * (h / 6.0);
@@ -465,10 +516,12 @@ void main() {
         vec3 met;
         // (Also by a shadow's edge, where the table's escape lookup gives up: the walk ends where the light does.)
         // Only inside the Einstein rings (outside, the vertex lens draws what's there, and the rest is sky).
-        bool onTable = relativityTableOn() && relativityInsideRing(viewDir, 1e30);
+        bool onTable = relativityTableOn() && relativityInsideRing(viewDir, viewDir * 1e6);
         bool meets = onTable && sceneCaptureMarch(viewDir, met);
         if (LensMode == 5) {
-            vec3 codes[7] = vec3[](vec3(0.3), vec3(1.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 1.0));
+            // (Grey not walked, white a hit in the camera's capture, cyan in a hole's, red captured, magenta nothing met,
+            // blue a crossing rejected (no hole near), orange rejected in the hole's capture too.)
+            vec3 codes[9] = vec3[](vec3(0.3), vec3(1.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), vec3(1.0, 0.5, 0.0));
             if (!meets && fillWhy == 0) fillWhy = 0;
             fragColor = vec4(codes[fillWhy], 1.0);
             return;
