@@ -721,6 +721,7 @@ class LensClientGameTest {
 		withTestWorld {
 			waitTicks(40)
 			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
+			val crossingEnds = ArrayList<BlockPos>()
 			server.runOnServer { minecraft ->
 				val level = minecraft.overworld()
 				val maglev = net.kernelpanicsoft.relativity.content.RelativityBlocks.MAGLEV_TRACK.get().defaultBlockState()
@@ -804,11 +805,50 @@ class LensClientGameTest {
 				connect(maglev, BlockPos(20, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(14, -60, 7), net.minecraft.world.phys.Vec3(1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
 				curve(maglev, 0, net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
 				curve(track, 4, com.simibubi.create.content.trains.track.TrackMaterial.ANDESITE)
+				// A two-lane junction: lanes along z four apart, each with curves leaving it both ways from the same z, so
+				// each lane's curves cross the other lane (four ways out of two lanes).
+				for (lane in listOf(40, 44)) {
+					for (z in -10..14) level.setBlock(BlockPos(lane, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
+					level.setBlock(BlockPos(lane, -60, 0), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO).setValue(com.simibubi.create.content.trains.track.TrackBlock.HAS_BE, true), 2)
+					for (k in 1..4) {
+						level.setBlock(BlockPos(lane + 8 + k, -60, 8), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+						level.setBlock(BlockPos(lane - 8 - k, -60, 8), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					}
+					connect(maglev, BlockPos(lane, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(lane + 8, -60, 8), net.minecraft.world.phys.Vec3(-1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+					connect(maglev, BlockPos(lane, -60, 0), net.minecraft.world.phys.Vec3(0.0, 0.0, 1.0), BlockPos(lane - 8, -60, 8), net.minecraft.world.phys.Vec3(1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+				}
+				// Two-lane roads crossing (lanes 4 apart each way), each corner turned from both lanes: the inner lanes' curves
+				// tight, the outer lanes' across the other lanes and through the middle, where they cross each other. Once
+				// with Create's usual curves, once with the widest that fit (crossing between the lanes).
+				for ((cx, inner) in listOf(80 to 5, 130 to 12)) {
+					val cz = 60
+					val lanesX = listOf(cx, cx + 4)
+					val lanesZ = listOf(cz, cz + 4)
+					val reach = inner + 10
+					for (x in lanesX) for (z in cz - reach..cz + 4 + reach) level.setBlock(BlockPos(x, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.ZO), 2)
+					for (z in lanesZ) for (x in cx - reach..cx + 4 + reach) level.setBlock(BlockPos(x, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.XO), 2)
+					for (x in lanesX) for (z in lanesZ) level.setBlock(BlockPos(x, -60, z), shaped(com.simibubi.create.content.trains.track.TrackShape.CR_O), 2)
+					for (sx in listOf(-1, 1)) for (sz in listOf(-1, 1)) {
+						// (The lanes on this corner's side are the inner pair, the far ones the outer.)
+						val nearX = if (sx > 0) cx + 4 else cx
+						val farX = if (sx > 0) cx else cx + 4
+						val nearZ = if (sz > 0) cz + 4 else cz
+						val farZ = if (sz > 0) cz else cz + 4
+						for ((x, z, d) in listOf(Triple(nearX, nearZ, inner), Triple(farX, farZ, inner + 4))) {
+							val a = BlockPos(x, -60, z + sz * d)
+							val b = BlockPos(x + sx * d, -60, z)
+							connect(maglev, a, net.minecraft.world.phys.Vec3(0.0, 0.0, -sz.toDouble()), b, net.minecraft.world.phys.Vec3(-sx.toDouble(), 0.0, 0.0), net.kernelpanicsoft.relativity.content.Maglev.MATERIAL)
+							crossingEnds += a
+							crossingEnds += b
+						}
+					}
+				}
 			}
 			waitTicks(5)
 			// (Again, now each end has its half: a client drops a curve whose other end hasn't got it yet.)
 			server.runOnServer { minecraft ->
-				for (p in listOf(BlockPos(0, -60, 6), BlockPos(4, -60, 6), BlockPos(6, -60, 13), BlockPos(10, -60, 13), BlockPos(20, -60, 0), BlockPos(26, -60, 7), BlockPos(14, -60, 7)))
+				for (p in listOf(BlockPos(0, -60, 6), BlockPos(4, -60, 6), BlockPos(6, -60, 13), BlockPos(10, -60, 13), BlockPos(20, -60, 0), BlockPos(26, -60, 7), BlockPos(14, -60, 7),
+						BlockPos(40, -60, 0), BlockPos(44, -60, 0), BlockPos(48, -60, 8), BlockPos(32, -60, 8), BlockPos(52, -60, 8), BlockPos(36, -60, 8)) + crossingEnds)
 					(minecraft.overworld().getBlockEntity(p) as? com.simibubi.create.content.trains.track.TrackBlockEntity)?.notifyUpdate()
 			}
 			waitTicks(20)
@@ -842,6 +882,21 @@ class LensClientGameTest {
 			command("tp @a -3.5 -58.6 -9.5 0 5")
 			waitTicks(30)
 			takeScreenshot("maglev_profile")
+			command("tp @a 42.5 -42.5 4.5 0 90")
+			waitTicks(30)
+			takeScreenshot("maglev_two_lane_junction")
+			command("tp @a 42.5 -55.5 -6.5 0 35")
+			waitTicks(30)
+			takeScreenshot("maglev_two_lane_junction_low")
+			command("tp @a 82.5 -38.5 62.5 0 90")
+			waitTicks(30)
+			takeScreenshot("maglev_crossing_regular")
+			command("tp @a 132.5 -30.5 62.5 0 90")
+			waitTicks(30)
+			takeScreenshot("maglev_crossing_wide")
+			command("tp @a 82.5 -52.5 48.5 0 40")
+			waitTicks(30)
+			takeScreenshot("maglev_crossing_regular_low")
 		}
 	}
 

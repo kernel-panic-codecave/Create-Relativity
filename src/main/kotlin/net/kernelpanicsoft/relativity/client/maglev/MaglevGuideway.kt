@@ -33,6 +33,23 @@ object MaglevGuideway {
 
 	/** Another track's centre line, seen from above: (x, z) pairs (in the frames' coordinates). */
 	data class Line(val points: List<Double>) {
+		/** How far (x, z) is from the line, anywhere along it (blocks). */
+		fun nearest(x: Double, z: Double): Double {
+			var best = Double.MAX_VALUE
+			var i = 0
+			while (i <= points.size - 4) {
+				val ax = points[i]
+				val az = points[i + 1]
+				val dx = points[i + 2] - ax
+				val dz = points[i + 3] - az
+				val length2 = dx * dx + dz * dz
+				val t = if (length2 > 0) (((x - ax) * dx + (z - az) * dz) / length2).coerceIn(0.0, 1.0) else 0.0
+				best = minOf(best, hypot(x - ax - dx * t, z - az - dz * t))
+				i += 2
+			}
+			return best
+		}
+
 		/**
 		 * How far (x, z) is from the line: only alongside it (not past its open ends: track that stops there cuts
 		 * nothing beyond), and leaving out its pieces running along the track at (cx, cz), unit tangent (tx, tz) (its

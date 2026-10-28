@@ -42,8 +42,47 @@ object MaglevCurves {
 	/** How far up from a curve's points (Create's) the profile's origin is, so curves meet the blocks flush. */
 	private const val DROP = 0.197
 
-	/** A curve's floor's height rank ([MaglevGuideway.build]): above every straight direction's. */
+	/**
+	 * Curves' floors' height ranks ([MaglevGuideway.build]) start here: above every straight direction's. Each curve
+	 * takes the lowest not taken by a curve its floor overlaps that comes before it ([key] order), so no two overlapping
+	 * curves' floors share a plane (they'd flicker: a junction's curves cross each other).
+	 */
 	private const val RANK = 4
+
+	/** [curve]'s floor's rank: [RANK] and up, the lowest the overlapping curves before it leave free. */
+	private fun rank(curve: BezierConnection, ranks: HashMap<Pair<BlockPos, BlockPos>, Int> = HashMap()): Int {
+		val self = key(curve)
+		ranks[self]?.let { return it }
+		val taken = HashSet<Int>()
+		for (other in near(bounds(curve))) {
+			if (before(key(other), self) && overlaps(curve, other)) taken += rank(other, ranks)
+		}
+		var r = RANK
+		while (r in taken) r += 1
+		ranks[self] = r
+		return r
+	}
+
+	/** Whether [a]'s key comes before [b]'s. */
+	private fun before(a: Pair<BlockPos, BlockPos>, b: Pair<BlockPos, BlockPos>): Boolean {
+		val first = a.first.compareTo(b.first)
+		return if (first != 0) first < 0 else a.second < b.second
+	}
+
+	/** Whether [a]'s and [b]'s floors overlap: their centre lines come within a floor's width of each other. */
+	private fun overlaps(a: BezierConnection, b: BezierConnection): Boolean {
+		val origin = a.bePositions.first
+		val line = centreLine(b, origin)
+		val width = 2 * FLOOR_HALF_WIDTH
+		for (segment in a) {
+			val p = segment.position
+			if (line.nearest(p.x, p.z) < width) return true
+		}
+		return false
+	}
+
+	/** A floor's half-width (blocks): MaglevGuideway's FLOOR. */
+	private const val FLOOR_HALF_WIDTH = 15.0 / 16.0
 
 	@JvmStatic
 	fun isMaglev(curve: BezierConnection): Boolean = Maglev.isGuideway(curve.material)
@@ -172,7 +211,7 @@ object MaglevCurves {
 	/** [curve]'s quads, relative to its first block. */
 	fun quads(level: Level, curve: BezierConnection): List<BakedQuad> {
 		val quads = ArrayList<BakedQuad>()
-		MaglevGuideway.build(MaglevGuideway.refined(frames(curve), 4), others(level, curve), RANK, MaglevTrackModel.spriteFor(curve.material), quads)
+		MaglevGuideway.build(MaglevGuideway.refined(frames(curve), 4), others(level, curve), rank(curve), MaglevTrackModel.spriteFor(curve.material), quads)
 		return quads
 	}
 

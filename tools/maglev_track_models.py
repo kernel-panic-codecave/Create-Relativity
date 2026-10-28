@@ -164,8 +164,9 @@ def tie():
     return m
 
 
-def texture(north=(176, 58, 58), south=(58, 93, 176), seam=None):
-    """The guideway's texture; [north]/[south] the magnets' pole colours, [seam] a glow down the floor's middle."""
+def texture(north=(176, 58, 58), south=(58, 93, 176)):
+    """The guideway's texture; [north]/[south] the magnets' pole colours. (No line down the floor's middle: at a junction
+    every path's would cross the others'.)"""
     random.seed(7)
     img = Image.new('RGBA', (TEX_W, TEX_H))
     px = img.load()
@@ -174,10 +175,9 @@ def texture(north=(176, 58, 58), south=(58, 93, 176), seam=None):
         return tuple(max(0, min(255, int(c + random.uniform(-amount, amount)))) for c in base) + (255,)
     for y in range(TEX_H):
         for x in range(TEX_W):
-            if y < 30:  # floor: light concrete, a seam down the middle, darker toward the walls
+            if y < 30:  # floor: light concrete, darker toward the walls
                 edge = min(y, 29 - y)
                 base = (178, 184, 192) if edge > 2 else (150, 156, 166)
-                if y in (14, 15): base = seam if seam else (140, 146, 156)
                 if x % 16 == 0: base = tuple(c - 14 for c in base)  # expansion joint each block
                 px[x, y] = noisy(base, 5)
             elif y < 39:  # slope: a row of magnets (after Simulated's redstone magnet), poles alternating, coils wound round
@@ -271,7 +271,7 @@ def main():
 
     texture().save(os.path.join(ROOT, 'textures', 'block', 'maglev_track.png'))
     # Krasnikov track: the same guideway, its magnets violet and teal, a violet glow down the floor (the tube's).
-    texture((150, 70, 200), (40, 170, 160), seam=(190, 120, 255)).save(os.path.join(ROOT, 'textures', 'block', 'krasnikov_track.png'))
+    texture((150, 70, 200), (40, 170, 160)).save(os.path.join(ROOT, 'textures', 'block', 'krasnikov_track.png'))
     krasnikov = os.path.join(ROOT, 'models', 'block', 'krasnikov_track')
     os.makedirs(krasnikov, exist_ok=True)
     for f in os.listdir(krasnikov): os.remove(os.path.join(krasnikov, f))
