@@ -56,8 +56,11 @@ object KrasnikovTubes {
 	/** An edge travelled from [from] to [to]. */
 	private data class Directed(val from: TrackNode, val to: TrackNode)
 
-	/** Each train under way in its tube (its tube's k there), and the tubes. */
-	private class Cached(val tick: Long, val inTube: Map<java.util.UUID, Double>, val tubes: List<FieldSource.Krasnikov>)
+	/**
+	 * Each train under way in its tube (its tube's k there), the tubes, and each tube's train where it runs round it
+	 * (null for the rest of its route, past a gap, and for fading tubes).
+	 */
+	private class Cached(val tick: Long, val inTube: Map<java.util.UUID, Double>, val tubes: List<FieldSource.Krasnikov>, val owners: List<java.util.UUID?>)
 
 	private val cache = WeakHashMap<Level, Cached>()
 
@@ -68,15 +71,24 @@ object KrasnikovTubes {
 	/** The tubes in [level]. */
 	fun tubes(level: Level): List<FieldSource.Krasnikov> = cached(level).tubes
 
+	/** The tubes in [level], each with its train where it runs round it (KrasnikovSync sends both). */
+	fun owned(level: Level): List<Pair<java.util.UUID?, FieldSource.Krasnikov>> = cached(level).let { it.owners.zip(it.tubes) }
+
 	/** The tube's k: light along it runs at 1 / k (the config's speed, times c). */
 	fun k(): Double = 1.0 / RelativityConfig.Server.Trains.krasnikovSpeed.coerceAtLeast(1.0)
 
 	@Synchronized
 	private fun cached(level: Level): Cached {
-		// (A client's copies of trains don't know their routes: its tubes are the server's, sent: KrasnikovSync.)
-		if (level.isClientSide) return Cached(level.gameTime, emptyMap(), KrasnikovSync.received(level))
 		val tick = level.gameTime
 		cache[level]?.takeIf { it.tick == tick }?.let { return it }
+		// (A client's copies of trains don't know their routes: its tubes are the server's, sent (KrasnikovSync), each
+		// round its own train where it is here: the server's is a tick or more ahead, and drawn between ticks.)
+		if (level.isClientSide) {
+			val received = KrasnikovSync.received(level)
+			val made = Cached(tick, emptyMap(), received.map { (owner, tube) -> owner?.let { aroundClientTrain(level, it, tube) } ?: tube }, received.map { it.first })
+			cache[level] = made
+			return made
+		}
 		val made = compute(level)
 		cache[level] = made
 		return made
@@ -138,6 +150,7 @@ object KrasnikovTubes {
 		val c = RelativityConfig.speedOfLight(level.dimension())
 		val inTube = HashMap<java.util.UUID, Double>()
 		val tubes = ArrayList<FieldSource.Krasnikov>()
+		val owners = ArrayList<java.util.UUID?>()
 		val k = k()
 		fun tilt(strength: Double) = 1.0 - (1.0 - k) * strength.coerceIn(0.0, 1.0)
 		val active = HashSet<java.util.UUID>()
@@ -160,20 +173,11 @@ object KrasnikovTubes {
 			// Round the train itself first: its bogeys' points from its tail to its head (the way it's going), past its
 			// tail by its overhang; where they're on Krasnikov track.
 			val body = body(train)
-			for ((i, point) in body.withIndex()) {
-				val krasnikov = point.second
-				if (!krasnikov) {
-					close()
-					continue
-				}
-				if (run.isEmpty() && i + 1 < body.size) {
-					// (The tail's overhang: the last carriage's body past its bogey.)
-					val next = body[i + 1].first
-					val back = Vector3d(point.first).sub(next)
-					if (back.length() > 1e-6) run += Vector3d(point.first).add(back.normalize(OVERHANG))
-				}
-				if (run.isEmpty() || run.last().distance(point.first) > 0.25) run += point.first
+			for (part in bodyRuns(body, OVERHANG)) {
+				close()
+				run.addAll(part)
 			}
+			if (body.lastOrNull()?.second != true) close()
 			var travelled = 0.0
 			var last: Vector3dc? = body.lastOrNull()?.first
 			// (On the edge the head is on, only what's ahead of it: the train's own stretch is the body's.)
@@ -198,7 +202,11 @@ object KrasnikovTubes {
 			}
 			close()
 			tube.spines = spines
-			for (spine in spines) tubes += FieldSource.Krasnikov(spine, tilt(tube.strength), RADIUS)
+			val headAt = body.lastOrNull()?.takeIf { it.second }?.first
+			for (spine in spines) {
+				tubes += FieldSource.Krasnikov(spine, tilt(tube.strength), RADIUS)
+				owners += if (headAt != null && spine.any { it.distance(headAt) < 1e-6 }) train.id else null
+			}
 		}
 		// Routes ended: their tubes fade.
 		val gone = ArrayList<java.util.UUID>()
@@ -210,14 +218,58 @@ object KrasnikovTubes {
 			}
 			val strength = tube.fadeStrength - (tick - tube.fadeFrom) / RAMP_TICKS
 			if (strength <= 0.0) { gone += id; continue }
-			for (spine in tube.spines) tubes += FieldSource.Krasnikov(spine, tilt(strength), RADIUS)
+			for (spine in tube.spines) {
+				tubes += FieldSource.Krasnikov(spine, tilt(strength), RADIUS)
+				owners += null
+			}
 		}
 		gone.forEach { forming.remove(it) }
-		return Cached(tick, inTube, tubes)
+		return Cached(tick, inTube, tubes, owners)
 	}
 
 	/** How far (blocks) a carriage's body runs past its end bogey: the tube reaches that far behind the train. */
 	private const val OVERHANG = 2.5
+
+	/**
+	 * [body]'s runs on Krasnikov track, as spine points, the first reaching [tail] blocks past the tail (the last ends at
+	 * the head when that's on Krasnikov track).
+	 */
+	private fun bodyRuns(body: List<Pair<Vector3dc, Boolean>>, tail: Double): List<List<Vector3dc>> {
+		val runs = ArrayList<List<Vector3dc>>()
+		var run = ArrayList<Vector3dc>()
+		for ((i, point) in body.withIndex()) {
+			if (!point.second) {
+				if (run.isNotEmpty()) runs += run
+				run = ArrayList()
+				continue
+			}
+			if (run.isEmpty() && runs.isEmpty() && i + 1 < body.size) {
+				// (The tail's overhang: the last carriage's body past its bogey.)
+				val back = Vector3d(point.first).sub(body[i + 1].first)
+				if (back.length() > 1e-6) run += Vector3d(point.first).add(back.normalize(tail))
+			}
+			if (run.isEmpty() || run.last().distance(point.first) > 0.25) run += point.first
+		}
+		if (run.isNotEmpty()) runs += run
+		return runs
+	}
+
+	/**
+	 * The server's [tube] round train [id], round the client's copy of it instead: its body here (its tail reaching on
+	 * by the train's travel in a tick, as it's drawn between ticks), then the tube's spine from the point nearest its
+	 * head on.
+	 */
+	private fun aroundClientTrain(level: Level, id: java.util.UUID, tube: FieldSource.Krasnikov): FieldSource.Krasnikov {
+		val train = com.simibubi.create.CreateClient.RAILWAYS.trains[id] ?: return tube
+		val body = body(train)
+		val runs = bodyRuns(body, OVERHANG + kotlin.math.abs(train.speed))
+		val own = runs.lastOrNull()?.takeIf { body.lastOrNull()?.second == true } ?: return tube
+		val head = own.last()
+		val from = tube.spine.indices.minByOrNull { tube.spine[it].distance(head) } ?: return tube
+		val spine = ArrayList<Vector3dc>(own)
+		for (p in tube.spine.drop(from + 1)) if (spine.last().distance(p) > 0.25) spine += p
+		return FieldSource.Krasnikov(spine, tube.k, tube.radius)
+	}
 
 	/**
 	 * [train]'s bogeys' points from its tail to its head (by the way it's going, as [route] takes its head), lifted to

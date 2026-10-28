@@ -24,7 +24,8 @@ import java.util.WeakHashMap
  * joining or changing levels); the client lenses and shows what it was last sent ([received]).
  */
 object KrasnikovSync {
-	data class Payload(val tubes: List<FieldSource.Krasnikov>) : CustomPacketPayload {
+	/** The tubes, each with its train where it runs round it (KrasnikovTubes.owned). */
+	data class Payload(val tubes: List<Pair<java.util.UUID?, FieldSource.Krasnikov>>) : CustomPacketPayload {
 		override fun type() = TYPE
 	}
 
@@ -33,7 +34,9 @@ object KrasnikovSync {
 	private val CODEC: StreamCodec<RegistryFriendlyByteBuf, Payload> = StreamCodec.of(
 		{ buf, payload ->
 			buf.writeVarInt(payload.tubes.size)
-			for (tube in payload.tubes) {
+			for ((owner, tube) in payload.tubes) {
+				buf.writeBoolean(owner != null)
+				if (owner != null) buf.writeUUID(owner)
 				buf.writeFloat(tube.k.toFloat())
 				buf.writeFloat(tube.radius.toFloat())
 				buf.writeVarInt(tube.spine.size)
@@ -46,10 +49,11 @@ object KrasnikovSync {
 		},
 		{ buf ->
 			val tubes = List(buf.readVarInt()) {
+				val owner = if (buf.readBoolean()) buf.readUUID() else null
 				val k = buf.readFloat().toDouble()
 				val radius = buf.readFloat().toDouble()
 				val spine = List<Vector3dc>(buf.readVarInt()) { Vector3d(buf.readDouble(), buf.readDouble(), buf.readDouble()) }
-				FieldSource.Krasnikov(spine, k, radius)
+				owner to FieldSource.Krasnikov(spine, k, radius)
 			}
 			Payload(tubes)
 		},
@@ -59,11 +63,11 @@ object KrasnikovSync {
 	private const val RESEND = 40
 
 	/** What each level was last sent, and when. */
-	private val sent = WeakHashMap<Level, Pair<List<FieldSource.Krasnikov>, Long>>()
+	private val sent = WeakHashMap<Level, Pair<List<Pair<java.util.UUID?, FieldSource.Krasnikov>>, Long>>()
 
 	/** The tubes the client was last sent for each level (by dimension). */
 	@Volatile
-	private var received: Map<ResourceKey<Level>, List<FieldSource.Krasnikov>> = emptyMap()
+	private var received: Map<ResourceKey<Level>, List<Pair<java.util.UUID?, FieldSource.Krasnikov>>> = emptyMap()
 
 	fun init() {
 		MOD_BUS.addListener(::registerPayloads)
@@ -78,13 +82,13 @@ object KrasnikovSync {
 		}
 	}
 
-	/** On the client: [level]'s tubes as last sent. */
-	fun received(level: Level): List<FieldSource.Krasnikov> = received[level.dimension()] ?: emptyList()
+	/** On the client: [level]'s tubes as last sent, each with its train where it runs round it. */
+	fun received(level: Level): List<Pair<java.util.UUID?, FieldSource.Krasnikov>> = received[level.dimension()] ?: emptyList()
 
 	/** Each server level's tick: its tubes out to its players if they changed (or are due again). */
 	fun onLevelTick(event: LevelTickEvent.Post) {
 		val level = event.level as? ServerLevel ?: return
-		val tubes = KrasnikovTubes.tubes(level)
+		val tubes = KrasnikovTubes.owned(level)
 		val last = sent[level]
 		val tick = level.gameTime
 		val changed = last == null || last.first != tubes

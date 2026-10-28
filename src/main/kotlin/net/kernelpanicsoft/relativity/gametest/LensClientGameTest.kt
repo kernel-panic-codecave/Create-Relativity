@@ -1055,6 +1055,17 @@ class LensClientGameTest {
 			val clientTubes = computeOnClient { minecraft -> net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.level!!) }
 			CreateRelativity.LOGGER.info("Train test: the client's tubes {}, k {}", clientTubes.size, clientTubes.map { "%.3f".format(it.k) })
 			assertTrue(clientTubes.size == 1 && kotlin.math.abs(clientTubes.single().k - net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()) < 1e-6) { "The client has ${clientTubes.size} Krasnikov tubes, expected the routed train's" }
+			// Round the client's own train (where it's drawn), not the server's: every bogey on the spine.
+			val offs = computeOnClient { minecraft ->
+				val tube = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.level!!).single()
+				val train = com.simibubi.create.CreateClient.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				train.carriages.flatMap { listOf(it.leadingPoint, it.trailingPoint) }.map { point ->
+					val p = point.getPosition(train.graph)
+					tube.distance(org.joml.Vector3d(p.x, p.y + 1.0, p.z))
+				}
+			}
+			CreateRelativity.LOGGER.info("Train test: the client's bogeys off its tube's spine {}", offs.map { "%.2f".format(it) })
+			assertTrue(offs.all { it < 1.0 }) { "The client's train's bogeys are $offs blocks off its tube's spine" }
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).
 			command("gamemode creative @a")
