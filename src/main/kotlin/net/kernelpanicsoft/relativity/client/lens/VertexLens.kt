@@ -66,6 +66,9 @@ object VertexLens {
 	/** How far (blocks) a tube's spine as uploaded may stray from its own, at the least: straight runs become one segment. */
 	private const val TUBE_TOLERANCE = 0.05
 
+	/** How far (pixels) a curved tube's segments may stray from its curve, where it's drawn. */
+	private const val TUBE_PIXELS = 2.0
+
 	/** The tube aim's most traces a point (a group of vertices waits for its slowest). */
 	@JvmField
 	var tubeTraces = 16
@@ -592,10 +595,22 @@ object VertexLens {
 		val tubes = if (fieldSky) tubeSources.take(MAX_TUBES) else emptyList()
 		var spines: List<List<org.joml.Vector3dc>> = emptyList()
 		var tolerance = TUBE_TOLERANCE
+		// (Curved tubes cut into segments for this view: each piece till it strays under a couple of pixels at its
+		// distance; coarser all round only if they don't all fit.)
+		val pixel = pixelAngle(lastProjection).toDouble()
+		var scale = 1.0
 		for (attempt in 0 until 8) {
-			spines = tubes.map { simplify(spineOf(it), tolerance).asReversed() }
+			spines = tubes.map { tube ->
+				val points = if (tube is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov) {
+					net.kernelpanicsoft.relativity.spacetime.polyline(tube.curve, { p ->
+						maxOf(TUBE_TOLERANCE, TUBE_PIXELS * pixel * kotlin.math.sqrt((p.x() - camX) * (p.x() - camX) + (p.y() - camY) * (p.y() - camY) + (p.z() - camZ) * (p.z() - camZ))) * scale
+					})
+				} else simplify(spineOf(tube), tolerance)
+				points.asReversed()
+			}
 			if (spines.sumOf { it.size } <= MAX_TUBE_POINTS) break
 			tolerance *= 2.0
+			scale *= 2.0
 		}
 		// (Still too many: the nearest that fit.)
 		var points = 0

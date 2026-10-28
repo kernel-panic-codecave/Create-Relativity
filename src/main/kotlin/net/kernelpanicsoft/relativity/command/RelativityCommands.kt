@@ -126,7 +126,7 @@ object RelativityCommands {
 		val speed = optional(ctx, "speed", RelativityConfig.Server.Trains.krasnikovSpeed)
 		val radius = optional(ctx, "radius", 3.0)
 		val (from, to) = ends
-		TestSources.add(ctx.source.level, net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(
+		TestSources.add(ctx.source.level, net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov.through(
 			ends.map { org.joml.Vector3d(it.x, it.y, it.z) }, 1.0 / speed, radius))
 		ctx.source.sendSuccess({
 			Component.translatable("commands.create_relativity.tube.added", fmt(from.x), fmt(from.y), fmt(from.z), fmt(to.x), fmt(to.y), fmt(to.z), fmt(speed), fmt(radius))

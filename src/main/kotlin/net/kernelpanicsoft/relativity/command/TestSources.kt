@@ -1,5 +1,6 @@
 package net.kernelpanicsoft.relativity.command
 
+import net.kernelpanicsoft.relativity.spacetime.Cubic
 import net.kernelpanicsoft.relativity.spacetime.FieldSource
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.resources.ResourceKey
@@ -29,7 +30,7 @@ object TestSources {
 			if (last < 0) return@computeIfPresent sources
 			val tube = sources[last] as FieldSource.Krasnikov
 			extended = true
-			sources.toMutableList().also { it[last] = tube.copy(spine = tube.spine + org.joml.Vector3d(point)) }
+			sources.toMutableList().also { it[last] = tube.copy(curve = tube.curve + Cubic.line(tube.curve.last().d, org.joml.Vector3d(point))) }
 		}
 		return extended
 	}

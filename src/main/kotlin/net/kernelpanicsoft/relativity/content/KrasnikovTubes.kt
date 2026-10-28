@@ -7,6 +7,8 @@ import com.simibubi.create.content.trains.graph.TrackNode
 import net.createmod.catnip.data.Couple
 import net.kernelpanicsoft.relativity.config.RelativityConfig
 import net.kernelpanicsoft.relativity.mixin.create.NavigationAccessor
+import com.simibubi.create.content.trains.entity.TravellingPoint
+import net.kernelpanicsoft.relativity.spacetime.Cubic
 import net.kernelpanicsoft.relativity.spacetime.FieldSource
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.world.level.Level
@@ -45,7 +47,7 @@ object KrasnikovTubes {
 	/** A train's tube: when it began forming, and (once its route ended) its last spines and when it began to fade. */
 	private class Tube(val start: Long) {
 		var strength = 0.0
-		var spines: List<List<Vector3dc>> = emptyList()
+		var spines: List<List<Cubic>> = emptyList()
 		var fadeFrom = -1L
 		var fadeStrength = 0.0
 	}
@@ -164,48 +166,46 @@ object KrasnikovTubes {
 			tube.strength = age / RAMP_TICKS
 			// Its front, out from the train at the tube's light speed (ahead of the train, at 90% of it).
 			val front = c / k * age / 20.0
-			val spines = ArrayList<List<Vector3dc>>()
-			var run = ArrayList<Vector3dc>()
+			val spines = ArrayList<List<Cubic>>()
+			var owned = -1
+			var run = ArrayList<Cubic>()
 			fun close() {
-				if (run.size >= 2) spines += run
+				if (run.isNotEmpty()) spines += run
 				run = ArrayList()
 			}
-			// Round the train itself first: its bogeys' points from its tail to its head (the way it's going), past its
-			// tail by its overhang; where they're on Krasnikov track.
-			val body = body(train)
-			for (part in bodyRuns(body, OVERHANG)) {
+			// Round the train itself first: along the track from past its tail (by its overhang) to its head (the way
+			// it's going), where it's Krasnikov track.
+			val body = bodyRuns(train, OVERHANG)
+			for (part in body.runs) {
 				close()
 				run.addAll(part)
 			}
-			if (body.lastOrNull()?.second != true) close()
+			if (body.headOnKrasnikov) owned = spines.size else close()
+			// Then on along its route, from its head, out to the tube's front.
+			val head = head(train)
 			var travelled = 0.0
-			var last: Vector3dc? = body.lastOrNull()?.first
-			// (On the edge the head is on, only what's ahead of it: the train's own stretch is the body's.)
-			val head = if (train.speed >= 0) train.carriages.firstOrNull()?.leadingPoint else train.carriages.lastOrNull()?.trailingPoint
 			outer@ for ((i, d) in route.withIndex()) {
-				val krasnikov = edge(train, d)?.trackMaterial === Maglev.KRASNIKOV
+				val edge = edge(train, d) ?: break
+				val krasnikov = edge.trackMaterial === Maglev.KRASNIKOV
 				if (krasnikov && i == 0) inTube[train.id] = tilt(tube.strength)
-				var along = 0.0
-				var previous: Vector3dc? = null
-				val start = if (i == 0 && head != null) (if (head.node1 === d.from) head.position else (edge(train, d)?.length ?: 0.0) - head.position) else 0.0
-				for (p in polyline(train, d)) {
-					previous?.let { along += it.distance(p) }
-					previous = p
-					if (along <= start) continue
-					last?.let { travelled += it.distance(p) }
-					last = p
-					if (!krasnikov) continue
-					if (travelled > front) break@outer
-					if (run.isEmpty() || run.last().distance(p) > 0.25) run += p
+				val forward = edge.node1 === d.from
+				val start = if (i == 0 && head != null) paramOn(edge, head) else if (forward) 0.0 else 1.0
+				var piece = curve(edge).part(start, if (forward) 1.0 else 0.0)
+				val length = piece.length()
+				if (travelled + length > front) piece = piece.part(0.0, ((front - travelled) / length).coerceIn(0.0, 1.0))
+				travelled += length
+				if (!krasnikov) {
+					close()
+				} else if (piece.length() > 1e-3) {
+					run += piece
 				}
-				if (!krasnikov) close()
+				if (travelled > front) break@outer
 			}
 			close()
 			tube.spines = spines
-			val headAt = body.lastOrNull()?.takeIf { it.second }?.first
-			for (spine in spines) {
+			for ((index, spine) in spines.withIndex()) {
 				tubes += FieldSource.Krasnikov(spine, tilt(tube.strength), RADIUS)
-				owners += if (headAt != null && spine.any { it.distance(headAt) < 1e-6 }) train.id else null
+				owners += if (index == owned) train.id else null
 			}
 		}
 		// Routes ended: their tubes fade.
@@ -231,86 +231,111 @@ object KrasnikovTubes {
 	private const val OVERHANG = 2.5
 
 	/**
-	 * [body]'s runs on Krasnikov track, as spine points, the first reaching [tail] blocks past the tail (the last ends at
-	 * the head when that's on Krasnikov track).
+	 * [edge]'s centre line from its first node to its second, lifted to the carriages' middles: where a train's points
+	 * ride (the track's line, up its normal: TravellingPoint.getPosition), [LIFT] higher. One cubic, exact on straights
+	 * and turns (Create's turns are cubic Béziers in their parameter), close on banked ones (the normal turns too).
 	 */
-	private fun bodyRuns(body: List<Pair<Vector3dc, Boolean>>, tail: Double): List<List<Vector3dc>> {
-		val runs = ArrayList<List<Vector3dc>>()
-		var run = ArrayList<Vector3dc>()
-		for ((i, point) in body.withIndex()) {
-			if (!point.second) {
-				if (run.isNotEmpty()) runs += run
-				run = ArrayList()
-				continue
-			}
-			if (run.isEmpty() && runs.isEmpty() && i + 1 < body.size) {
-				// (The tail's overhang: the last carriage's body past its bogey.)
-				val back = Vector3d(point.first).sub(body[i + 1].first)
-				if (back.length() > 1e-6) run += Vector3d(point.first).add(back.normalize(tail))
-			}
-			if (run.isEmpty() || run.last().distance(point.first) > 0.25) run += point.first
+	private fun curve(edge: TrackEdge): Cubic {
+		fun at(t: Double): Vector3dc {
+			val p = edge.getPosition(null, t).add(edge.getNormal(null, t))
+			return Vector3d(p.x, p.y + LIFT, p.z)
 		}
-		if (run.isNotEmpty()) runs += run
-		return runs
+		return Cubic.through(at(0.0), at(1.0 / 3.0), at(2.0 / 3.0), at(1.0))
 	}
 
-	/**
-	 * The server's [tube] round train [id], round the client's copy of it instead: its body here (its tail reaching on
-	 * by the train's travel in a tick, as it's drawn between ticks), then the tube's spine from the point nearest its
-	 * head on.
-	 */
-	private fun aroundClientTrain(level: Level, id: java.util.UUID, tube: FieldSource.Krasnikov): FieldSource.Krasnikov {
-		val train = com.simibubi.create.CreateClient.RAILWAYS.trains[id] ?: return tube
-		val body = body(train)
-		val runs = bodyRuns(body, OVERHANG + kotlin.math.abs(train.speed))
-		val own = runs.lastOrNull()?.takeIf { body.lastOrNull()?.second == true } ?: return tube
-		val head = own.last()
-		val from = tube.spine.indices.minByOrNull { tube.spine[it].distance(head) } ?: return tube
-		val spine = ArrayList<Vector3dc>(own)
-		for (p in tube.spine.drop(from + 1)) if (spine.last().distance(p) > 0.25) spine += p
-		return FieldSource.Krasnikov(spine, tube.k, tube.radius)
+	/** Where [point] is along [edge] (its parameter there, from its first node), [edge] being its edge either way round. */
+	private fun paramOn(edge: TrackEdge, point: TravellingPoint): Double {
+		val pointEdge = point.edge ?: return 0.0
+		val t = point.position / pointEdge.length.coerceAtLeast(1e-9)
+		return if (pointEdge.node1 === edge.node1) t else 1.0 - t
 	}
 
+	/** The point of [train] leading the way it's going (as [route] takes it). */
+	private fun head(train: Train): TravellingPoint? =
+		if (train.speed >= 0) train.carriages.firstOrNull()?.leadingPoint else train.carriages.lastOrNull()?.trailingPoint
+
+	/** A train's stretch of track as runs of curve on Krasnikov track (tail to head), and whether the last ends at its head. */
+	private class Body(val runs: List<List<Cubic>>, val headOnKrasnikov: Boolean)
+
 	/**
-	 * [train]'s bogeys' points from its tail to its head (by the way it's going, as [route] takes its head), lifted to
-	 * the carriages' middles, each with whether its track is Krasnikov.
+	 * [train]'s own stretch of track, its bogeys' points from tail to head joined along the track between them (the
+	 * edge they share, or across the node two edges meet at), as runs on Krasnikov track; the first reaching [tail]
+	 * blocks back past the tail.
 	 */
-	private fun body(train: Train): List<Pair<Vector3dc, Boolean>> {
-		val graph = train.graph ?: return emptyList()
-		val points = ArrayList<com.simibubi.create.content.trains.entity.TravellingPoint>()
+	private fun bodyRuns(train: Train, tail: Double): Body {
+		val points = ArrayList<TravellingPoint>()
 		// (Carriages run first to last from the train's front; each's leading point is toward it.)
 		for (carriage in train.carriages) {
 			points += carriage.leadingPoint
 			points += carriage.trailingPoint
 		}
 		if (train.speed >= 0) points.reverse()
-		return points.map { point ->
-			val p = point.getPosition(graph)
-			Vector3d(p.x, p.y + LIFT, p.z) as Vector3dc to (point.edge?.trackMaterial === Maglev.KRASNIKOV)
+		val runs = ArrayList<List<Cubic>>()
+		var run = ArrayList<Cubic>()
+		fun add(piece: Cubic, krasnikov: Boolean) {
+			if (!krasnikov) {
+				if (run.isNotEmpty()) runs += run
+				run = ArrayList()
+				return
+			}
+			if (piece.a.distance(piece.d) > 1e-4 || piece.flatness() > 1e-4) run += piece
 		}
+		for ((a, b) in points.zipWithNext()) {
+			val ea = a.edge ?: continue
+			val eb = b.edge ?: continue
+			val krasnikov = ea.trackMaterial === Maglev.KRASNIKOV && eb.trackMaterial === Maglev.KRASNIKOV
+			val sameEdge = (ea.node1 === eb.node1 && ea.node2 === eb.node2) || (ea.node1 === eb.node2 && ea.node2 === eb.node1)
+			val shared = listOf(ea.node1, ea.node2).firstOrNull { it === eb.node1 || it === eb.node2 }
+			when {
+				sameEdge -> add(curve(ea).part(paramOn(ea, a), paramOn(ea, b)), krasnikov)
+				shared != null -> {
+					add(curve(ea).part(paramOn(ea, a), if (ea.node1 === shared) 0.0 else 1.0), ea.trackMaterial === Maglev.KRASNIKOV)
+					add(curve(eb).part(if (eb.node1 === shared) 0.0 else 1.0, paramOn(eb, b)), eb.trackMaterial === Maglev.KRASNIKOV)
+				}
+				else -> {
+					val graph = train.graph
+					fun at(p: TravellingPoint): Vector3dc = p.getPosition(graph).let { Vector3d(it.x, it.y + LIFT, it.z) }
+					add(Cubic.line(at(a), at(b)), krasnikov)
+				}
+			}
+		}
+		val headOnKrasnikov = run.isNotEmpty() && points.lastOrNull()?.edge?.trackMaterial === Maglev.KRASNIKOV
+		if (run.isNotEmpty()) runs += run
+		// (The tail's overhang, and more: straight on back past the tail, along the track's direction there.)
+		val first = runs.firstOrNull()?.firstOrNull()
+		if (first != null) {
+			val back = first.derivative(0.0)
+			if (back.length() > 1e-9) {
+				back.normalize(-tail)
+				runs[0] = listOf(Cubic.line(Vector3d(first.a).add(back), first.a)) + runs[0]
+			}
+		}
+		return Body(runs, headOnKrasnikov)
 	}
 
-	/** [d]'s centre line, lifted to the carriages' middles: a turn's curve sampled a block apart, else straight. */
-	private fun polyline(train: Train, d: Directed): List<Vector3dc> {
-		val edge = edge(train, d) ?: return emptyList()
-		val points = ArrayList<Vector3dc>()
-		val turn = edge.turn
-		if (edge.isTurn && turn != null) {
-			val steps = maxOf(2, turn.length.toInt())
-			// (A turn runs from its first node to its second; travelled the other way, reversed.)
-			val forward = edge.node1 === d.from
-			for (i in 0..steps) {
-				val t = i.toDouble() / steps
-				val p = turn.getPosition(if (forward) t else 1 - t)
-				points += Vector3d(p.x, p.y + LIFT, p.z)
-			}
-		} else {
-			for (node in listOf(d.from, d.to)) {
-				val p = node.location.location
-				points += Vector3d(p.x, p.y + LIFT, p.z)
-			}
+	/**
+	 * The server's [tube] round train [id], round the client's copy of it instead: its stretch here (its tail reaching
+	 * on by the train's travel in a tick, as it's drawn between ticks), then the tube's curve on from the point nearest
+	 * its head.
+	 */
+	private fun aroundClientTrain(level: Level, id: java.util.UUID, tube: FieldSource.Krasnikov): FieldSource.Krasnikov {
+		val train = com.simibubi.create.CreateClient.RAILWAYS.trains[id] ?: return tube
+		val body = bodyRuns(train, OVERHANG + kotlin.math.abs(train.speed))
+		val own = body.runs.lastOrNull()?.takeIf { body.headOnKrasnikov } ?: return tube
+		val head = own.last().d
+		var bestPiece = -1
+		var bestT = 0.0
+		var best = Double.MAX_VALUE
+		for ((i, piece) in tube.curve.withIndex()) for (step in 0..20) {
+			val t = step / 20.0
+			val d = piece.at(t).distance(head)
+			if (d < best) { best = d; bestPiece = i; bestT = t }
 		}
-		return points
+		if (bestPiece < 0) return tube
+		val curve = ArrayList<Cubic>(own)
+		if (bestT < 1.0) curve += tube.curve[bestPiece].part(bestT, 1.0)
+		curve.addAll(tube.curve.drop(bestPiece + 1))
+		return FieldSource.Krasnikov(curve, tube.k, tube.radius)
 	}
 
 	/** Whether [train] is in its tube: running its route, on Krasnikov track. */

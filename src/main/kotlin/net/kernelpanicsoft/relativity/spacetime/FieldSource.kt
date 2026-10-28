@@ -150,7 +150,18 @@ sealed interface FieldSource {
 	 * A Krasnikov tube ([KrasnikovTube]): static, of [radius] blocks round the polyline [spine] (game coordinates), light
 	 * along it running at 1 / [k] times c: Krasnikov track's, along the routes trains are scheduled over it.
 	 */
-	data class Krasnikov(val spine: List<Vector3dc>, val k: Double, val radius: Double) : FieldSource {
+	data class Krasnikov(val curve: List<Cubic>, val k: Double, val radius: Double) : FieldSource {
+		/** Its centre line as points, finely ([SPINE_TOLERANCE] off the curve at most). */
+		val spine: List<Vector3dc> by lazy { polyline(curve, { SPINE_TOLERANCE }) }
+
+		companion object {
+			/** How far (blocks) [spine] strays from the curve at most. */
+			const val SPINE_TOLERANCE = 0.02
+
+			/** A tube along straight pieces through [points]. */
+			fun through(points: List<Vector3dc>, k: Double, radius: Double) = Krasnikov(Cubic.polyline(points), k, radius)
+		}
+
 		override fun toPhysics(origin: Vector3dc): MetricSource {
 			val flat = DoubleArray(3 * spine.size)
 			val p = DoubleArray(3)

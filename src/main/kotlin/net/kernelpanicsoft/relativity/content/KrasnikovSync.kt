@@ -39,8 +39,8 @@ object KrasnikovSync {
 				if (owner != null) buf.writeUUID(owner)
 				buf.writeFloat(tube.k.toFloat())
 				buf.writeFloat(tube.radius.toFloat())
-				buf.writeVarInt(tube.spine.size)
-				for (p in tube.spine) {
+				buf.writeVarInt(tube.curve.size)
+				for (piece in tube.curve) for (p in listOf(piece.a, piece.b, piece.c, piece.d)) {
 					buf.writeDouble(p.x())
 					buf.writeDouble(p.y())
 					buf.writeDouble(p.z())
@@ -52,8 +52,9 @@ object KrasnikovSync {
 				val owner = if (buf.readBoolean()) buf.readUUID() else null
 				val k = buf.readFloat().toDouble()
 				val radius = buf.readFloat().toDouble()
-				val spine = List<Vector3dc>(buf.readVarInt()) { Vector3d(buf.readDouble(), buf.readDouble(), buf.readDouble()) }
-				owner to FieldSource.Krasnikov(spine, k, radius)
+				fun point(): Vector3dc = Vector3d(buf.readDouble(), buf.readDouble(), buf.readDouble())
+				val curve = List(buf.readVarInt()) { net.kernelpanicsoft.relativity.spacetime.Cubic(point(), point(), point(), point()) }
+				owner to FieldSource.Krasnikov(curve, k, radius)
 			}
 			Payload(tubes)
 		},

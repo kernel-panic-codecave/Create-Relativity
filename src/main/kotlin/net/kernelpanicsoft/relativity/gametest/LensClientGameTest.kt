@@ -1189,7 +1189,7 @@ class LensClientGameTest {
 		var spine = straightSpine
 		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
 			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList()
-			else listOf(net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(spine, k, radius))
+			else listOf(net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov.through(spine, k, radius))
 		}
 		withTestWorld {
 			// (The world's programs compile cold on a changed lens: long, the first frames.)
@@ -1426,7 +1426,7 @@ class LensClientGameTest {
 			net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass(org.joml.Vector3d(-40.5, -55.0, 0.5), 0.5, softening = 1.5),
 			net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid(org.joml.Vector3d(0.5, -56.0, 40.5),
 				listOf(org.joml.Vector3d(6.0, 0.0, 0.0), org.joml.Vector3d(0.0, 4.0, 0.0), org.joml.Vector3d(0.0, 0.0, 5.0)), org.joml.Vector3d(1.0, 0.0, 0.0), speed),
-			net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(listOf(org.joml.Vector3d(30.0, -57.5, -40.5), org.joml.Vector3d(70.0, -57.5, -40.5)), 0.05, 3.0),
+			net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov.through(listOf(org.joml.Vector3d(30.0, -57.5, -40.5), org.joml.Vector3d(70.0, -57.5, -40.5)), 0.05, 3.0),
 		)
 		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
 			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else sources
