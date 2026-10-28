@@ -1,8 +1,14 @@
 package net.kernelpanicsoft.relativity.client.pick
 
-import net.kernelpanicsoft.relativity.physics.geodesic.NullRay
+import net.kernelpanicsoft.relativity.physics.lens.field.BubbleModule
+import net.kernelpanicsoft.relativity.physics.lens.field.HoleModule
+import net.kernelpanicsoft.relativity.physics.lens.field.LensModule
+import net.kernelpanicsoft.relativity.physics.lens.field.MassModule
+import net.kernelpanicsoft.relativity.physics.lens.field.OrbitField
+import net.kernelpanicsoft.relativity.physics.lens.field.TubeModule
+import net.kernelpanicsoft.relativity.physics.lens.field.V3
 import net.kernelpanicsoft.relativity.spacetime.BlackHole
-import net.kernelpanicsoft.relativity.spacetime.GameFrame
+import net.kernelpanicsoft.relativity.spacetime.FieldSource
 import net.kernelpanicsoft.relativity.spacetime.SpacetimeField
 import net.minecraft.core.BlockPos
 import net.minecraft.core.Direction
@@ -13,40 +19,28 @@ import net.minecraft.world.phys.AABB
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.HitResult
 import net.minecraft.world.phys.Vec3
-import org.joml.Vector3d
 
 /**
- * Crosshair picking along the bent light path: you click what you see around a hole. Mirrors vanilla's pick (nearest
- * block within block reach, unless an entity within entity reach is closer), but distances are measured along the
- * null geodesic leaving the eye instead of a straight line. Only used when a hole bends the ray noticeably within reach.
+ * Crosshair picking along the bent light path: you click what you see, however the lens bends it. Mirrors vanilla's pick
+ * (nearest block within block reach, unless an entity within entity reach is closer), but distances are measured along
+ * the light leaving the eye instead of a straight line, followed as the renderer bends it (VertexLens): through every
+ * hole and mass together (OrbitField, exact for a lone hole), or through a tube's or bubble's walls (their lens
+ * modules). Only used when something bends the sight line noticeably within reach.
  */
 object BentPick {
 	/** A hole whose closest approach to the straight sight line is within this many r_s bends the ray within reach. */
 	private const val INFLUENCE = 40.0
 
+	/** How far apart the path's points are (blocks): finer than a block, so the clip between them follows the bend. */
+	private const val SPACING = 0.1
+
 	@JvmStatic
 	fun pick(entity: Entity, blockRange: Double, entityRange: Double, partialTick: Float): HitResult? {
 		val level = entity.level()
-		val holes = SpacetimeField.blackHoles(level)
-		if (holes.isEmpty()) return null
 		val eye = entity.getEyePosition(partialTick)
 		val view = entity.getViewVector(partialTick)
 		val reach = maxOf(blockRange, entityRange)
-		val hole = strongest(holes, eye, view, reach) ?: return null
-
-		val origin = DoubleArray(3)
-		val direction = DoubleArray(3)
-		GameFrame.toPhysics(Vector3d(eye.x - hole.x, eye.y - hole.y, eye.z - hole.z), origin)
-		GameFrame.toPhysics(Vector3d(view.x, view.y, view.z), direction)
-		// The light you see there arrived along the sight line: traced back in time (it differs around a spinning hole).
-		// Traced back, light from the hole only nears its horizon, so capture is a little outside it.
-		val capture = 1.02 * hole.equatorialExtent(hole.horizonRadius)
-		val path = NullRay.trace(hole.spacetime(), origin, direction, reach, capture, arriving = true)
-		val points = path.points.map {
-			val game = GameFrame.toGame(it, 0, Vector3d())
-			Vec3(game.x + hole.x, game.y + hole.y, game.z + hole.z)
-		}
-
+		val points = path(level, eye, view, reach) ?: return null
 		var traveled = 0.0
 		for (i in 0 until points.size - 1) {
 			val a = points[i]
@@ -73,22 +67,56 @@ object BentPick {
 		return miss(last, heading)
 	}
 
-	/** The hole that bends the straight sight line most within reach, if any does noticeably. */
-	private fun strongest(holes: List<BlackHole>, eye: Vec3, view: Vec3, reach: Double): BlackHole? {
-		var best: BlackHole? = null
-		var bestBend = 0.0
-		for (hole in holes) {
-			val toHole = Vec3(hole.x - eye.x, hole.y - eye.y, hole.z - eye.z)
-			val along = toHole.dot(view).coerceIn(0.0, reach)
-			val closest = eye.add(view.scale(along)).distanceTo(Vec3(hole.x, hole.y, hole.z))
-			if (closest > INFLUENCE * hole.schwarzschildRadius) continue
-			val bend = hole.schwarzschildRadius / closest.coerceAtLeast(1e-6)
-			if (bend > bestBend) {
-				bestBend = bend
-				best = hole
-			}
+	/**
+	 * The light seen along [view] from [eye], as the renderer bends it, out to about [reach] blocks of path (game
+	 * coordinates); null if nothing bends it noticeably (vanilla's pick then).
+	 */
+	fun path(level: net.minecraft.world.level.Level, eye: Vec3, view: Vec3, reach: Double): List<Vec3>? {
+		val holes = SpacetimeField.blackHoles(level)
+		val sources = SpacetimeField.fieldSources(level)
+		val masses = sources.filterIsInstance<FieldSource.Mass>()
+		val at = { x: Double, y: Double, z: Double -> V3(x - eye.x, y - eye.y, z - eye.z) }
+		val d = V3(view.x, view.y, view.z)
+		if (holes.any { bends(it, eye, view, reach) }) {
+			val field = OrbitField(
+				holes.map { HoleModule(at(it.x, it.y, it.z), it.schwarzschildRadius) },
+				masses.map { MassModule(at(it.center.x(), it.center.y(), it.center.z()), it.mass, it.softening) },
+			)
+			// (Captured: the path stops where the hole took it, and nothing past it is picked.)
+			val traced = field.trace(V3.ZERO, d, reach = reach, record = true, recordEvery = SPACING)
+			return game(traced.points, eye)
 		}
-		return best
+		// Through a tube's or bubble's walls, as drawn: the first whose light isn't straight.
+		for (source in sources) {
+			val module: LensModule = when (source) {
+				is FieldSource.Krasnikov -> TubeModule(source.spine.asReversed().map { at(it.x(), it.y(), it.z()) }, TubeModule.Interior.Krasnikov(source.k), source.radius)
+				is FieldSource.Tube -> TubeModule(source.spine.asReversed().map { at(it.x(), it.y(), it.z()) }, TubeModule.Interior.Warp(source.speed), source.radius)
+				is FieldSource.Ellipsoid -> BubbleModule(
+					at(source.center.x(), source.center.y(), source.center.z()),
+					source.axes.map { V3(it.x(), it.y(), it.z()) },
+					V3(-source.direction.x(), -source.direction.y(), -source.direction.z()).normalized(),
+					TubeModule.Interior.Warp(source.speed),
+				)
+				else -> continue
+			}
+			val bent = when (module) {
+				is TubeModule -> module.path(V3.ZERO, d, reach)
+				is BubbleModule -> module.path(V3.ZERO, d, reach)
+				else -> null
+			} ?: continue
+			if (bent.size > 2 && bent.any { p -> (p - d * (p dot d)).length > 1e-3 }) return game(bent, eye)
+		}
+		return null
+	}
+
+	private fun game(points: List<V3>, eye: Vec3): List<Vec3> = points.map { Vec3(it.x + eye.x, it.y + eye.y, it.z + eye.z) }
+
+	/** Whether [hole] bends the straight sight line noticeably within [reach]. */
+	private fun bends(hole: BlackHole, eye: Vec3, view: Vec3, reach: Double): Boolean {
+		val toHole = Vec3(hole.x - eye.x, hole.y - eye.y, hole.z - eye.z)
+		val along = toHole.dot(view).coerceIn(0.0, reach)
+		val closest = eye.add(view.scale(along)).distanceTo(Vec3(hole.x, hole.y, hole.z))
+		return closest <= INFLUENCE * hole.schwarzschildRadius
 	}
 
 	private fun miss(at: Vec3, heading: Vec3): HitResult =
