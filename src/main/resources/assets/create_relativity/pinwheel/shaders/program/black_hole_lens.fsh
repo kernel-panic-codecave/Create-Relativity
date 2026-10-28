@@ -370,9 +370,17 @@ bool sceneCaptureMarch(vec3 d, out vec3 color) {
         bool front = sceneCaptureFront(0, w, at, dist, rv);
         if (before && !front) {
             if (sceneCaptureHit(0, wx, w, color)) { fillWhy = 1; return true; }
+            fillWhy = 4;
+        }
+        // While the camera's capture has the light behind something nearer (a pillar it passed behind, or the
+        // crossing just turned down), every step is checked in the nearest hole's, from where the light's surface
+        // may show: the light meets it a few steps on, not where it went behind the pillar.
+        if (!front) {
             int hole = sceneCaptureNearest(w);
-            if (hole > 0 && sceneCaptureFront(hole, wx, at, dist, rv) && !sceneCaptureFront(hole, w, at, dist, rv) && sceneCaptureHit(hole, wx, w, color)) { fillWhy = 7; return true; }
-            fillWhy = hole > 0 ? 8 : 4;
+            if (hole > 0 && sceneCaptureFront(hole, wx, at, dist, rv) && !sceneCaptureFront(hole, w, at, dist, rv)) {
+                if (sceneCaptureHit(hole, wx, w, color)) { fillWhy = 7; return true; }
+                fillWhy = 8;
+            }
         }
         before = front;
         v += (a1 + 2.0 * a2 + 2.0 * a3 + a4) * (h / 6.0);
