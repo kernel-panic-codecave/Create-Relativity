@@ -54,6 +54,9 @@ object LightTable {
 	/** Last frame's slots in use (read back a frame late, so nothing waits on the GPU): a pass each beyond slot 0. */
 	var slotsInUse = BooleanArray(SLOTS) { it == 0 }
 		private set
+	/** Last frame's slots' signatures (-1: none). Debug. */
+	var slotSignatures = IntArray(SLOTS) { if (it == 0) 0 else -1 }
+		private set
 	private var slotBuffer = 0
 	private var slotPending = false
 	private var failed = false
@@ -129,6 +132,7 @@ object LightTable {
 			if (data != null) {
 				val ints = data.asIntBuffer()
 				slotsInUse = BooleanArray(SLOTS) { it == 0 || ints.get(it) != -1 }
+				slotSignatures = IntArray(SLOTS) { ints.get(it) }
 				GL15.glUnmapBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER)
 			}
 		}

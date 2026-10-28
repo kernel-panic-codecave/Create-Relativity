@@ -713,7 +713,9 @@ bool relativityTablePoint(vec2 uv, float r, out vec3 p) {
 // Where the camera sees view-space point p by the table: Newton across it from `guess` (a view direction: the seed
 // map's ray through p, relativityTableImage); false if it doesn't get within half a pixel's angle (by a shadow's edge,
 // or light that comes back: a second image).
-const int RELATIVITY_TABLE_STEPS = 12;
+const int RELATIVITY_TABLE_STEPS = 16;
+// How near its seed (table texels) an image of another signature is taken for the pass's own (relativityTableImage).
+const float RELATIVITY_TABLE_SEAM = 4.0;
 vec4 relativityTableWhy = vec4(0.0); // debug (LensCheck): how the last inversion ended (x: 1 off the table, 2 no data, 3 no
                                      // data a step over, 4 degenerate, 5 out of steps, 6 found), y steps, zw uv
 bool relativityTableImageFrom(vec3 p, vec3 guess, out vec3 seen) {
@@ -724,12 +726,25 @@ bool relativityTableImageFrom(vec3 p, vec3 guess, out vec3 seen) {
     if (!relativityTableUv(seen, uv)) return false;
     float tolerance = 0.5 * RelativityLensData[11].x * r;
     int steps = RELATIVITY_TABLE_STEPS + relativityRuntimeZero();
+    // (A step that leaves the point further off is halved and tried again, from where it was taken: far from the image
+    // the table's map is anything but linear, and full steps wander off.)
+    vec2 from = uv;
+    vec2 last = vec2(0.0);
+    float before = 1e30;
     for (int i = 0; i < steps; i += 1) {
         vec3 q;
         relativityTableWhy = vec4(2.0, float(i), uv);
-        if (!relativityTablePoint(uv, r, q)) return false;
+        bool inside = relativityTablePoint(uv, r, q);
+        if (!inside && i == 0) return false;
         vec3 miss = p - q;
-        if (length(miss) < tolerance) { relativityTableWhy = vec4(6.0, float(i), uv); seen = relativityTableDirection(uv); return true; }
+        if (inside && length(miss) < tolerance) { relativityTableWhy = vec4(6.0, float(i), uv); seen = relativityTableDirection(uv); return true; }
+        if (!inside || length(miss) > before) {
+            last *= 0.5;
+            uv = from + last;
+            continue;
+        }
+        before = length(miss);
+        from = uv;
         vec3 qu;
         vec3 qv;
         relativityTableWhy = vec4(3.0, float(i), uv);
@@ -748,6 +763,7 @@ bool relativityTableImageFrom(vec3 p, vec3 guess, out vec3 seen) {
         float size = length(step);
         if (size > 12.0) step *= 12.0 / size;
         uv = clamp(uv + step, vec2(0.5), relativityTableSize() - 0.5);
+        last = uv - from;
     }
     return false;
 }
@@ -824,7 +840,13 @@ bool relativityTableImage(vec3 p, out vec3 seen) {
     int width = int(relativityTableSize().x);
     vec2 seed = vec2(float(index % width), float(index / width)) + 1.0;
     if (!relativityTableImageFrom(p, relativityTableDirection(seed), seen)) return false;
-    if (relativityTableSignature(seen, p) != signature) { relativityTableWhy = vec4(8.0, float(relativityTableSignature(seen, p)), seed); return false; }
+    // An image of another signature close by the seed is this one across a false seam (light passing close to another
+    // hole's axis: that hole's bit is noise there), kept, or the triangles across the seam are drawn in no pass. Far off,
+    // it's another image (that pass draws it).
+    if (relativityTableSignature(seen, p) != signature && length(relativityTableWhy.zw - seed) > RELATIVITY_TABLE_SEAM) {
+        relativityTableWhy = vec4(8.0, float(relativityTableSignature(seen, p)), seed);
+        return false;
+    }
     return true;
 }
 
@@ -1872,6 +1894,20 @@ const float RELATIVITY_TUBE_PIXEL_SLACK = 0.05;
 const float RELATIVITY_TUBE_PIXEL_BLOCKS = 0.3;
 
 // For the pixel showing view-space point unbent, drawn at view-space bent: whether it's in the wrong place.
+// Whether a pixel of the light table's other signatures' passes shows a face from behind: the light seen where it's
+// drawn arrives at the face (heading, from the table at the point's distance) on the side away from its outward
+// normal (view space). Those passes draw without culling (their images' orientations differ, some mirrored), so this
+// stands in: else the back of the world's floor, unlit, shows through as black.
+bool relativityTableBackFacing(vec3 unbent, vec3 bent, vec3 normal) {
+    if (!relativityFieldComposed() || !relativityTableOn() || !relativitySecond()) return false;
+    vec2 uv;
+    if (!relativityTableUv(normalize(bent), uv)) return false;
+    float s = log(length(unbent) / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
+    int k = int(clamp(floor(s), 0.0, float(relativityTableShells() - 2)));
+    vec3 heading = mix(relativityTableRead(uv, 2 * k + 1).xyz, relativityTableRead(uv, 2 * k + 3).xyz, clamp(s - float(k), 0.0, 1.0));
+    return dot(normal, heading) > 0.0;
+}
+
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // Tubes: the light seen where the pixel's drawn, followed (one trace: the aim per pixel is too dear), must pass by
     // what it shows; a triangle stretched across a tube's wall (its corners seen through it and not) doesn't. (With
@@ -1888,7 +1924,6 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
         vec2 uv;
         vec3 at;
         if (!relativityTableUv(normalize(bent), uv) || !relativityTablePoint(uv, length(unbent), at)) return true;
-        if (relativityTableSignature(normalize(bent), unbent) != relativityTableSlotSignature(relativityTableSlot())) return true;
         return length(at - unbent) > RELATIVITY_PIXEL_SLACK * RelativityLensData[11].x * length(unbent);
     }
     if (relativityFieldComposed()) {

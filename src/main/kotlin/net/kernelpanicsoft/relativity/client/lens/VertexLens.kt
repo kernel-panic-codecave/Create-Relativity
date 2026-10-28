@@ -451,6 +451,10 @@ object VertexLens {
 		}
 	}
 
+	/** Debug (LensCheck): the light table's slot later draws place vertices in; 0 again after. */
+	@JvmStatic
+	fun debugSlot(slot: Int) = setSlot(slot)
+
 	/** The block's [11].z: the light table's slot the draw places vertices in (0 its primary signature). */
 	private fun setSlot(slot: Int) {
 		MemoryStack.stackPush().use { stack ->
