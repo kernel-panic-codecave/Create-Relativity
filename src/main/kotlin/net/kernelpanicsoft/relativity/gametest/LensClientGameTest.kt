@@ -1616,6 +1616,23 @@ class LensClientGameTest {
 					val fps = computeOnClient { it.fps }
 					val millis = (0 until 20).map { waitTick(); computeOnClient { BlackHoleLens.gpuMillis } }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] }
 					val composed = computeOnClient { VertexLens.composed }
+					// Floor points round the holes: how many the field lens finds images for, and the solve's misses.
+					if (!weak) {
+						val (eye, rotation) = computeOnClient { minecraft ->
+							val camera = minecraft.gameRenderer.mainCamera
+							camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+						}
+						val views = ArrayList<FloatArray>()
+						for (x in -24..40 step 2) for (z in -30..24 step 2) {
+							val v = rotation.transform(org.joml.Vector3f((x + 0.5 - eye.x).toFloat(), (-60.0 - eye.y).toFloat(), (z + 0.5 - eye.z).toFloat()))
+							if (v.z < -1f) views += floatArrayOf(v.x, v.y, v.z)
+						}
+						val results = views.chunked(200).flatMap { chunk -> atLength { LensCheck.run(chunk, VertexLens.lastProjection, image = true) } }
+						val found = results.count { it[0] > 0f }
+						val residuals = results.map { it[1] }.filter { it >= 0f }.sorted()
+						CreateRelativity.LOGGER.info("Two holes, {}: {} of {} floor points found; solve misses (px) median {}, 90% {}, max {}", name, found, results.size,
+							residuals.getOrNull(residuals.size / 2), residuals.getOrNull(residuals.size * 9 / 10), residuals.lastOrNull())
+					}
 					val label = if (weak) "field_vertex_only" else "field"
 					val shot = takeScreenshot("two_holes_${name}_$label")
 					if (!weak) wrong[field] = LensReference.compare(reference, shot)

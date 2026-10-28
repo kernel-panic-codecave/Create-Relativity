@@ -98,6 +98,36 @@ class FieldSourceGameTest {
 	}
 
 	/**
+	 * A bubble fitted to a box (ShipWarp.around, as a ship's or `relativity bubble add`'s) leaves the box flat whatever
+	 * its warp: at points all through it, corners included, the field pulls nothing to speak of (under a hundredth of a
+	 * block/s², against the hundreds of thousands its wall can), at warp 0.5 and at warp 5.
+	 */
+	@GameTest(template = MEDIUM, batch = "relativity_bubble_flat", timeoutTicks = 40)
+	fun GameTestHelper.bubbleBoxIsFlat() {
+		val level = level as ServerLevel
+		val centre = absoluteVec(Vec3(10.5, 4.5, 10.5))
+		val halves = listOf(Vector3d(3.0, 0.0, 0.0), Vector3d(0.0, 1.5, 0.0), Vector3d(0.0, 0.0, 2.0))
+		var worst = 0.0
+		var where = ""
+		for (warp in listOf(0.5, 5.0)) {
+			val bubble = net.kernelpanicsoft.relativity.sable.ShipWarp.around(Vector3d(centre.x, centre.y, centre.z), halves, Vector3d(1.0, 0.0, 0.0), net.kernelpanicsoft.relativity.physics.WarpScale.speed(warp))
+			val provider = FieldSource.Provider { asked -> if (asked === level) listOf(bubble) else emptyList() }
+			SpacetimeField.addProvider(provider)
+			try {
+				for (i in -2..2) for (j in -2..2) for (k in -2..2) {
+					val at = Vector3d(centre.x + 3.0 * i / 2, centre.y + 1.5 * j / 2, centre.z + 2.0 * k / 2)
+					val pull = SpacetimeField.acceleration(level, at, Vector3d(), Vector3d()).length()
+					if (pull > worst) { worst = pull; where = "warp $warp at ($i, $j, $k) of the box" }
+				}
+			} finally {
+				SpacetimeField.removeProvider(provider)
+			}
+		}
+		assertTrue(worst < 0.01) { "Inside a bubble fitted to its box the field pulls ${"%.3g".format(worst)} blocks/s² ($where)" }
+		succeed()
+	}
+
+	/**
 	 * A living thing dropped into a warp bubble standing still (as `relativity bubble add` places one: warp 5, moving diagonally):
 	 * its wall's pull is huge and sharp, and once flung players hundreds of thousands of blocks a tick. The field takes
 	 * nothing past c: it never moves faster than that. And clocks inside run (at rest against a push faster than light,

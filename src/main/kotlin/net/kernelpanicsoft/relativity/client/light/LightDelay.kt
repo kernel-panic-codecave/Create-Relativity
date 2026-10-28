@@ -127,7 +127,7 @@ object LightDelay {
 	/** Which source a packet is about, and where it is now (or will appear); null if it has no place in the world. */
 	private fun sourceOf(packet: Packet<*>, level: ClientLevel): Pair<Key, Vec3?>? {
 		fun block(pos: BlockPos) = Key(false, pos.asLong()) to Vec3.atCenterOf(pos)
-		fun entity(id: Int) = Key(true, id.toLong()) to level.getEntity(id)?.let { it.boundingBox.center }
+		fun entity(id: Int) = Key(true, id.toLong()) to level.getEntity(id)?.boundingBox?.center
 		return when (packet) {
 			is ClientboundBlockUpdatePacket -> block(packet.pos)
 			is ClientboundSectionBlocksUpdatePacket ->

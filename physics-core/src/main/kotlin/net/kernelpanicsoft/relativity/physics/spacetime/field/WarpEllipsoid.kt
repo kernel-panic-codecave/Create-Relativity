@@ -9,7 +9,10 @@ import kotlin.math.tanh
  * [axes] are three perpendicular semi-axis vectors (x, y, z triples: their lengths the semi-axes). `ds² = −dt² +
  * (dx^i − v n^i f dt)²` as [WarpBubble], f the shape on the ellipsoidal radius s (1 on the wall): a sphere of radius R
  * is the same as [WarpBubble] of R. [sigma] is the wall's sharpness on s (per unit of s: R times a sphere's). Not
- * [moving], it stays where it is, its push the same (frozen: the lens's view of it, BubbleModule).
+ * [moving], it stays where it is, its push the same (frozen: the lens's view of it, BubbleModule). With [inner] > 0
+ * the shape has compact support instead: exactly 1 inside ellipsoidal radius [inner] (truly flat: a ship's box inside
+ * it feels nothing at any warp, where a tanh wall's tail times v² still pulls hard), easing to exactly 0 at 1 by the
+ * C² smootherstep 6t⁵ − 15t⁴ + 10t³.
  */
 class WarpEllipsoid(
 	val cx: Double, val cy: Double, val cz: Double,
@@ -18,6 +21,7 @@ class WarpEllipsoid(
 	val speed: Double,
 	val sigma: Double = 8.0,
 	val moving: Boolean = true,
+	val inner: Double = 0.0,
 ) : MetricSource {
 	init {
 		require(axes.size == 9 && n.size == 3) { "three semi-axes and a direction" }
@@ -26,7 +30,13 @@ class WarpEllipsoid(
 	private val norm = 1.0 / (2.0 * tanh(sigma))
 
 	/** The shape function f(s): 1 inside, 0 outside (the wall at s = 1). */
-	fun shape(s: Double): Double = (tanh(sigma * (s + 1.0)) - tanh(sigma * (s - 1.0))) * norm
+	fun shape(s: Double): Double {
+		if (inner <= 0.0) return (tanh(sigma * (s + 1.0)) - tanh(sigma * (s - 1.0))) * norm
+		if (s <= inner) return 1.0
+		if (s >= 1.0) return 0.0
+		val t = (1.0 - s) / (1.0 - inner)
+		return t * t * t * (t * (6.0 * t - 15.0) + 10.0)
+	}
 
 	/** Each axis's unit vector over its length (so a point's coordinate along it in semi-axes is the dot). */
 	private val scaled = DoubleArray(9).also { out ->
@@ -51,7 +61,7 @@ class WarpEllipsoid(
 		return sqrt(s2)
 	}
 
-	private val reach = 1.0 + 6.0 / sigma
+	private val reach = if (inner > 0.0) 1.0 else 1.0 + 6.0 / sigma
 
 	override fun contribute(t: Double, x: Double, y: Double, z: Double, out: FieldSample) {
 		val s = radius(t, x, y, z)
@@ -59,7 +69,7 @@ class WarpEllipsoid(
 		val f = shape(s)
 		// ∂_k f by central differences (smooth on a wall's scale); it moves, so ∂_t f = −v n·∇f.
 		val shortest = (0..2).minOf { a -> sqrt(axes[3 * a] * axes[3 * a] + axes[3 * a + 1] * axes[3 * a + 1] + axes[3 * a + 2] * axes[3 * a + 2]) }
-		val h = 0.05 * shortest / sigma
+		val h = if (inner > 0.0) 0.02 * shortest * (1.0 - inner) else 0.05 * shortest / sigma
 		val df = DoubleArray(4)
 		for (k in 1..3) {
 			val fp = shape(radius(t, x + if (k == 1) h else 0.0, y + if (k == 2) h else 0.0, z + if (k == 3) h else 0.0))

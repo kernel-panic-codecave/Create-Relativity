@@ -25,8 +25,9 @@ object ShipWarp {
 	/** How long a ship takes to reach its drive's warp from rest (seconds), at the least. */
 	private const val SPOOL_SECONDS = 10.0
 
-	/** Clearance round the ship's box (blocks). */
-	private const val CLEARANCE = 1.0
+	/** A bubble's wall thickness across its box's narrowest way, and its flat margin round the box (blocks: around). */
+	private const val WALL = 2.0
+	private const val MARGIN = 0.5
 
 	/** A running drive aboard a ship: the ship, and where the drive carries it (world unit direction, times c). */
 	class Drive(val ship: SubLevel, val core: WarpCoreBlockEntity, val direction: Vector3d, val speed: Double)
@@ -89,10 +90,16 @@ object ShipWarp {
 
 	/**
 	 * The bubble round a box centred at [centre] with half-extent vectors [halves], moving along [direction] at [speed]
-	 * (times c): an ellipsoid through the box's corners (√3 its half-extents), a block clear.
+	 * (times c), the box exactly flat inside it whatever the speed: the compact wall (WarpEllipsoid's inner) from the
+	 * ellipsoid through the box's corners (√3 its half-extents) grown by μ ([MARGIN] blocks clear of them across the
+	 * narrowest way) out to that grown by λ ([WALL] blocks more): μ = 1 + MARGIN / (√3 h_min), λ = μ + WALL / (√3 h_min).
 	 */
-	fun around(centre: Vector3dc, halves: List<Vector3dc>, direction: Vector3dc, speed: Double): FieldSource.Ellipsoid =
-		FieldSource.Ellipsoid(Vector3d(centre), halves.map { Vector3d(it).normalize(it.length() * sqrt(3.0) + CLEARANCE) }, Vector3d(direction).normalize(), speed)
+	fun around(centre: Vector3dc, halves: List<Vector3dc>, direction: Vector3dc, speed: Double): FieldSource.Ellipsoid {
+		val narrowest = sqrt(3.0) * halves.minOf { it.length() }.coerceAtLeast(0.5)
+		val flat = 1.0 + MARGIN / narrowest
+		val grow = flat + WALL / narrowest
+		return FieldSource.Ellipsoid(Vector3d(centre), halves.map { Vector3d(it).normalize(it.length() * sqrt(3.0) * grow) }, Vector3d(direction).normalize(), speed, inner = flat / grow)
+	}
 
 	/** Each warp ship's speed along its drive's way (blocks/s), spooling up to the drive's warp; and the tick it's for. */
 	private class Spool(var speed: Double, var tick: Long)

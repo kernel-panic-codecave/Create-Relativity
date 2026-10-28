@@ -82,6 +82,14 @@ class FieldLens(val modules: List<LensModule>) {
 	 */
 	fun sky(camera: V3, direction: V3): LightLine? = propagate(LightLine(camera, coordinate(camera, direction)))
 
+	/**
+	 * Light leaving [camera] along unit [direction] (as the camera sees it), followed past every source: each piece of
+	 * its path to [pieces] in turn (its line, and from and to along it; the last to [Double.MAX_VALUE]). False if a source
+	 * captures it.
+	 */
+	fun pieces(camera: V3, direction: V3, pieces: (LightLine, Double, Double) -> Unit): Boolean =
+		propagate(LightLine(camera, coordinate(camera, direction)), pieces) != null
+
 	/** As [sky], from a coordinate tangent [coordinateDirection] (no observer's direction converted). */
 	fun skyCoordinate(camera: V3, coordinateDirection: V3): LightLine? = propagate(LightLine(camera, coordinateDirection.normalized()))
 

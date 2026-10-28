@@ -307,28 +307,25 @@ void main() {
     // place): the light followed back past every source, its last leg looked up in the scene capture, else the sky;
     // black where a source captures it.
     vec3 scene = original.rgb;
+    // Every pixel's light followed once (uniform control flow: neighbours' escape directions by screen-space
+    // derivatives, for the asymptote test, cost no walks of their own).
+    vec3 escape;
+    vec3 from;
+    vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
+    bool escaped = relativityFieldLeg(viewDir, from, escape);
+    vec3 world = normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz);
+    float captured = escaped ? 0.0 : 1.0;
+    // By an asymptote: a neighbour captured where this isn't (or the other way: the shadow's edge), or the escape
+    // directions' area over the view's far from 1 (the Einstein ring's caustic, the photon ring).
+    float viewArea = length(cross(dFdx(dir), dFdy(dir)));
+    float area = length(cross(dFdx(world), dFdy(world))) / max(viewArea, 1e-12);
+    bool asymptote = abs(dFdx(captured)) + abs(dFdy(captured)) > 0.0 || area < ASYMPTOTE_AREA.x || area > ASYMPTOTE_AREA.y;
     if (sceneDist >= 1e29) {
-        vec3 escape;
-        vec3 viewDir = normalize((VeilCamera.ViewMat * vec4(dir, 0.0)).xyz);
         scene = vec3(0.0);
-        vec3 from;
-        if (relativityFieldLeg(viewDir, from, escape)) {
-            vec3 world = normalize((VeilCamera.IViewMat * vec4(escape, 0.0)).xyz);
+        if (escaped) {
             scene = skyAt(world);
-            // By an asymptote: the light's neighbours a pixel over each way, how far apart they end heading.
-            vec2 texel = 1.0 / vec2(textureSize(DiffuseSampler0, 0));
-            vec3 dx = normalize((VeilCamera.ViewMat * vec4(viewRay(texCoord + vec2(texel.x, 0.0)), 0.0)).xyz);
-            vec3 dy = normalize((VeilCamera.ViewMat * vec4(viewRay(texCoord + vec2(0.0, texel.y)), 0.0)).xyz);
-            vec3 ex;
-            vec3 ey;
-            vec3 unused;
-            bool asymptote = !relativityFieldLeg(dx, unused, ex) || !relativityFieldLeg(dy, unused, ey);
-            if (!asymptote) {
-                float area = length(cross(ex - escape, ey - escape)) / max(length(cross(dx - viewDir, dy - viewDir)), 1e-12);
-                asymptote = area < ASYMPTOTE_AREA.x || area > ASYMPTOTE_AREA.y;
-            }
-            vec3 captured;
-            if (asymptote && sceneCaptureAlong((VeilCamera.IViewMat * vec4(from, 0.0)).xyz, world, captured)) scene = captured;
+            vec3 seen;
+            if (asymptote && sceneCaptureAlong((VeilCamera.IViewMat * vec4(from, 0.0)).xyz, world, seen)) scene = seen;
         }
     }
     // The nearest hole's disk.

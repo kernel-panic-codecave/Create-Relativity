@@ -369,6 +369,106 @@ void relativityFieldWeakly(inout vec3 o, inout vec3 d, float until, int mask) {
     }
 }
 
+// The light's path as relativityFieldPropagate follows it, measured against a point while relativityMissTracking is set:
+// how near its pieces come (straight from one source's closest approach to the next's, or a march's steps; the last on
+// without end; up to where it's captured, if it is: what's seen is the point's light, wherever it goes after), and the
+// point less the nearest place on them (relativityMissVector). FieldLens.miss.
+bool relativityMissTracking = false;
+vec3 relativityMissTarget = vec3(0.0);
+float relativityMissBest = 1e30;
+vec3 relativityMissVector = vec3(0.0);
+
+// The piece of the line (o, d) from `from` to `to` along it, against the tracked point.
+void relativityMissPiece(vec3 o, vec3 d, float from, float to) {
+    if (relativityMissTracking && to > from) {
+        vec3 near = o + d * clamp(dot(relativityMissTarget - o, d), from, to);
+        vec3 miss = relativityMissTarget - near;
+        if (length(miss) < relativityMissBest) { relativityMissBest = length(miss); relativityMissVector = miss; }
+    }
+}
+
+// Whether holes a and b bend light hard at once: their near spheres overlap (FieldLens.coupled).
+bool relativityFieldCoupled(int a, int b) {
+    return a != b && relativityFieldHole(a) && relativityFieldHole(b)
+        && length(relativityFieldCentre(a) - relativityFieldCentre(b)) < relativityFieldNear(a) + relativityFieldNear(b);
+}
+
+// The holes among `left` coupled to hole k, directly or through others (bit per source), k's own bit included.
+int relativityFieldGroup(int k, int left) {
+    int n = relativityFieldCount();
+    int group = 1 << k;
+    for (int round = 0; round < n; round += 1) {
+        for (int a = 0; a < n; a += 1) {
+            if ((group & (1 << a)) == 0) continue;
+            for (int b = 0; b < n; b += 1) {
+                if ((left & (1 << b)) != 0 && (group & (1 << b)) == 0 && relativityFieldCoupled(a, b)) group |= 1 << b;
+            }
+        }
+    }
+    return group;
+}
+
+// Whether any two sources are coupled (then images are solved on the composition: relativityFieldImage).
+bool relativityFieldAnyCoupled() {
+    int n = relativityFieldCount();
+    for (int a = 0; a < n; a += 1) {
+        for (int b = a + 1; b < n; b += 1) {
+            if (relativityFieldCoupled(a, b)) return true;
+        }
+    }
+    return false;
+}
+
+// The superposed orbit field of the holes in `group` (OrbitField): light at x heading v (any length) accelerates by
+// each hole's photon orbit's pull in Cartesian form, -3/2 r_s h^2 x / r^5 (h = |x × v|), added.
+vec3 relativityOrbitField(int group, vec3 x, vec3 v) {
+    vec3 a = vec3(0.0);
+    for (int k = 0; k < relativityFieldCount(); k += 1) {
+        if ((group & (1 << k)) == 0) continue;
+        vec3 d = x - relativityFieldCentre(k);
+        float r2 = dot(d, d);
+        vec3 hv = cross(d, v);
+        a += d * (-1.5 * relativityFieldParams(k).x * dot(hv, hv) / (r2 * r2 * sqrt(r2)));
+    }
+    return a;
+}
+
+const float RELATIVITY_MARCH_STEP = 0.2; // FieldLens.MARCH_STEP: of the distance to the nearest centre
+const int RELATIVITY_MARCH_LIMIT = 400;
+
+// Light from x heading v marched through the group's superposed orbit field (FieldLens.march): RK4, steps
+// RELATIVITY_MARCH_STEP of the distance to the nearest centre, until it has left every one's near sphere heading away
+// from each (x, v where it is then); false if it falls in (inside a photon sphere heading in) or doesn't get out.
+bool relativityFieldMarch(int group, inout vec3 x, inout vec3 v) {
+    int limit = RELATIVITY_MARCH_LIMIT + relativityRuntimeZero();
+    for (int i = 0; i < limit; i += 1) {
+        float nearest = 1e30;
+        bool outside = true;
+        for (int k = 0; k < relativityFieldCount(); k += 1) {
+            if ((group & (1 << k)) == 0) continue;
+            vec3 d = x - relativityFieldCentre(k);
+            float r = length(d);
+            if (r <= 1.5 * relativityFieldParams(k).x && dot(d, v) < 0.0) return false;
+            nearest = min(nearest, r);
+            if (r < relativityFieldNear(k) || dot(d, v) <= 0.0) outside = false;
+        }
+        if (outside) return true;
+        float h = RELATIVITY_MARCH_STEP * nearest;
+        vec3 a1 = relativityOrbitField(group, x, v);
+        vec3 v2 = v + a1 * (0.5 * h);
+        vec3 a2 = relativityOrbitField(group, x + v * (0.5 * h), v2);
+        vec3 v3 = v + a2 * (0.5 * h);
+        vec3 a3 = relativityOrbitField(group, x + v2 * (0.5 * h), v3);
+        vec3 v4 = v + a3 * h;
+        vec3 a4 = relativityOrbitField(group, x + v3 * h, v4);
+        vec3 next = x + (v + 2.0 * v2 + 2.0 * v3 + v4) * (h / 6.0);
+        relativityMissPiece(x, normalize(next - x), 0.0, length(next - x));
+        v += (a1 + 2.0 * a2 + 2.0 * a3 + a4) * (h / 6.0);
+        x = next;
+    }
+    return false;
+}
+
 // Light along (o, d) past the sources in the order it meets them (FieldLens.propagate): false if one captures it.
 // Each is passed exactly from where the light enters its near sphere (back behind where it is, if that's inside, but
 // not past where it set out: started level with an earlier source beside it, its orbit began by its photon sphere,
@@ -376,6 +476,7 @@ void relativityFieldWeakly(inout vec3 o, inout vec3 d, float until, int mask) {
 bool relativityFieldPropagate(inout vec3 o, inout vec3 d) {
     int n = relativityFieldCount();
     vec3 start = o;
+    vec3 piece = o; // where the light's current straight piece starts (relativityMissPiece)
     int left = (1 << n) - 1;
     int passed = 0;
     // (Bounded by the uniform count, not a constant: a constant bound is unrolled, and this is inlined at every call.)
@@ -389,6 +490,61 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d) {
         }
         if (next < 0) break;
         vec3 c = relativityFieldCentre(next);
+        // Holes coupled to it (near spheres overlapping): marched together, from where the light first enters any of
+        // their near spheres to where it has left them all heading away; then each one's exact pass finishes its bend.
+        int group = relativityFieldHole(next) ? relativityFieldGroup(next, left) : (1 << next);
+        float groupEntry = 1e30;
+        if (group != (1 << next)) {
+            for (int k = 0; k < n; k += 1) {
+                if ((group & (1 << k)) == 0) continue;
+                float tk = dot(relativityFieldCentre(k) - o, d);
+                float bk = length(o + d * tk - relativityFieldCentre(k));
+                float rk = relativityFieldNear(k);
+                if (bk < rk) groupEntry = min(groupEntry, max(tk - sqrt(rk * rk - bk * bk), dot(start - o, d)));
+            }
+        }
+        if (groupEntry < 1e29) {
+            if (groupEntry > 0.0) relativityFieldWeakly(o, d, groupEntry, left);
+            else o += d * groupEntry;
+            vec3 from = groupEntry > 0.0 ? o + d * groupEntry : o;
+            relativityMissPiece(o, d, dot(piece - o, d), dot(from - o, d));
+            left &= ~group;
+            vec3 before = d;
+            vec3 x = from;
+            vec3 v = d;
+            if (!relativityFieldMarch(group, x, v)) return false;
+            // (Each one's exact pass from where the march left off, nearest first, the light kept where it is.)
+            vec3 heading = normalize(v);
+            int done = 0;
+            for (int j = 0; j < n; j += 1) {
+                int pick = -1;
+                float closest = 1e30;
+                for (int k = 0; k < n; k += 1) {
+                    if ((group & (1 << k)) == 0 || (done & (1 << k)) != 0) continue;
+                    float r = length(x - relativityFieldCentre(k));
+                    if (r < closest) { closest = r; pick = k; }
+                }
+                if (pick < 0) break;
+                done |= 1 << pick;
+                vec3 at = x;
+                if (!relativityFieldPass(pick, at, heading)) return false;
+            }
+            o = x;
+            vec3 tails = vec3(0.0);
+            for (int j = 0; j < 2 * n; j += 1) {
+                int k = j / 2;
+                if ((passed & (1 << k)) == 0) continue;
+                bool old = j - 2 * k == 1;
+                vec3 tail = vec3(0.0);
+                vec3 unused = vec3(0.0);
+                relativityFieldWeak(k, o, o + (old ? before : heading) * RELATIVITY_FAR, tail, unused);
+                tails += old ? -tail : tail;
+            }
+            d = normalize(heading + tails);
+            passed |= group;
+            piece = o;
+            continue;
+        }
         float impact = length(o + d * nextAt - c);
         float radius = relativityFieldNear(next);
         float entry = impact < radius ? max(nextAt - sqrt(radius * radius - impact * impact), dot(start - o, d)) : 0.0;
@@ -396,6 +552,8 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d) {
         else o += d * entry;
         left &= ~(1 << next);
         vec3 before = d;
+        // (The piece in, up to its closest approach.)
+        relativityMissPiece(o, d, dot(piece - o, d), dot(c - o, d));
         if (!relativityFieldPass(next, o, d)) return false;
         // Those already passed counted their tails along the old line: from the turn on, the light runs along the new.
         // (Both tails at one call site: each is inlined whole.)
@@ -411,8 +569,74 @@ bool relativityFieldPropagate(inout vec3 o, inout vec3 d) {
         }
         d = normalize(d + tails);
         passed |= 1 << next;
+        // (The piece out starts at its closest approach.)
+        piece = o + d * dot(c - o, d);
     }
+    relativityMissPiece(o, d, dot(piece - o, d), RELATIVITY_FAR);
     return true;
+}
+
+// How far light leaving the camera along view direction d passes from `target`, past every source (FieldLens.miss):
+// the target less the nearest point of its path.
+vec3 relativityFieldMiss(vec3 d, vec3 target) {
+    relativityMissTracking = true;
+    relativityMissTarget = target;
+    relativityMissBest = 1e30;
+    relativityMissVector = vec3(1e9);
+    vec3 o = vec3(0.0);
+    vec3 e = d;
+    relativityFieldPropagate(o, e);
+    relativityMissTracking = false;
+    return relativityMissVector;
+}
+
+// The view direction whose light passes through `target`, from `guess` (FieldLens.solve): Gauss-Newton on the miss,
+// finite differences across the direction; false if it doesn't get within half a pixel's angle at the target.
+const int RELATIVITY_SOLVE_STEPS = 4;
+float relativitySolveResidual = -1.0; // debug (LensCheck): the last solve's miss, in pixels' angle at the target
+const float RELATIVITY_SOLVE_STEP = 5e-4; // radians: the finite differences' step
+bool relativityFieldSolve(vec3 target, vec3 guess, out vec3 seen) {
+    vec3 d = normalize(guess);
+    seen = d;
+    float tolerance = 0.5 * RelativityLensData[11].x * length(target);
+    vec3 e1 = vec3(1.0, 0.0, 0.0);
+    vec3 e2 = vec3(0.0, 1.0, 0.0);
+    vec3 r = vec3(0.0);
+    vec3 j1 = vec3(0.0);
+    // Each round three walks (the direction, and a step across it each way), from one call site: it's inlined whole.
+    // The last round's first walk only checks the last step.
+    int walks = 3 * RELATIVITY_SOLVE_STEPS + 1 + relativityRuntimeZero();
+    for (int w = 0; w < walks; w += 1) {
+        int part = w - 3 * (w / 3);
+        if (part == 0) {
+            e1 = normalize(abs(d.y) < 0.9 ? cross(d, vec3(0.0, 1.0, 0.0)) : cross(d, vec3(1.0, 0.0, 0.0)));
+            e2 = cross(d, e1);
+        }
+        vec3 probe = part == 0 ? d : normalize(d + (part == 1 ? e1 : e2) * RELATIVITY_SOLVE_STEP);
+        vec3 m = relativityFieldMiss(probe, target);
+        if (part == 0) {
+            r = m;
+            relativitySolveResidual = length(r) / (RelativityLensData[11].x * length(target));
+            if (length(r) < tolerance) { seen = d; return true; }
+        } else if (part == 1) {
+            j1 = (m - r) / RELATIVITY_SOLVE_STEP;
+        } else {
+            vec3 j2 = (m - r) / RELATIVITY_SOLVE_STEP;
+            // (Least squares on the 3 x 2 Jacobian: (J^T J) step = -J^T r.)
+            float a = dot(j1, j1);
+            float b = dot(j1, j2);
+            float c = dot(j2, j2);
+            float det = a * c - b * b;
+            if (abs(det) < 1e-20) break;
+            vec2 step = vec2(c * -dot(j1, r) - b * -dot(j2, r), a * -dot(j2, r) - b * -dot(j1, r)) / det;
+            // (At most a tenth of a radian a step: far from the image the map is anything but linear.)
+            float size = length(step);
+            if (size > 0.1) step *= 0.1 / size;
+            d = normalize(d + e1 * step.x + e2 * step.y);
+        }
+    }
+    seen = d;
+    return false;
 }
 
 // ---- Tubes (physics-core's TubeModule, which this mirrors): a field uniform inside a tube of thin walls round a

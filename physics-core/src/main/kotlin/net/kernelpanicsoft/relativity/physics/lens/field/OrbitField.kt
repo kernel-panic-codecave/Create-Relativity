@@ -63,7 +63,7 @@ class OrbitField(val holes: List<HoleModule>, val masses: List<MassModule>) {
 				nearest = minOf(nearest, d.length)
 				if (d.length < reach || (d dot v) <= 0.0) away = false
 			}
-			if (away || centres.isEmpty()) return Traced(v.normalized(), points)
+			if (away || centres.isEmpty() || (x - from).length > 2.0 * reach) return Traced(v.normalized(), points.also { if (record) it += x })
 			val step = minOf(tolerance * nearest.coerceAtLeast(1e-3), maxStep * maxOf(1.0, nearest / 50.0))
 			// RK4 on (x, v).
 			val a1 = acceleration(x, v)

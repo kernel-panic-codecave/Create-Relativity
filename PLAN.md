@@ -315,6 +315,33 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
 
 ## 8. Wormholes
 
+- **Order: same-level wormholes first** (user: both mouths in one level "makes things much easier"): no second level, no
+  loading screen, crossing a relative teleport within the level; the far side is ordinary geometry, drawn through the
+  throat by the vertex lens (a field-lens module; what's near the far mouth gets an extra image through the near one, an
+  extra pass of the real geometry as secondary images are), so packs, translucency and sharpness match. Catch: the
+  client keeps chunks only within its view distance, so a far mouth farther off needs its area kept loaded, sent and
+  held. Then distant mouths, then cross-dimensional on top.
+- **Cross-dimensional wormholes** (research, 2026-10-27): the client holds one level; seeing another dimension through a
+  throat needs (a) the server streaming the far mouth's surroundings in the other dimension to nearby players (packets
+  wrapping chunk data with its dimension, a ticket loader round the far mouth), (b) a secondary client level holding
+  them, and (c) drawing it: a perspective render from the far mouth (as SceneCapture's cube) with that level swapped in,
+  looked up by the field lens where a pixel's light leaves through the throat (near-side geometry stays the vertex
+  lens's). Precedent: Immersive Portals (NeoForge 1.21.1 builds; multiple client levels with context switching, a
+  dimension-aware protocol, chunk loaders that sync, an API) — heavy, and known trouble with Sodium/Iris/DH and likely
+  with Veil, Sable and the vertex lens; so our own minimal version first, after reading its source for how it hosts the
+  second level and syncs remote chunks.
+  Requirements (user, 2026-10-27): no loading screen (the far side is already on the client: crossing swaps which level
+  is primary, no respawn-style dimension change); relative teleport (position, velocity, facing carried through the
+  throat's map, for players, mobs, items and ships); entities partly through drawn on both sides; and the far side as
+  sharp as the rest, so not a capture: rendered each frame at screen resolution from the camera carried through the
+  throat, looked up by the post pass where light leaves through it (a wide low-resolution view for exits outside that
+  camera's field).
+  Governing constraint (user): minimally invasive, as compatible as possible. So: `Minecraft.level` stays the dimension
+  you're in (other mods see a normal single-level client); the far side's client level is ours, held privately, swapped
+  in only for its own render (through Veil's perspective renderer, with a fallback to the capture where a mod's render
+  hook can't cope); far-side data in our own packets (vanilla's protocol untouched); crossing through vanilla's
+  dimension change on the server (other mods' hooks fire), with only the loading screen skipped client-side when the far
+  side is already loaded; few, small mixins, events and APIs wherever they exist.
 - **Composed with the other sources' lens modules**: warp trains go through wormholes, so the field lens composes wormhole
   throats with both tube types (Krasnikov and warp tubes) and bubbles, as it does holes with tubes.
 
@@ -332,8 +359,48 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
   gentler bends, more energy per pass). Beams meet in a **collision cavity** multiblock, which collects the products:
   the two fluids, by what was injected and the collision energy. A leak (a broken wall, an unpowered magnet) loses the
   vacuum and the beam.
+- **Making one, two tiers** (user, 2026-10-27):
+  - *Early: open a pair, carry one.* A **Throat Inflator** multiblock (a containment field, piped Exotic Matter, heavy
+    rotational power) opens a pair of linked mouths a few blocks apart at the smallest throat. One mouth is a heavy
+    object with its own anchor, hauled wherever it's wanted (Sable ship, train, under warp, through a Nether portal to
+    another dimension), then set in a **Mouth Anchor**. The journey is the cost; logistics is the game.
+  - *Moving a mouth* (user, 2026-10-27: Thaumcraft's node in a jar, as a gravity containment that the **anchor itself
+    packs into**): every artificial mouth sits in a Mouth Anchor, and the anchor has a pack mode: it shrinks the throat
+    to its least, seals it, and folds itself (coils, casing and mouth) down by its field into one compact unit: a block,
+    and an item when broken (the anchor's blocks, the mouth's link, clock and Exotic Matter stored on it). It's carried
+    in an inventory or a chest, glued to a train, aboard a ship, through a Nether portal in a pocket, kept stable by a
+    trickle of Exotic Matter (run dry, it pinches into a small hole). Its clock lags with whoever carries it
+    (relativistic travel, gravity wells; none at warp), at rest only by the gravitational dilation where it sits.
+    Placed, it unfolds into the whole anchor on the grid and regrows the throat to its last settings. Natural wormholes
+    (no anchor) can't be packed.
+  - *On the grid* (user: tracks through wormholes need it): an anchor snaps its mouth to the block grid (centre on
+    block coordinates, facing along an axis), so the map from one mouth to the other is a quarter-turn rotation and a
+    whole-block offset: straight track into one anchor's face continues from the other's matching face. The throat's
+    length 2a is a stretch of the train graph's edge through it (crossing takes its time; its tides and stability cost
+    apply).
+  - *Late: link at a distance.* Build an anchor at each end and link them; a throat opened straight between far
+    anchors costs far more Exotic Matter.
+- **Keeping it open**: each anchor (a ring of field coils round the throat, as the warp drive's) is piped Exotic Matter.
+  Its value box sets the throat radius (wider: more stable and gentler to cross, dearer per tick). A stability buffer
+  shows on a gauge and as a comparator output (redstone can warn, or stop traffic). Running dry, the throat shrinks
+  first, then pinches shut (below).
 - **Wormhole Mouths**: two linked anchor multiblocks. They can go in different dimensions. The throat geometry is
   Morris–Thorne, so geodesics near a mouth *curve into* the throat instead of teleporting at a plane.
+- **The throat: Dneg's three parameters** (James, von Tunzelmann, Franklin & Thorne 2015, *Interstellar*):
+  `ds² = −dt² + dl² + r(l)² dΩ²`, radius ρ, length 2a (a cylinder of radius ρ for |l| ≤ a), and the pinch / lensing
+  width M (how gradually each mouth flares: r = ρ + M [x arctan x − ½ ln(1 + x²)], x = 2(|l| − a)/(π M), past the
+  cylinder). a = 0 with M ≈ b₀ is near the plain Ellis throat. The anchor's value boxes set ρ, length and pinch, each
+  changing its Exotic Matter cost; a long throat is a corridor ships and trains run down.
+- **Inside the throat** (2026-10-27): each mouth is a sphere in its level (radius ρ); outside it a point at distance r
+  has its l from r(l). The throat's cylinder, which r alone can't place, lives inside the mouths' balls (no space there
+  before): each ball holds its half as nested shells, l = a at the sphere down to l = 0 at an inner shell (the two
+  balls' inner shells are the same place: crossing, the relative teleport, happens there). An entity in the throat is
+  really in that level, inside the ball, its motion integrated in (l, direction) with a scale factor taking the shells'
+  spacing to the cylinder's length; the throat has no mass, so nothing at rest is pulled in. The anchor keeps the ball
+  and a margin round it clear of blocks, so an entity collides only on its centre's side. The lens draws the ball as a
+  tunnel 2a long with the far side at its end; from inside, the far side fills more of the view the deeper you go.
+  Entities part-way through are drawn on both sides, each copy clipped at the crossing; a Sable ship moves over whole
+  when its centre of mass crosses, its far part drawn through the throat till then.
 - **Traversal**: an entity whose proper radial coordinate `l` crosses 0 gets moved to the other mouth with its velocity
   rotated by the mouth orientation transform. Sable sub-levels go through as a whole (needs a Sable teleport API, see
   risks). Tidal forces at the throat stay below human tolerance if b0 is big enough. If the throat is too small, you get
@@ -344,9 +411,18 @@ the sub-level **splits** along the weakest plane into fragments, which keep fall
   and the train feels the throat's tides and the mass passing through counts against stability.
 - **Stability**: the mouths use up exotic matter per tick, and more per unit mass passing through. If the supply runs
   out, the throat pinches shut (the Ellis → Schwarzschild collapse is scripted: anything inside ends up in a small BH. Fun.)
-- **Time machine (stretch)**: move one mouth at relativistic speed and bring it back. Its proper time lags, so the mouths
-  become **time-shifted**. Chronology protection: when a closed timelike curve would form, the throat blows up with a
-  vacuum-fluctuation explosion (Hawking's conjecture as gameplay).
+- **Pocket universes** (user, 2026-10-27): a wormhole whose far mouth opens into its own closed spacetime bubble, a
+  3-sphere: it wraps back on itself (fly far enough any way and you return from the opposite side; look far enough and
+  you see the mouth you came in by, from behind). Its size is chosen when it's opened: bigger costs more, as a
+  positively curved space wants to recollapse and must be held open. In Minecraft: a finite level wrapping on every axis
+  (at most build height across), drawn curved by the planets' kind of warp (§9b) in three dimensions, light wrapping
+  round it.
+- **Clock lag, resynced** (user, 2026-10-27): a mouth carried fast lags the other's clock; past the light-travel time
+  between them the pair would be a time machine. Instead the anchors bleed the lag off, costing Exotic Matter, and the
+  throat stays shut while the lag is past that bound (no explosions, no time travel: [[no-time-travel]]).
+  What makes lag: moving a mouth fast by ordinary thrust (special-relativistic dilation), riding a Krasnikov tube fast
+  (a clock at v in a strongly tipped tube runs at about |1 − v| of world time), or parking it deep in a gravity well.
+  Carried at warp or impulse, none: inside the bubble dτ = dt at any speed (the lag-free way to haul a mouth).
 - **Rendering**: see §9.4.
 
 ---
@@ -378,6 +454,10 @@ The other thing exotic matter is good for. The ship sits in a flat bubble that s
   track of its own.
 - **Fuel**: a running drive burns both fuels (Degenerate and Exotic Matter). On a train it draws them automatically from
   fluid tanks anywhere on the train; on a ship (Sable) they must be piped into the drive.
+- **Impulse is the same drive below c** (user, 2026-10-27: "a sublight warp is equivalent to flying a federation ship
+  at impulse"): one throttle runs from impulse (the bubble below c) through the warp factors. At any setting the bubble's
+  inside is flat and carried, so whatever is inside it rides it: the ship's acceleration isn't felt (inertial dampening),
+  and the crew isn't thrown about. Only things crossing the wall feel its field.
 - **No steering from inside at superluminal speed**: the front wall is causally cut off from the crew (a horizon).
   Course and stop point are set before engaging. That's real physics, and it's a good gameplay constraint.
 - **The arrival hazard** (McMonigal, Lewis & O'Byrne 2012): particles swept up at the front wall pile up as
@@ -670,6 +750,18 @@ fraction of c (or deliberately not, for a relativistic orbit as a feature). To b
     It warps spacetime in selectable shapes (a point mass, a flat artificial-gravity field, ...) through the sampled metric
     field (§3). It **collapses into a black hole** when the escape velocity at the edge of its warp reaches c, i.e. its
     Schwarzschild radius 2GM/c² outgrows the generator. At that point it really is a black hole, so an ordinary one replaces it.
+- **Ship control** (user, 2026-10-27; Space Engineers style, on Sable ships):
+  - *Thrusters* push at their block: thrust off the ship's centre of mass (Sable's) turns it, so a builder balances the
+    centre of thrust. *Gimballed thrusters* swivel to aim through it.
+  - *Gyroscopes* torque the ship to the pilot's input and hold it against off-centre thrust, up to their rating;
+    overloaded, a misconfigured thrust vector still spins the ship.
+  - *Cockpit seats* with a built-in yoke and throttle, and the warp drive's controls (§8a).
+  - A *holographic map table* for plotting routes (warp courses are set before engaging: §8a).
+  - *Unmanned ships* follow automated navigation path nodes, the way trains follow schedules.
+- **Materials** (user, 2026-10-27: keep it light, "this ain't GregTech"): **tungsten**, the one new metal (one ore):
+  machine casings, and the magnetically contained tanks and pipes the two fuels need (they're plasmas). **Tungsten-copper
+  (CuW)**, from tungsten and Create's copper, for every coil and electromagnet (superconducting when cryogenically cooled:
+  the coolant fluid). No niobium (one use) and no neutronium material (stable only in a neutron star).
 - **Ponder scenes** for every machine plus "What is an event horizon", "Why big BHs don't spaghettify you",
   "Twin paradox".
 - JEI/EMI recipes, advancements, and a Create-style tooltip summary.
@@ -688,8 +780,29 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
 - **Seamless space**: each star's system is a space dimension; planets (flat levels drawn curved, §9b) appear in it as
   globes orbiting the star (N-body), and flying down to one or up from it is a level transition with no
   break (the multi-level support above).
+- **Gravity in space** (user, 2026-10-27): a space dimension has no dimension-wide gravity (otherwise everything falls
+  "down"): entity gravity is zero there (the 1.21 gravity attribute). "Up" is the normal to the star system's orbital
+  plane (the sky, the map, stations' reference). Ships and stations make **artificial gravity** with gravity generators
+  on Degenerate Matter alone (positive energy; no Exotic Matter needed), pulling toward each deck's "down" (the ship's
+  orientation) within its field.
+- **Seamless level transitions, one subsystem** (user, 2026-10-27: "we also need seamless space transitions"), shared by
+  cross-dimensional wormholes (§8), the Nether under the overworld (below) and planet ↔ space:
+  1. A *boundary* joining two levels with a map between them (a throat; the overworld's floor onto the Nether's roof; a
+     planet level's top onto a shell round its globe in space).
+  2. Both sides loaded near it: the far side's area kept loaded and sent in our own packets, held client-side as a
+     private secondary level (§8's constraints: `Minecraft.level` stays yours, vanilla's protocol untouched).
+  3. Crossing through vanilla's dimension change on the server, the loading screen skipped client-side when the far
+     side is already there; position, velocity and facing carried through the boundary's map.
+  4. The far side drawn where the boundary shows.
+  Planet ↔ space specifics: the map is curved (the planet level's top at (x, z) goes to above the globe at that
+  longitude and latitude, heading and velocity rotated onto the sphere, so an orbit continues across); seeing across is
+  cheap (from the planet's upper sky the space level is mostly far things; from space the planet is its LOD globe, §9b);
+  ships cross whole, which needs a Sable cross-level teleport (§12): an early spike.
 - **A procedural galaxy** from the world seed: stars (type, mass, planets) generated on demand, each with its own space
   dimension, stitched by seamless transitions. Natural wormholes link some systems.
+- **Galaxy worldgen options** (user, 2026-10-27): creating a world, a galaxy setup screen (its parameters) with a 3D
+  preview to orbit; the generation progress screen shows the galaxy forming (arms, stars, systems lighting up as
+  they're generated).
 - **The home system is modelled on ours.** The overworld is its Earth: a G-type star, four rocky planets (the
   overworld third, with one large moon), an asteroid belt (to mine, below), four giants with moon systems, and an icy outer belt. Types,
   order and rough proportions follow the real Solar System. Distances and sizes are compressed to playable scales, and
@@ -720,8 +833,23 @@ Ambitious, after the core (M10+). Kept here so earlier work doesn't paint it int
 - **Ships**: Create + Sable ships for space and between stars. *Shuttles* small enough to land on planets; *motherships*
   too big to, that stay in space and carry shuttles (the Enterprise and its shuttles, a Star Wars frigate and the Falcon).
   Warp bubbles for interstellar trips (§8a), warp trains and wormhole railways (§8) for logistics.
+- **The system in the sky** (user, 2026-10-27; after Advanced Rocketry): from a planet the star, the other planets and
+  moons (at their true positions and phases, lit by the star, eclipses included), and stations and ships overhead. Low
+  orbit is the planet level's own Sable bodies (real geometry); everything in the space dimension is drawn as sky
+  impostors placed from the system's orbits (textured discs for bodies, small renders or icons for far stations and
+  ships), as textured quads in the sky pass the way vanilla's sun and moon are, so shader packs shade them with their
+  sky-texture program; for packs that draw their own sun disc, our star's direction drives their sun position. To check
+  on the packs in use (Complementary first).
 - **Galaxy view and autopilot**: plot a course on a galaxy map; the ship flies itself, routing through natural and
   built wormholes or across empty space by warp, and the map shows the fuel it will burn (Degenerate / Exotic Matter).
+  **Route planning** (user, 2026-10-27: minimum-energy paths, gravity assists, warp when needed): within a system,
+  transfer orbits between bodies (Hohmann; a Lambert solver for any departure and arrival time) and chained gravity
+  assists by flybys (patched conics), the chosen route then flown through the full N-body model to correct it. The cost
+  is fuel first (thruster Δv; Degenerate and Exotic Matter for warp legs), a setting trading it against time. Interstellar
+  legs warp, from a departure point clear of the star's well to near the destination, with sublight legs (assists
+  included) at each end; in-system the planner warps when a transfer takes too long or costs too much. Warp legs add no
+  clock lag (dτ = dt in the bubble); the map shows the time aboard and at the destination. Known wormholes are
+  zero-length links. Unmanned ships fly the same routes.
 - **Automated ship logistics**, the way Create runs trains: seat a conductor (a blaze burner, or a mob) at a ship's
   controls and give it a Create schedule. Stops are **docking ports** (the ship's train station) on stations, colonies,
   asteroid rigs and planets; schedule conditions work as for trains (cargo full or empty, time, redstone, idle). The

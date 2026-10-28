@@ -110,9 +110,10 @@ sealed interface FieldSource {
 	/**
 	 * A warp bubble with an ellipsoidal wall ([WarpEllipsoid]): a warp-driven ship's, round its bounds. Centred at
 	 * [center], its three semi-axis vectors [axes] (game axes, their lengths the semi-axes), moving along unit game
-	 * [direction] at [speed] times c.
+	 * [direction] at [speed] times c; [inner] the ellipsoidal radius inside which it's exactly flat (its wall from there
+	 * to 1: [WarpEllipsoid]'s compact shape; 0 for its tanh wall).
 	 */
-	data class Ellipsoid(val center: Vector3dc, val axes: List<Vector3dc>, val direction: Vector3dc, val speed: Double) : FieldSource {
+	data class Ellipsoid(val center: Vector3dc, val axes: List<Vector3dc>, val direction: Vector3dc, val speed: Double, val inner: Double = 0.0) : FieldSource {
 		override fun toPhysics(origin: Vector3dc): MetricSource {
 			val p = DoubleArray(3)
 			val n = DoubleArray(3)
@@ -124,7 +125,7 @@ sealed interface FieldSource {
 				GameFrame.toPhysics(Vector3d(axis), a)
 				flat[3 * i] = a[0]; flat[3 * i + 1] = a[1]; flat[3 * i + 2] = a[2]
 			}
-			return WarpEllipsoid(p[0], p[1], p[2], flat, n, speed)
+			return WarpEllipsoid(p[0], p[1], p[2], flat, n, speed, inner = inner)
 		}
 
 		/** The ellipsoidal radius of [position] (1 on the wall). */

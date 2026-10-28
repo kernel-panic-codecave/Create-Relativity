@@ -2,12 +2,20 @@
 // one per output texel (LensCheck).
 uniform sampler2D Points; // view-space positions
 uniform mat4 Projection;
-uniform int Direct; // 0: the bend; 4: why a point is hidden; 7: the tubes' aim; 8: the field lens's sky
+uniform int Direct; // 0: the bend; 4: why a point is hidden; 7: the tubes' aim; 8: the field lens's sky; 9: its image
 
 out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 9) {
+        // The field lens's image of p (relativityFieldImage): x 1 found, -1 not; y the last solve's miss (pixels; -1 none
+        // ran); z the chain guess's angle from the result (pixels).
+        vec3 seen;
+        bool found = relativityFieldImage(p, false, true, seen);
+        Result = vec4(found ? 1.0 : -1.0, relativitySolveResidual, 0.0, 0.0);
+        return;
+    }
     if (Direct == 8) {
         // The field lens's sky (relativityFieldSky) for the view direction p: xyz where its light ends heading, w 1, or
         // -1 captured.

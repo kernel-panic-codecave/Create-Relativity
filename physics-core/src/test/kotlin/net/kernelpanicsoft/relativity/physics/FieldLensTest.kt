@@ -3,6 +3,7 @@ package net.kernelpanicsoft.relativity.physics
 import net.kernelpanicsoft.relativity.physics.geodesic.HamiltonianRay
 import net.kernelpanicsoft.relativity.physics.lens.field.FieldLens
 import net.kernelpanicsoft.relativity.physics.lens.field.HoleModule
+import net.kernelpanicsoft.relativity.physics.lens.field.LightTable
 import net.kernelpanicsoft.relativity.physics.lens.field.LensModule
 import net.kernelpanicsoft.relativity.physics.lens.field.MassModule
 import net.kernelpanicsoft.relativity.physics.lens.field.OrbitField
@@ -122,6 +123,51 @@ class FieldLensTest {
 		}
 		println(report)
 		assertTrue(failures.isEmpty(), "past their gates: $failures")
+	}
+
+	/**
+	 * The light table (a frame's light on a grid of view directions, inverted per point) against the model followed
+	 * finely: the images of points along exact light, and what it costs to build.
+	 */
+	@Test
+	fun lightTableImages() {
+		for (scene in scenes.filter { it.name.startsWith("twoHoles") || it.name.startsWith("binary") || it.name == "one hole" }) {
+			val lens = FieldLens(scene.modules)
+			val model = OrbitField(scene.modules)
+			val forward = (scene.look - scene.camera).normalized()
+			val (right, up0) = FieldLens.tangents(forward)
+			val up = if (up0.y < 0) -up0 else up0
+			val r = if ((right cross up) dot forward < 0) -right else right
+			val tanY = kotlin.math.tan(Math.toRadians(35.0))
+			for ((w, h) in listOf(240 to 135, 480 to 270)) {
+				val started = System.nanoTime()
+				val table = LightTable(lens, model, scene.camera, r, up, forward, tanY * 16.0 / 9.0, tanY, w, h)
+				val built = (System.nanoTime() - started) / 1e6
+				val random = java.util.Random(7)
+				val errors = ArrayList<Double>()
+				var missing = 0
+				repeat(120) {
+					val d = coneDirection(forward, Math.toRadians(30.0), random)
+					val exact = model(lens, model, scene.camera, d)
+					val candidates = exact.points.filter { it.second in 4.0..60.0 }
+					if (candidates.isEmpty()) return@repeat
+					val p = candidates[random.nextInt(candidates.size)].first
+					// (From the chain's guess, else the straight line.)
+					val seen = table.image(p - scene.camera, guess = lens.image(scene.camera, p)?.let { table.straight(it) }, steps = 12)
+						?: table.image(p - scene.camera, steps = 12)
+					if (seen == null) missing++ else {
+						var error = angle(seen, d) / pixel
+						if (error > 5.0) {
+							val other = model(lens, model, scene.camera, seen).points.minOfOrNull { (it.first - p).length } ?: Double.MAX_VALUE
+							error = minOf(error, other / (p - scene.camera).length / pixel)
+						}
+						errors += error
+					}
+				}
+				println(String.format("light table %dx%d, %s: images px median %.2f, 95%% %.1f, max %.1f; missing %d of %d; built in %.0f ms",
+					w, h, scene.name, percentile(errors, 0.5), percentile(errors, 0.95), errors.maxOrNull() ?: 0.0, missing, errors.size + missing, built))
+			}
+		}
 	}
 
 	/** The march's accuracy against the model followed finely, and its cost (field evaluations per ray). */
