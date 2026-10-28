@@ -818,9 +818,8 @@ uint relativityTableSlotSignature(int slot) {
 // Where the camera sees view-space point p by the table in this pass's signature: seeded from that signature's inverse
 // map (the quad of rays covering p's straight-line direction at its sphere, or a neighbour's), refined by Newton, kept
 // only if the image found has the signature.
-bool relativityTableImage(vec3 p, out vec3 seen) {
+bool relativityTableImageIn(vec3 p, int slot, out vec3 seen) {
     seen = normalize(p);
-    int slot = relativityTableSlot();
     uint signature = relativityTableSlotSignature(slot);
     if (signature == 0xFFFFFFFFu) return false;
     int face = relativityTableFace(seen);
@@ -850,6 +849,9 @@ bool relativityTableImage(vec3 p, out vec3 seen) {
     }
     return true;
 }
+
+// The image of view-space point p in this pass's slot (relativityTableImageIn).
+bool relativityTableImage(vec3 p, out vec3 seen) { return relativityTableImageIn(p, relativityTableSlot(), seen); }
 
 // Where the light seen along view direction d ends heading, by the table: false if d is off it, or by a shadow's edge
 // (the texels round it disagree on capture: there the table's steps would show, so the light is followed per pixel
@@ -1899,8 +1901,8 @@ const float RELATIVITY_TUBE_PIXEL_BLOCKS = 0.3;
 // drawn arrives at the face (heading, from the table at the point's distance) on the side away from its outward
 // normal (view space). Those passes draw without culling (their images' orientations differ, some mirrored), so this
 // stands in: else the back of the world's floor, unlit, shows through as black.
-bool relativityTableBackFacing(vec3 unbent, vec3 bent, vec3 normal) {
-    if (!relativityFieldComposed() || !relativityTableOn() || !relativitySecond()) return false;
+bool relativityTableBackFacing(vec3 unbent, vec3 bent, vec3 normal, bool always) {
+    if (!relativityFieldComposed() || !relativityTableOn() || !(relativitySecond() || always)) return false;
     vec2 uv;
     if (!relativityTableUv(normalize(bent), uv)) return false;
     float s = log(length(unbent) / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
@@ -1912,8 +1914,8 @@ bool relativityTableBackFacing(vec3 unbent, vec3 bent, vec3 normal) {
 // Whether the pixel seeing view direction d lies inside a hole's Einstein ring, for view-space point p: its light
 // ends up on the other side of that hole's axis (the escape direction across the plane of the camera, the hole and d),
 // or a hole captures it, and the point is behind that hole (past it along the camera's line to it: a post beside the
-// hole, its light met long before the hole, isn't). There the post pass draws what's seen (every image, from the light
-// itself: black_hole_lens.fsh's sceneCaptureMarch); the vertex lens draws only outside, and in front.
+// hole, its light met long before the hole, isn't). There the post pass fills what the vertex lens left empty (the other
+// images, from the light itself: black_hole_lens.fsh's sceneCaptureMarch).
 bool relativityInsideRing(vec3 d, vec3 p) {
     vec3 escape;
     bool captured;
@@ -1943,9 +1945,9 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
         return length(miss) > RELATIVITY_TUBE_PIXEL_SLACK * length(unbent) + RELATIVITY_TUBE_PIXEL_BLOCKS;
     }
     // Composed: by the light table, forward (one read): the light seen where the pixel's drawn, at the point's distance,
-    // must be by the point; else the pixel's own image (a lookup per source) against where it's drawn.
+    // must be by the point (inside the Einstein rings too: whichever way round the light went); else the pixel's own
+    // image (a lookup per source) against where it's drawn.
     if (relativityFieldComposed() && relativityTableOn()) {
-        if (relativityInsideRing(normalize(bent), unbent)) return true;
         vec2 uv;
         vec3 at;
         if (!relativityTableUv(normalize(bent), uv) || !relativityTablePoint(uv, length(unbent), at)) return true;

@@ -1,5 +1,6 @@
 package net.kernelpanicsoft.relativity.mixin.client;
 
+import net.kernelpanicsoft.relativity.client.lens.ImageStage;
 import net.kernelpanicsoft.relativity.client.lens.VertexLens;
 import net.minecraft.client.renderer.ShaderInstance;
 import org.spongepowered.asm.mixin.Mixin;
@@ -13,6 +14,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ShaderInstance.class)
 public abstract class ShaderInstanceMixin {
+	@org.spongepowered.asm.mixin.Shadow
+	public abstract int getId();
+
+	/**
+	 * Its shaders attached, before it's linked (vanilla's ProgramManager.linkShader and Veil's in-place recompile both
+	 * attach through here): the image stage's swapped in, if it's lensed.
+	 */
+	@Inject(method = "attachToProgram", at = @At("TAIL"))
+	private void create_relativity$attachImageStage(CallbackInfo ci) {
+		ImageStage.attach(this.getId());
+	}
+
 	@Inject(method = "<init>*", at = @At("TAIL"))
 	private void create_relativity$linkLens(CallbackInfo ci) {
 		VertexLens.ensureLinked((ShaderInstance) (Object) this);

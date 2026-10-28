@@ -327,7 +327,9 @@ object VertexLens {
 		// The light table: composed sources with any that bend light (holes, masses) in this frame's own view.
 		LightTable.prepare(!perspective && fieldWanted && fieldSources.isNotEmpty(), projection)
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null)
-		LightTable.build { linkProgram(it) }
+		// (The table stands while nothing it's made from has changed: the block, as uploaded, is all of it.)
+		if (!LightTable.on || uploadHash != builtHash) LightTable.build { linkProgram(it) }
+		if (LightTable.on) builtHash = uploadHash
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
@@ -522,6 +524,10 @@ object VertexLens {
 		}
 	}
 
+	/** The block's contents' hash as last uploaded, and as when the light table was last built. */
+	private var uploadHash = 0
+	private var builtHash = 1
+
 	private fun upload(centre: Centre?, camX: Double, camY: Double, camZ: Double, view: Quaternionf, projection: Matrix4f, enabled: Boolean, target: Int = buffer) {
 		MemoryStack.stackPush().use { stack ->
 			val data = stack.mallocFloat(BLOCK_BYTES / 4)
@@ -543,6 +549,9 @@ object VertexLens {
 			repeat(EDGE_SAMPLES) { data.put(0f) }
 			uploadField(data, camX, camY, camZ, view)
 			data.position(0).limit(BLOCK_BYTES / 4)
+			var hash = 1
+			for (i in 0 until BLOCK_BYTES / 4) hash = 31 * hash + data.get(i).toRawBits()
+			uploadHash = hash
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, target)
 			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0L, data)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)
