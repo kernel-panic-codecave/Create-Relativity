@@ -30,10 +30,10 @@ import java.util.WeakHashMap
  */
 object KrasnikovTubes {
 	/** The tube's radius (blocks): round a carriage's body, as a warp tube's. */
-	private const val RADIUS = 3.0
+	const val RADIUS = 3.0
 
 	/** How far above the track the spine runs (blocks): the carriages' middles. */
-	private const val LIFT = 1.0
+	const val LIFT = 1.0
 
 	/** A train in a tube runs at up to this share of its light speed along it (just under: its clocks stay defined). */
 	private const val SHARE = 0.9
@@ -235,7 +235,7 @@ object KrasnikovTubes {
 	 * ride (the track's line, up its normal: TravellingPoint.getPosition), [LIFT] higher. One cubic, exact on straights
 	 * and turns (Create's turns are cubic Béziers in their parameter), close on banked ones (the normal turns too).
 	 */
-	private fun curve(edge: TrackEdge): Cubic {
+	fun curve(edge: TrackEdge): Cubic {
 		fun at(t: Double): Vector3dc {
 			val p = edge.getPosition(null, t).add(edge.getNormal(null, t))
 			return Vector3d(p.x, p.y + LIFT, p.z)

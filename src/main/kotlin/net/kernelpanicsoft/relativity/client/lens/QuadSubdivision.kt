@@ -169,7 +169,7 @@ object QuadSubdivision {
 		val my = (ay + by) * 0.5
 		val mz = (az + bz) * 0.5
 		val length = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay) + (bz - az) * (bz - az))
-		val near = maxOf(holes.maxOfOrNull { nearLevel(it, mx, my, mz) } ?: 1, axisLevel(mx, my, mz, length))
+		val near = maxOf(holes.maxOfOrNull { nearLevel(it, mx, my, mz) } ?: 1, axisLevel(mx, my, mz, length), TubeWalls.pieces(ax, ay, az, bx, by, bz))
 		val v = view ?: return near
 		return maxOf(near, LensCurvature.pieces(v, holes, ax, ay, az, bx, by, bz) { nearLevel(it, mx, my, mz) }).coerceAtMost(MAX_LEVEL)
 	}
@@ -195,7 +195,10 @@ object QuadSubdivision {
 	/** The consumer a section's blocks draw into: [target] itself, or a subdivider round it if the section is near a hole. */
 	@JvmStatic
 	fun wrap(target: VertexConsumer, section: SectionPos): VertexConsumer {
-		if (!active || holes.isEmpty()) return target
+		if (!active) return target
+		// (By a Krasnikov tube's wall: split where it can be.)
+		if (TubeWalls.near(section.asLong())) return subdivider.get().also { it.begin(target, section.origin().x, section.origin().y, section.origin().z) }
+		if (holes.isEmpty()) return target
 		val origin = section.origin()
 		// Within [REACH] of a hole (its nearest point), anything in it may be split.
 		var near = false
@@ -221,6 +224,7 @@ object QuadSubdivision {
 		val level = minecraft.level
 		active = level != null && RelativityConfig.Client.Render.lensing
 		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius) }
+		if (active) TubeWalls.tick(minecraft)
 		val axisMoved = updateAxis(minecraft, now)
 		applyPending(minecraft)
 		updateView(minecraft, now, axisMoved)

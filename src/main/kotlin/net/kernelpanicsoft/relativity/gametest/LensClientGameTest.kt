@@ -1066,6 +1066,12 @@ class LensClientGameTest {
 			}
 			CreateRelativity.LOGGER.info("Train test: the client's bogeys off its tube's spine {}", offs.map { "%.2f".format(it) })
 			assertTrue(offs.all { it < 1.0 }) { "The client's train's bogeys are $offs blocks off its tube's spine" }
+			// The tube from beside, round the train: the ground and the train through its wall.
+			val trainZ = computeOnClient { _ -> com.simibubi.create.CreateClient.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }.carriages.first().leadingPoint.getPosition(null).z }
+			// (Ahead of it, where its tube has formed along the route: it runs on fast, toward -z.)
+			command("tp @a 67.5 -56.5 ${"%.1f".format(trainZ - 60.0)} 90 15")
+			waitTicks(5)
+			takeScreenshot("maglev_train_tube")
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).
 			command("gamemode creative @a")
