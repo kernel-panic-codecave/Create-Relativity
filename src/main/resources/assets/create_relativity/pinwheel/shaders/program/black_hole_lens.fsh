@@ -259,6 +259,69 @@ bool sceneCaptureTable(vec3 d, out vec3 color) {
     return false;
 }
 
+// What the light seen along view direction d shows, followed exactly: marched from the camera through every hole's
+// orbit field (RK4, as relativityFieldMarch), each step's short straight piece checked against the scene capture (a
+// crossing behind a captured surface halved back to it, a hit unless the light is far behind what it shows: a
+// silhouette), then once it has left every hole heading away, the rest of its way straight (sceneCaptureAlong). False if
+// a hole captures it before it meets anything, or it meets nothing. Sharp where the light table's steps would smear:
+// inside the Einstein rings, where images are squeezed.
+const int FILL_MARCH_LIMIT = 400;
+bool sceneCaptureMarch(vec3 d, out vec3 color) {
+    color = vec3(0.0);
+    if (SceneCaptureReady == 0) return false;
+    int group = (1 << relativityFieldCount()) - 1;
+    vec3 x = vec3(0.0);
+    vec3 v = d;
+    bool before = true;
+    int limit = FILL_MARCH_LIMIT + relativityRuntimeZero();
+    for (int i = 0; i < limit; i += 1) {
+        float nearest = 1e30;
+        bool outside = true;
+        for (int k = 0; k < relativityFieldCount(); k += 1) {
+            vec3 off = x - relativityFieldCentre(k);
+            float r = length(off);
+            if (relativityFieldHole(k) && r <= 1.5 * relativityFieldParams(k).x && dot(off, v) < 0.0) return false;
+            nearest = min(nearest, r);
+            if (r < relativityFieldNear(k) || dot(off, v) <= 0.0) outside = false;
+        }
+        if (outside || length(x) > SceneCaptureRange.y) break;
+        float h = 0.2 * nearest;
+        vec3 a1 = relativityOrbitField(group, x, v);
+        vec3 v2 = v + a1 * (0.5 * h);
+        vec3 a2 = relativityOrbitField(group, x + v * (0.5 * h), v2);
+        vec3 v3 = v + a2 * (0.5 * h);
+        vec3 a3 = relativityOrbitField(group, x + v2 * (0.5 * h), v3);
+        vec3 v4 = v + a3 * h;
+        vec3 a4 = relativityOrbitField(group, x + v3 * h, v4);
+        vec3 next = x + (v + 2.0 * v2 + 2.0 * v3 + v4) * (h / 6.0);
+        vec3 w = (VeilCamera.IViewMat * vec4(next, 0.0)).xyz;
+        vec2 at;
+        float dist;
+        bool front = !sceneCaptureFace(w / length(w), at, dist) || length(w) < dist;
+        if (before && !front) {
+            // (Halved back along the piece: short by a hole, so straight to well under a pixel.)
+            vec3 a = x;
+            vec3 b = next;
+            for (int k = 0; k < 8; k += 1) {
+                vec3 m = 0.5 * (a + b);
+                vec3 wm = (VeilCamera.IViewMat * vec4(m, 0.0)).xyz;
+                float dm;
+                vec2 atm;
+                if (sceneCaptureFace(wm / length(wm), atm, dm) && length(wm) >= dm) b = m; else a = m;
+            }
+            vec3 wb = (VeilCamera.IViewMat * vec4(b, 0.0)).xyz;
+            if (sceneCaptureFace(wb / length(wb), at, dist) && length(wb) - dist < max(2.0, 0.3 * length(wb))) {
+                color = texture(SceneCapture, at).rgb;
+                return true;
+            }
+        }
+        before = front;
+        v += (a1 + 2.0 * a2 + 2.0 * a3 + a4) * (h / 6.0);
+        x = next;
+    }
+    return sceneCaptureAlong((VeilCamera.IViewMat * vec4(x, 0.0)).xyz, normalize((VeilCamera.IViewMat * vec4(v, 0.0)).xyz), color);
+}
+
 // The sky in world direction d, as drawn: the frame's own where d shows sky on screen (the sky, clouds and sun as the
 // game or a shader pack drew them, already through its tonemapping), else the sky probe's, else a plain gradient.
 vec3 skyAt(vec3 d) {
@@ -394,7 +457,7 @@ void main() {
         vec3 met;
         // (Also by a shadow's edge, where the table's escape lookup gives up: the walk ends where the light does.)
         bool onTable = relativityTableOn() && (!tabled || !escaped || dot(escape, viewDir) < cos(TABLE_FILL_BEND));
-        bool meets = onTable && sceneCaptureTable(viewDir, met);
+        bool meets = onTable && sceneCaptureMarch(viewDir, met);
         if (LensMode == 5) {
             vec3 codes[7] = vec3[](vec3(0.3), vec3(1.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 1.0));
             if (!meets && fillWhy == 0) fillWhy = 0;

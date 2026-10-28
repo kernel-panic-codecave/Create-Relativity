@@ -343,8 +343,9 @@ object VertexLens {
 		GlStateManager._activeTexture(previous)
 		// (Not with the light table yet: it holds first crossings, and the chain's second images through several holes
 		// are poor.)
-		// (With the light table, its other signatures' passes; else the hole's secondary images.)
-		secondsWanted = !perspective && secondImages && (LightTable.on || (centre?.hole != null && secondTexture != 0))
+		// (A lone hole's secondary images. With the light table the post pass draws everything inside the Einstein
+		// rings, every image, from the light itself: relativityInsideRing.)
+		secondsWanted = !perspective && secondImages && !LightTable.on && centre?.hole != null && secondTexture != 0
 	}
 
 	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */

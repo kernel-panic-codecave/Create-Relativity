@@ -1909,6 +1909,28 @@ bool relativityTableBackFacing(vec3 unbent, vec3 bent, vec3 normal) {
     return dot(normal, heading) > 0.0;
 }
 
+// Whether the pixel seeing view direction d lies inside a hole's Einstein ring, for a point at distance r: its light
+// ends up on the other side of that hole's axis (the escape direction across the plane of the camera, the hole and d),
+// or a hole captures it, and the point is beyond that hole. There the post pass draws what's seen (every image, from
+// the light itself: black_hole_lens.fsh's sceneCaptureTable); the vertex lens draws only outside, and in front.
+bool relativityInsideRing(vec3 d, float r) {
+    vec3 escape;
+    bool captured;
+    if (!relativityTableEscape(d, escape, captured)) {
+        // (By a shadow's edge, where the table's lookup gives up: inside, as the shadow is.)
+        vec2 uv;
+        if (!relativityTableUv(d, uv)) return false;
+        captured = true;
+    }
+    for (int k = 0; k < relativityFieldCount(); k += 1) {
+        if (!relativityFieldHole(k)) continue;
+        vec3 c = relativityFieldCentre(k);
+        if (r <= length(c)) continue;
+        if (captured || dot(cross(c, d), cross(c, escape)) < 0.0) return true;
+    }
+    return false;
+}
+
 bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // Tubes: the light seen where the pixel's drawn, followed (one trace: the aim per pixel is too dear), must pass by
     // what it shows; a triangle stretched across a tube's wall (its corners seen through it and not) doesn't. (With
@@ -1922,6 +1944,7 @@ bool relativityPixelWrong(vec3 unbent, vec3 bent) {
     // Composed: by the light table, forward (one read): the light seen where the pixel's drawn, at the point's distance,
     // must be by the point; else the pixel's own image (a lookup per source) against where it's drawn.
     if (relativityFieldComposed() && relativityTableOn()) {
+        if (relativityInsideRing(normalize(bent), length(unbent))) return true;
         vec2 uv;
         vec3 at;
         if (!relativityTableUv(normalize(bent), uv) || !relativityTablePoint(uv, length(unbent), at)) return true;
