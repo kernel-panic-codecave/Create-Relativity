@@ -989,6 +989,11 @@ class LensClientGameTest {
 				val top = 0.9 * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension()) / k / 20.0
 				assertTrue(kotlin.math.abs(maglev.maxSpeed() / top - 1.0) < 1e-3) { "In its tube, the train's top speed is ${maglev.maxSpeed()}, expected $top" }
 			}
+			// The client has it too (its copy of the train knows no route: the server sends it), so the lens draws it.
+			waitTicks(3)
+			val clientTubes = computeOnClient { minecraft -> net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.level!!) }
+			CreateRelativity.LOGGER.info("Train test: the client's tubes {}, k {}", clientTubes.size, clientTubes.map { "%.3f".format(it.k) })
+			assertTrue(clientTubes.size == 1 && kotlin.math.abs(clientTubes.single().k - net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()) < 1e-6) { "The client has ${clientTubes.size} Krasnikov tubes, expected the routed train's" }
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).
 			command("gamemode creative @a")

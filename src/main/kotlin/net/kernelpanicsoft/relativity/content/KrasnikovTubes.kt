@@ -73,6 +73,8 @@ object KrasnikovTubes {
 
 	@Synchronized
 	private fun cached(level: Level): Cached {
+		// (A client's copies of trains don't know their routes: its tubes are the server's, sent: KrasnikovSync.)
+		if (level.isClientSide) return Cached(level.gameTime, emptyMap(), KrasnikovSync.received(level))
 		val tick = level.gameTime
 		cache[level]?.takeIf { it.tick == tick }?.let { return it }
 		val made = compute(level)
