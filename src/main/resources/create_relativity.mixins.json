@@ -55,6 +55,6 @@
     "create.PlacementInfoAccessor",
     "create.TrackBlockBogeyMixin",
     "create.TrainMixin",
-    "create.NavigationAccessor"
+    "create.NavigationAccessor", "create.GlobalRailwayManagerMixin", "create.NavigationMixin", "create.SignalEdgeGroupMixin"
   ]
 }

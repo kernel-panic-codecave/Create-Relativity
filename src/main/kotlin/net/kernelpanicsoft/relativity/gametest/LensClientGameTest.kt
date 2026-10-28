@@ -1013,15 +1013,36 @@ class LensClientGameTest {
 					val path = maglev.navigation.findPathTo(station, Double.MAX_VALUE)
 					assertTrue(path != null) { "No route to the far station" }
 					maglev.navigation.startNavigation(path)
+					// (A block on its route taken at once, before it can be held: it must wait.)
+					val blocks = net.kernelpanicsoft.relativity.content.WarpReservations.routeBlocks(maglev)
+					assertTrue(blocks.isNotEmpty()) { "The warp train's route has no signal blocks" }
+					net.kernelpanicsoft.relativity.content.WarpReservations.blockedForTest += blocks.last()
 					sent = true
 				}
 				if (sent) break
 				waitTicks(5)
 			}
 			assertTrue(sent) { "The far station never got its edge point" }
+			// A warp train holds its whole route before it sets off: with a block on it taken, it waits at its station.
+			waitTicks(40)
+			server.runOnServer { minecraft ->
+				val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				CreateRelativity.LOGGER.info("Train test: route blocked: cleared {}, at station {}, speed {}", net.kernelpanicsoft.relativity.content.WarpReservations.isCleared(maglev), maglev.getCurrentStation() != null, maglev.speed)
+				assertTrue(!net.kernelpanicsoft.relativity.content.WarpReservations.isCleared(maglev) && maglev.getCurrentStation() != null && maglev.speed == 0.0) { "The warp train set off with its route blocked" }
+				net.kernelpanicsoft.relativity.content.WarpReservations.blockedForTest.clear()
+			}
+			waitTicks(5)
+			server.runOnServer { minecraft ->
+				val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				assertTrue(net.kernelpanicsoft.relativity.content.WarpReservations.isCleared(maglev)) { "The warp train's route wasn't held once free" }
+				val groups = com.simibubi.create.Create.RAILWAYS.signalEdgeGroups
+				val held = net.kernelpanicsoft.relativity.content.WarpReservations.routeBlocks(maglev).count { id -> groups[id]?.let { net.kernelpanicsoft.relativity.content.WarpReservations.holds(it, maglev) } == true }
+				CreateRelativity.LOGGER.info("Train test: route held: {} blocks", held)
+			}
 			// Its tube forms: its front running out at c, its tilt easing in over a second; on it, the train may run at up
 			// to 90% of the tube's light speed.
-			for (wait in listOf(5, 20)) {
+			// (It formed while the train waited: on its way at once, and soon there.)
+			for (wait in listOf(2, 3)) {
 				waitTicks(wait)
 				server.runOnServer { minecraft ->
 					val level = minecraft.overworld()
@@ -1040,7 +1061,9 @@ class LensClientGameTest {
 				assertTrue(kotlin.math.abs(tube.k - k) < 1e-9) { "The tube's k is ${tube.k} a second and more on, expected $k" }
 				// Along its route to the station (its front long past it).
 				val length = tube.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) }
-				assertTrue(length > 60.0) { "The tube runs $length blocks, the route about 100" }
+				// (Along what's left of its route to the station: on the way at once, the train's well along it.)
+				val left = maglev.navigation.distanceToDestination
+				assertTrue(length > left) { "The tube runs $length blocks, the route ahead $left" }
 				// Round the whole train, not just ahead of it: every bogey's point on the tube's spine.
 				for (carriage in maglev.carriages) for (point in listOf(carriage.leadingPoint, carriage.trailingPoint)) {
 					val p = point.getPosition(maglev.graph)

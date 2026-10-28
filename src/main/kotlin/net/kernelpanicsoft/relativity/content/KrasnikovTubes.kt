@@ -56,7 +56,7 @@ object KrasnikovTubes {
 	private val formingByLevel = WeakHashMap<Level, HashMap<java.util.UUID, Tube>>()
 
 	/** An edge travelled from [from] to [to]. */
-	private data class Directed(val from: TrackNode, val to: TrackNode)
+	data class Directed(val from: TrackNode, val to: TrackNode)
 
 	/**
 	 * Each train under way in its tube (its tube's k there), the tubes, and each tube's train where it runs round it
@@ -105,7 +105,7 @@ object KrasnikovTubes {
 	 * [train]'s route ahead as directed edges: the one it's on, then on along the graph to its destination (its
 	 * navigation's path names only the choices at junctions; between them, the one way on).
 	 */
-	private fun route(train: Train): List<Directed> {
+	fun route(train: Train): List<Directed> {
 		val navigation = train.navigation ?: return emptyList()
 		if (navigation.destination == null) return emptyList()
 		val graph = train.graph ?: return emptyList()
@@ -144,7 +144,7 @@ object KrasnikovTubes {
 	/** A route's most edges looked along (they're short: a node each 16 blocks or so on straight track). */
 	private const val MAX_EDGES = 512
 
-	private fun edge(train: Train, d: Directed): TrackEdge? = train.graph?.getConnection(Couple.create(d.from, d.to))
+	fun edge(train: Train, d: Directed): TrackEdge? = train.graph?.getConnection(Couple.create(d.from, d.to))
 
 	private fun compute(level: Level): Cached {
 		val tick = level.gameTime
@@ -244,14 +244,14 @@ object KrasnikovTubes {
 	}
 
 	/** Where [point] is along [edge] (its parameter there, from its first node), [edge] being its edge either way round. */
-	private fun paramOn(edge: TrackEdge, point: TravellingPoint): Double {
+	fun paramOn(edge: TrackEdge, point: TravellingPoint): Double {
 		val pointEdge = point.edge ?: return 0.0
 		val t = point.position / pointEdge.length.coerceAtLeast(1e-9)
 		return if (pointEdge.node1 === edge.node1) t else 1.0 - t
 	}
 
 	/** The point of [train] leading the way it's going (as [route] takes it). */
-	private fun head(train: Train): TravellingPoint? =
+	fun head(train: Train): TravellingPoint? =
 		if (train.speed >= 0) train.carriages.firstOrNull()?.leadingPoint else train.carriages.lastOrNull()?.trailingPoint
 
 	/** A train's stretch of track as runs of curve on Krasnikov track (tail to head), and whether the last ends at its head. */
