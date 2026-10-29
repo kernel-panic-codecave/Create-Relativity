@@ -19,9 +19,9 @@ import org.lwjgl.opengl.GL32
  * outputs it can't read are left as they are.
  */
 object ImageStage {
-	/** Whether lensed programs get the stage when next linked (a resource reload relinks them). */
+	/** Whether lensed programs get the stage when next linked (a resource reload relinks them); on unless -Drelativity.imageStage=false. */
 	@JvmField
-	var enabled = java.lang.Boolean.getBoolean("relativity.imageStage")
+	var enabled = System.getProperty("relativity.imageStage", "true").toBoolean()
 
 	/**
 	 * How near a hole (in its r_s; the block's [28].w) vertices' other images are looked for: farther out they're thin
