@@ -44,6 +44,10 @@ object CreateRelativity {
 		SpacetimeSync.init()
 		net.kernelpanicsoft.relativity.content.KrasnikovSync.init()
 		NeoForge.EVENT_BUS.addListener(net.kernelpanicsoft.relativity.content.KrasnikovSync::onLevelTick)
+		net.kernelpanicsoft.relativity.content.WarpTrainSync.init()
+		net.kernelpanicsoft.relativity.content.KrasnikovWarpControl.init()
+		NeoForge.EVENT_BUS.addListener(net.kernelpanicsoft.relativity.content.KrasnikovWarpControl::onRightClick)
+		NeoForge.EVENT_BUS.addListener(net.kernelpanicsoft.relativity.content.WarpTrainSync::onServerTick)
 		NeoForge.EVENT_BUS.addListener(SpacetimeSync::onStartTracking)
 		// (Spinning holes are off for players for now; the GameTests keep their paths tested.)
 		if (System.getProperty("archie.gametest.side") != null) net.kernelpanicsoft.relativity.spacetime.BlackHole.spinning = true

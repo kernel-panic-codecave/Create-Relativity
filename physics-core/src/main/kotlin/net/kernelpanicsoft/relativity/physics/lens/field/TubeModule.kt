@@ -15,7 +15,13 @@ import kotlin.math.sqrt
  * Directions of light inside are the ones the interior's observers see ([Interior.start]), throughout ([LensModule]'s
  * lines, [aim]'s answer), not coordinate tangents: faster than light, those can't tell light apart.
  */
-class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double) : LensModule {
+class TubeModule(
+	val spine: List<V3>,
+	val interior: Interior,
+	val radius: Double,
+	/** Each segment's own interior, where they differ ([interior] otherwise): a tube whose tilt changes along it. */
+	val segmentInteriors: List<Interior>? = null,
+) : LensModule {
 	/** A warp tube ([net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube]) pushing at [speed] times c. */
 	constructor(spine: List<V3>, speed: Double, radius: Double) : this(spine, Interior.Warp(speed), radius)
 
@@ -95,6 +101,7 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 
 	init {
 		require(spine.size >= 2) { "the spine needs at least two points" }
+		require(segmentInteriors == null || segmentInteriors.size == spine.size - 1) { "one interior a segment" }
 	}
 
 	private val segments = spine.size - 1
@@ -109,7 +116,7 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 	/** Light's state: where, its momentum p (spatial, covariant) and energy at infinity p_t, and its region (-1: outside). */
 	private class Ray(var x: V3, var p: V3, val pt: Double, var region: Int)
 
-	private fun interiorOf(region: Int): Interior = if (region < 0) Interior.Flat else interior
+	private fun interiorOf(region: Int): Interior = if (region < 0) Interior.Flat else segmentInteriors?.get(region) ?: interior
 
 	private fun axisOf(region: Int): V3 = if (region < 0) V3(1.0, 0.0, 0.0) else directions[region]
 
@@ -225,7 +232,7 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 	private fun start(x: V3, d: V3): Ray {
 		val region = regionOf(x)
 		if (region < 0) return Ray(x, d, -1.0, -1)
-		val (p, pt) = interior.start(d, directions[region])
+		val (p, pt) = interiorOf(region).start(d, directions[region])
 		return Ray(x, p, pt, region)
 	}
 
@@ -416,8 +423,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 		val k = regionOf(from)
 		if (k < 0) return s
 		val t = directions[k]
-		val f = interior
-		if (regionOf(target) == k) return straightAt(s, t) ?: s
+		val f = interiorOf(k)
+		if (regionOf(target) == k) return straightAt(s, t, k) ?: s
 		if (!beside) wallGuess(from, target, k)?.let { return it }
 		if (beside) {
 			// The wall's point nearest the target.
@@ -427,7 +434,7 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 				if ((target - c).length < (target - near).length) near = c
 			}
 			val wall = near + (target - near).normalized() * (0.999 * radius)
-			return straightAt((wall - from).normalized(), t) ?: s
+			return straightAt((wall - from).normalized(), t, k) ?: s
 		}
 		val rel = target - spine[k]
 		val radial = rel - t * (rel dot t)
@@ -456,8 +463,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 		// How far the light out misses the target's way along the axis, leaving at z; and how it was seen.
 		fun at(z: Double): Pair<Double, V3>? {
 			val wall = a + t * z + n * radius
-			val m = straightAt((wall - from).normalized(), t) ?: return null
-			val (p, pt) = interior.start(m, t)
+			val m = straightAt((wall - from).normalized(), t, k) ?: return null
+			val (p, pt) = interiorOf(k).start(m, t)
 			val pT = p - n * (p dot n)
 			val q = solve(pt, pT, n, -1, 1.0) ?: return null
 			val d = velocity(Ray(wall, pT + n * q, pt, -1)).normalized()
@@ -491,8 +498,8 @@ class TubeModule(val spine: List<V3>, val interior: Interior, val radius: Double
 	}
 
 	/** Inside (spine direction [t]), the direction its observers see light going whose path runs along unit [s]. */
-	private fun straightAt(s: V3, t: V3): V3? {
-		val f = interior
+	private fun straightAt(s: V3, t: V3, region: Int): V3? {
+		val f = interiorOf(region)
 		// Light seen along m runs along (m⊥, A + B m_s): solve for m_s putting that along s.
 		val aa = f.c * f.alpha - f.b
 		val bb = f.c * f.beta + f.b * f.gamma

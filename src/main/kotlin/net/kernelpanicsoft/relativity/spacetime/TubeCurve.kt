@@ -92,19 +92,35 @@ data class Cubic(val a: Vector3dc, val b: Vector3dc, val c: Vector3dc, val d: Ve
  * [curve] as points, each piece halved until it strays less than [tolerance] blocks from straight there ([tolerance] of
  * a point: its own, so it may grow with distance from a viewer), at most [depth] halvings a piece.
  */
-fun polyline(curve: List<Cubic>, tolerance: (Vector3dc) -> Double, depth: Int = 10): List<Vector3dc> {
-	val out = ArrayList<Vector3dc>()
-	fun add(piece: Cubic, level: Int) {
-		if (level < depth && piece.flatness() > tolerance(piece.at(0.5))) {
-			add(piece.part(0.0, 0.5), level + 1)
-			add(piece.part(0.5, 1.0), level + 1)
+fun polyline(curve: List<Cubic>, tolerance: (Vector3dc) -> Double, depth: Int = 10): List<Vector3dc> =
+	samples(curve, tolerance, depth).map { it.first }
+
+/**
+ * As [polyline], each point with where it is along [curve]: its piece's index plus its parameter there (so a value
+ * given at each piece's ends can be read off it: [along]).
+ */
+fun samples(curve: List<Cubic>, tolerance: (Vector3dc) -> Double, depth: Int = 10): List<Pair<Vector3dc, Double>> {
+	val out = ArrayList<Pair<Vector3dc, Double>>()
+	fun add(piece: Cubic, index: Int, t0: Double, t1: Double, level: Int) {
+		val part = if (t0 == 0.0 && t1 == 1.0) piece else piece.part(t0, t1)
+		if (level < depth && part.flatness() > tolerance(part.at(0.5))) {
+			val mid = 0.5 * (t0 + t1)
+			add(piece, index, t0, mid, level + 1)
+			add(piece, index, mid, t1, level + 1)
 			return
 		}
-		out += piece.d
+		out += part.d to index + t1
 	}
 	for ((i, piece) in curve.withIndex()) {
-		if (i == 0 || out.last().distance(piece.a) > 1e-6) out += piece.a
-		add(piece, 0)
+		if (i == 0 || out.last().first.distance(piece.a) > 1e-6) out += piece.a to i.toDouble()
+		add(piece, i, 0.0, 1.0, 0)
 	}
 	return out
+}
+
+/** A value given at each of a curve's pieces' ends ([ends]: one more than its pieces) at [position] along it (as [samples] gives). */
+fun along(ends: List<Double>, position: Double): Double {
+	val i = position.toInt().coerceIn(0, ends.size - 2)
+	val t = (position - i).coerceIn(0.0, 1.0)
+	return ends[i] + (ends[i + 1] - ends[i]) * t
 }

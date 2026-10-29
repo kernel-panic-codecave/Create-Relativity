@@ -76,14 +76,14 @@ object RelativityCommands {
 				.then(Commands.argument("from", Vec3Argument.vec3(false))
 					.then(Commands.argument("to", Vec3Argument.vec3(false))
 						.executes { addTube(it, listOf(Vec3Argument.getVec3(it, "from"), Vec3Argument.getVec3(it, "to"))) }
-						.then(Commands.argument("speed", DoubleArgumentType.doubleArg(1.0, 1e4))
+						.then(Commands.argument("warp", DoubleArgumentType.doubleArg(1.0, net.kernelpanicsoft.relativity.content.KrasnikovTubes.MAX_WARP))
 							.executes { addTube(it, listOf(Vec3Argument.getVec3(it, "from"), Vec3Argument.getVec3(it, "to"))) }
 							.then(Commands.argument("radius", DoubleArgumentType.doubleArg(0.5, 64.0))
 								.executes { addTube(it, listOf(Vec3Argument.getVec3(it, "from"), Vec3Argument.getVec3(it, "to"))) })))))
 			.then(Commands.literal("ahead")
 				.then(Commands.argument("length", DoubleArgumentType.doubleArg(1.0, 4096.0))
 					.executes { addTube(it, ahead(it)) }
-					.then(Commands.argument("speed", DoubleArgumentType.doubleArg(1.0, 1e4))
+					.then(Commands.argument("warp", DoubleArgumentType.doubleArg(1.0, net.kernelpanicsoft.relativity.content.KrasnikovTubes.MAX_WARP))
 						.executes { addTube(it, ahead(it)) })))
 			.then(Commands.literal("extend")
 				.then(Commands.argument("to", Vec3Argument.vec3(false))
@@ -123,13 +123,14 @@ object RelativityCommands {
 		try { DoubleArgumentType.getDouble(ctx, name) } catch (e: IllegalArgumentException) { default }
 
 	private fun addTube(ctx: CommandContext<CommandSourceStack>, ends: List<net.minecraft.world.phys.Vec3>): Int {
-		val speed = optional(ctx, "speed", RelativityConfig.Server.Trains.krasnikovSpeed)
+		val warp = optional(ctx, "warp", RelativityConfig.Server.Trains.krasnikovWarp)
+		val speed = net.kernelpanicsoft.relativity.physics.WarpScale.speed(warp)
 		val radius = optional(ctx, "radius", 3.0)
 		val (from, to) = ends
 		TestSources.add(ctx.source.level, net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov.through(
 			ends.map { org.joml.Vector3d(it.x, it.y, it.z) }, 1.0 / speed, radius))
 		ctx.source.sendSuccess({
-			Component.translatable("commands.create_relativity.tube.added", fmt(from.x), fmt(from.y), fmt(from.z), fmt(to.x), fmt(to.y), fmt(to.z), fmt(speed), fmt(radius))
+			Component.translatable("commands.create_relativity.tube.added", fmt(from.x), fmt(from.y), fmt(from.z), fmt(to.x), fmt(to.y), fmt(to.z), fmt(warp), fmt(speed), fmt(radius))
 		}, true)
 		return 1
 	}

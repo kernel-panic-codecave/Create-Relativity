@@ -176,9 +176,8 @@ class WarpCoilBlockEntity(type: BlockEntityType<*>, pos: BlockPos, state: BlockS
 		private set
 
 	override fun addBehaviours(behaviours: MutableList<BlockEntityBehaviour>) {
-		setting = ScrollValueBehaviour(Component.translatable("create_relativity.warp_drive.max_warp"), this, ControlFace())
+		setting = WarpSetting(Component.translatable("create_relativity.warp_drive.max_warp"), this, ControlFace())
 			.between(0, WarpDrive.maxTenths())
-			.withFormatter { "%.1f".format(it / 10.0) }
 			.onlyActiveWhen { controlFace != null }
 		setting.value = 10
 		behaviours += setting

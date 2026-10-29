@@ -8,15 +8,20 @@ package net.kernelpanicsoft.relativity.physics.spacetime.field
  * its own past), which k in (0, 1] rules out: no time travel.
  *
  * Inverse metric along t̂: g^tt = −4k / (1 + k)², g^ts = −2 (1 − k) / (1 + k)², g^ss = 4 / (1 + k)².
+ *
+ * Its tilt may change along it ([tilts]: k at each spine point, linear between along the nearest segment), as a tube
+ * easing back to flat toward where its train stops does.
  */
 class KrasnikovTube(
 	spine: DoubleArray,
 	val k: Double,
 	val radius: Double,
 	sigma: Double = 8.0 / radius,
+	val tilts: DoubleArray? = null,
 ) : MetricSource {
 	init {
 		require(k > 0.0 && k <= 1.0) { "k must be in (0, 1]: at 0 light is instant, past it it reaches its past" }
+		require(tilts == null || (tilts.size == spine.size / 3 && tilts.all { it > 0.0 && it <= 1.0 })) { "tilts: one in (0, 1] a spine point" }
 	}
 
 	/** The tube's geometry (its shape and the spine's direction), shared with the warp tube. */
@@ -27,12 +32,16 @@ class KrasnikovTube(
 
 	/** δg^{μν} at (x, y, z) into [out] (10: tt, tx, ty, tz, xx, xy, xz, yy, yz, zz); false if there's none. */
 	private fun delta(x: Double, y: Double, z: Double, out: DoubleArray): Boolean {
-		val frame = DoubleArray(4)
+		val frame = DoubleArray(6)
 		if (geometry.frame(x, y, z, frame) > reach) {
 			out.fill(0.0)
 			return false
 		}
-		val kk = 1.0 - (1.0 - k) * frame[0]
+		val inside = if (tilts == null) k else {
+			val i = frame[4].toInt()
+			tilts[i] + (tilts[minOf(i + 1, tilts.size - 1)] - tilts[i]) * frame[5]
+		}
+		val kk = 1.0 - (1.0 - inside) * frame[0]
 		val q = 1.0 / ((1.0 + kk) * (1.0 + kk))
 		val tt = -4.0 * kk * q + 1.0
 		val ts = -2.0 * (1.0 - kk) * q

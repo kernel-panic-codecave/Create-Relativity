@@ -1041,60 +1041,112 @@ class LensClientGameTest {
 			}
 			// Its tube forms: its front running out at c, its tilt easing in over a second; on it, the train may run at up
 			// to 90% of the tube's light speed.
-			// (It formed while the train waited: on its way at once, and soon there.)
-			for (wait in listOf(2, 3)) {
-				waitTicks(wait)
+			// (It formed while the train waited: on its way at once, and soon there; checked each tick, on the first it's
+			// under way, its tube formed, short of its station: the server runs on unevenly beside the client's ticks.)
+			var checked = false
+			var last = ""
+			for (attempt in 0 until 200) {
 				server.runOnServer { minecraft ->
 					val level = minecraft.overworld()
 					val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
 					val tubes = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(level)
-					val length = tubes.sumOf { t -> t.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) } }
-					CreateRelativity.LOGGER.info("Train test: tubes {} k {} length {}, train speed {} top {}", tubes.size, tubes.map { "%.3f".format(it.k) }, "%.1f".format(length), maglev.speed, maglev.maxSpeed())
-					assertTrue(tubes.size == 1) { "${tubes.size} Krasnikov tubes, expected the routed train's" }
+					val k = net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()
+					val left = maglev.navigation.distanceToDestination
+					last = "tick ${level.gameTime}: tubes ${tubes.map { "%.3f".format(it.k) }}, train speed ${maglev.speed}, $left blocks to go"
+					if (maglev.speed == 0.0 || left < 15.0 || tubes.size != 1 || kotlin.math.abs(tubes.single().k - k) > 1e-9) return@runOnServer
+					checked = true
+					val tube = tubes.single()
+					CreateRelativity.LOGGER.info("Train test: {}", last)
+					// Along its route to the station (its front long past it).
+					val length = tube.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) }
+					// (Along what's left of its route to the station: on the way at once, the train's well along it.)
+					assertTrue(length > left) { "The tube runs $length blocks, the route ahead $left" }
+					// Its tilt eases back to flat toward the station: full round the train, flat where it ends.
+					CreateRelativity.LOGGER.info("Train test: tube tilts from {} to {}", "%.3f".format(tube.tilts.first()), "%.3f".format(tube.tilts.last()))
+					assertTrue(kotlin.math.abs(tube.tilts.first() - k) < 1e-6 && tube.tilts.last() > 0.9) { "The tube's tilt runs ${tube.tilts.first()} to ${tube.tilts.last()}, expected $k round the train to flat at the station" }
+					// Behind it too: the track it's covered since it set off (no signal passed on the way, so none of it dropped).
+					val tail = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tail(maglev)!!.getPosition(maglev.graph)
+					val behind = tube.curve.first().a.distance(tail.x, tail.y + 1.0, tail.z)
+					CreateRelativity.LOGGER.info("Train test: the tube starts {} blocks behind the train's tail", "%.1f".format(behind))
+					assertTrue(behind > 5.0) { "The tube starts $behind blocks behind the train's tail: no trail behind it" }
+					// Round the whole train, not just ahead of it: every bogey's point on the tube's spine.
+					for (carriage in maglev.carriages) for (point in listOf(carriage.leadingPoint, carriage.trailingPoint)) {
+						val p = point.getPosition(maglev.graph)
+						val off = tube.distance(org.joml.Vector3d(p.x, p.y + 1.0, p.z))
+						assertTrue(off < 1.0) { "A bogey of the train is $off blocks off its tube's spine" }
+					}
+					val top = 0.9 * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension()) / k / 20.0
+					assertTrue(kotlin.math.abs(maglev.maxSpeed() / top - 1.0) < 1e-3) { "In its tube, the train's top speed is ${maglev.maxSpeed()}, expected $top" }
 				}
+				if (checked) break
+				waitTicks(1)
 			}
-			server.runOnServer { minecraft ->
-				val level = minecraft.overworld()
-				val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
-				val k = net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()
-				val tube = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(level).single()
-				assertTrue(kotlin.math.abs(tube.k - k) < 1e-9) { "The tube's k is ${tube.k} a second and more on, expected $k" }
-				// Along its route to the station (its front long past it).
-				val length = tube.spine.zipWithNext().sumOf { (a, b) -> a.distance(b) }
-				// (Along what's left of its route to the station: on the way at once, the train's well along it.)
-				val left = maglev.navigation.distanceToDestination
-				assertTrue(length > left) { "The tube runs $length blocks, the route ahead $left" }
-				// Round the whole train, not just ahead of it: every bogey's point on the tube's spine.
-				for (carriage in maglev.carriages) for (point in listOf(carriage.leadingPoint, carriage.trailingPoint)) {
-					val p = point.getPosition(maglev.graph)
-					val off = tube.distance(org.joml.Vector3d(p.x, p.y + 1.0, p.z))
-					assertTrue(off < 1.0) { "A bogey of the train is $off blocks off its tube's spine" }
+			assertTrue(checked) { "The warp train was never under way in its formed tube short of its station; last $last" }
+			// The client has it too (its copy of the train knows no route: the server sends it), so the lens draws it,
+			// round the client's own train (where it's drawn), not the server's: every bogey on the spine.
+			var offs = emptyList<Double>()
+			var clientK = emptyList<Double>()
+			for (attempt in 0 until 40) {
+				val seen = computeOnClient { minecraft ->
+					val tubes = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.level!!)
+					val train = com.simibubi.create.CreateClient.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+					tubes.map { it.k } to (tubes.singleOrNull()?.let { tube ->
+						train.carriages.flatMap { listOf(it.leadingPoint, it.trailingPoint) }.map { point ->
+							val p = point.getPosition(train.graph)
+							tube.distance(org.joml.Vector3d(p.x, p.y + 1.0, p.z))
+						}
+					} ?: emptyList())
 				}
-				val top = 0.9 * net.kernelpanicsoft.relativity.config.RelativityConfig.speedOfLight(level.dimension()) / k / 20.0
-				assertTrue(kotlin.math.abs(maglev.maxSpeed() / top - 1.0) < 1e-3) { "In its tube, the train's top speed is ${maglev.maxSpeed()}, expected $top" }
+				clientK = seen.first
+				offs = seen.second
+				if (clientK.size == 1 && kotlin.math.abs(clientK.single() - net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()) < 1e-6) break
+				waitTicks(1)
 			}
-			// The client has it too (its copy of the train knows no route: the server sends it), so the lens draws it.
-			waitTicks(3)
-			val clientTubes = computeOnClient { minecraft -> net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.level!!) }
-			CreateRelativity.LOGGER.info("Train test: the client's tubes {}, k {}", clientTubes.size, clientTubes.map { "%.3f".format(it.k) })
-			assertTrue(clientTubes.size == 1 && kotlin.math.abs(clientTubes.single().k - net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()) < 1e-6) { "The client has ${clientTubes.size} Krasnikov tubes, expected the routed train's" }
-			// Round the client's own train (where it's drawn), not the server's: every bogey on the spine.
-			val offs = computeOnClient { minecraft ->
-				val tube = net.kernelpanicsoft.relativity.content.KrasnikovTubes.tubes(minecraft.level!!).single()
-				val train = com.simibubi.create.CreateClient.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
-				train.carriages.flatMap { listOf(it.leadingPoint, it.trailingPoint) }.map { point ->
-					val p = point.getPosition(train.graph)
-					tube.distance(org.joml.Vector3d(p.x, p.y + 1.0, p.z))
-				}
-			}
-			CreateRelativity.LOGGER.info("Train test: the client's bogeys off its tube's spine {}", offs.map { "%.2f".format(it) })
-			assertTrue(offs.all { it < 1.0 }) { "The client's train's bogeys are $offs blocks off its tube's spine" }
+			CreateRelativity.LOGGER.info("Train test: the client's tubes {}, k {}; its bogeys off its tube's spine {}", clientK.size, clientK.map { "%.3f".format(it) }, offs.map { "%.2f".format(it) })
+			assertTrue(clientK.size == 1 && kotlin.math.abs(clientK.single() - net.kernelpanicsoft.relativity.content.KrasnikovTubes.k()) < 1e-6) { "The client has Krasnikov tubes of k $clientK, expected the routed train's" }
+			assertTrue(offs.isNotEmpty() && offs.all { it < 1.0 }) { "The client's train's bogeys are $offs blocks off its tube's spine" }
 			// The tube from beside, round the train: the ground and the train through its wall.
 			val trainZ = computeOnClient { _ -> com.simibubi.create.CreateClient.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }.carriages.first().leadingPoint.getPosition(null).z }
 			// (Ahead of it, where its tube has formed along the route: it runs on fast, toward -z.)
 			command("tp @a 67.5 -56.5 ${"%.1f".format(trainZ - 60.0)} 90 15")
 			waitTicks(5)
 			takeScreenshot("maglev_train_tube")
+			// The client's copy keeps up (WarpTrainSync): stopped at the station, its wheels where the server's are, a tick
+			// or two on (Create's own sync, run after every few ticks, overshot by many blocks and took 30 ticks to settle).
+			var stopped = false
+			for (attempt in 0 until 100) {
+				server.runOnServer { _ ->
+					val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+					stopped = maglev.speed == 0.0 && maglev.navigation.destination == null
+				}
+				if (stopped) break
+				waitTicks(1)
+			}
+			assertTrue(stopped) { "The warp train never stopped at its station" }
+			waitTicks(3)
+			var serverWheels = emptyList<net.minecraft.world.phys.Vec3>()
+			server.runOnServer { _ ->
+				val maglev = com.simibubi.create.Create.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				serverWheels = maglev.carriages.flatMap { listOf(it.leadingPoint, it.trailingPoint) }.map { it.getPosition(maglev.graph) }
+			}
+			val clientWheels = computeOnClient { _ ->
+				val train = com.simibubi.create.CreateClient.RAILWAYS.trains.values.single { net.kernelpanicsoft.relativity.content.MaglevBogey.isMaglev(it) }
+				train.carriages.flatMap { listOf(it.leadingPoint, it.trailingPoint) }.map { it.getPosition(train.graph) }
+			}
+			val apart = serverWheels.zip(clientWheels).map { (a, b) -> a.distanceTo(b) }
+			CreateRelativity.LOGGER.info("Train test: stopped, the client's wheels off the server's {}", apart.map { "%.2f".format(it) })
+			assertTrue(apart.size == serverWheels.size && apart.all { it < 0.5 }) { "Stopped, the client's train's wheels are $apart blocks off the server's" }
+			// The line is one Krasnikov network, one warp factor: set with a wrench at one end (the board let go on warp
+			// 4.5: KrasnikovWarpControl), the whole line has it.
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val player = net.neoforged.neoforge.common.util.FakePlayerFactory.getMinecraft(level)
+				player.moveTo(60.5, -59.0, -88.5, 0f, 30f)
+				net.kernelpanicsoft.relativity.content.KrasnikovWarpControl.set(player, BlockPos(60, -60, -90), 45)
+				val network = net.kernelpanicsoft.relativity.content.KrasnikovNetworks.tenthsAt(level, BlockPos(60, -60, 10))
+				CreateRelativity.LOGGER.info("Train test: the network's warp set to 4.5 at one end: {} at the other", network)
+				assertTrue(network == 45) { "Set to warp 4.5 at one end, the line's other end has $network" }
+			}
 			// Laying a curve as a player does: maglev track in hand, a start selected on the maglev, looking at maglev track
 			// off to the side (Create's preview of the curve), then at Create's track (refused).
 			command("gamemode creative @a")
@@ -1591,7 +1643,7 @@ class LensClientGameTest {
 			repeat(3) { settleClient("Test source commands, world") }
 			waitTicks(20)
 			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
-			command("relativity tube add -40 -58.5 0.5 8 -58.5 0.5 20")
+			command("relativity tube add -40 -58.5 0.5 8 -58.5 0.5 2.4564560522")
 			command("relativity tube extend 40 -58.5 32.5")
 			command("relativity bubble add 20 -60 -20 26 -57 -14 2")
 			waitTicks(5)

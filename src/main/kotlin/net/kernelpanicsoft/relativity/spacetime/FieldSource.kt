@@ -150,9 +150,20 @@ sealed interface FieldSource {
 	 * A Krasnikov tube ([KrasnikovTube]): static, of [radius] blocks round the polyline [spine] (game coordinates), light
 	 * along it running at 1 / [k] times c: Krasnikov track's, along the routes trains are scheduled over it.
 	 */
-	data class Krasnikov(val curve: List<Cubic>, val k: Double, val radius: Double) : FieldSource {
+	data class Krasnikov(
+		val curve: List<Cubic>,
+		val k: Double,
+		val radius: Double,
+		/** Its tilt at each of [curve]'s pieces' ends (one more than its pieces), changing smoothly between: [k] all along by default. */
+		val tilts: List<Double> = List(curve.size + 1) { k },
+	) : FieldSource {
+		private val samples by lazy { samples(curve, { SPINE_TOLERANCE }) }
+
 		/** Its centre line as points, finely ([SPINE_TOLERANCE] off the curve at most). */
-		val spine: List<Vector3dc> by lazy { polyline(curve, { SPINE_TOLERANCE }) }
+		val spine: List<Vector3dc> by lazy { samples.map { it.first } }
+
+		/** Its tilt at each of [spine]'s points. */
+		val spineTilts: List<Double> by lazy { samples.map { along(tilts, it.second) } }
 
 		companion object {
 			/** How far (blocks) [spine] strays from the curve at most. */
@@ -169,7 +180,7 @@ sealed interface FieldSource {
 				GameFrame.toPhysics(Vector3d(point).sub(origin), p)
 				flat[3 * i] = p[0]; flat[3 * i + 1] = p[1]; flat[3 * i + 2] = p[2]
 			}
-			return KrasnikovTube(flat, k, radius)
+			return KrasnikovTube(flat, k, radius, tilts = spineTilts.toDoubleArray())
 		}
 
 		/** Its distance from [position] (to the nearest point of the spine). */

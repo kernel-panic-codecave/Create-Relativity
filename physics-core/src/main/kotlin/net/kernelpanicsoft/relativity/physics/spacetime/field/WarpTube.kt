@@ -70,13 +70,25 @@ class WarpTube(
 	 */
 	fun frame(x: Double, y: Double, z: Double, out: DoubleArray): Double {
 		var best = Double.MAX_VALUE
+		var bestSegment = 0
+		var bestU = 0.0
 		for (k in 0 until points - 1) {
 			val ax = spine[3 * k]; val ay = spine[3 * k + 1]; val az = spine[3 * k + 2]
 			val dx = spine[3 * k + 3] - ax; val dy = spine[3 * k + 4] - ay; val dz = spine[3 * k + 5] - az
 			val l2 = dx * dx + dy * dy + dz * dz
 			val u = if (l2 > 0) (((x - ax) * dx + (y - ay) * dy + (z - az) * dz) / l2).coerceIn(0.0, 1.0) else 0.0
 			val px = x - ax - dx * u; val py = y - ay - dy * u; val pz = z - az - dz * u
-			best = minOf(best, px * px + py * py + pz * pz)
+			val d2 = px * px + py * py + pz * pz
+			if (d2 < best) {
+				best = d2
+				bestSegment = k
+				bestU = u
+			}
+		}
+		// (Where along the spine: the nearest segment and how far along it, for what's given per point: [out]'s 4, 5.)
+		if (out.size >= 6) {
+			out[4] = bestSegment.toDouble()
+			out[5] = bestU
 		}
 		val rho = sqrt(best)
 		val f = shape(rho)

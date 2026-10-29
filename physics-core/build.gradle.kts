@@ -25,4 +25,6 @@ tasks.jar {
 
 tasks.test {
     useJUnitPlatform()
+    // (The CPU light tables hold every texel's crossings for every shell: more than the default heap.)
+    maxHeapSize = "4g"
 }

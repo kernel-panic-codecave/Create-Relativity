@@ -66,6 +66,9 @@ object VertexLens {
 	/** How far (blocks) a tube's spine as uploaded may stray from its own, at the least: straight runs become one segment. */
 	private const val TUBE_TOLERANCE = 0.05
 
+	/** A tube point's tilt rides in its w after the tube's index, scaled by this (vertex_lens_core.glsl's RELATIVITY_TUBE_TILT_SCALE). */
+	private const val TUBE_TILT_SCALE = 0.4
+
 	/** How far (pixels) a curved tube's segments may stray from its curve, where it's drawn. */
 	private const val TUBE_PIXELS = 2.0
 
@@ -594,20 +597,24 @@ object VertexLens {
 	private fun uploadTubes(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val tubes = if (fieldSky) tubeSources.take(MAX_TUBES) else emptyList()
 		var spines: List<List<org.joml.Vector3dc>> = emptyList()
+		// (Each point's tilt too, for tubes whose tilt changes along them: Krasnikov tubes'.)
+		var tilts: List<List<Double>?> = emptyList()
 		var tolerance = TUBE_TOLERANCE
 		// (Curved tubes cut into segments for this view: each piece till it strays under a couple of pixels at its
 		// distance; coarser all round only if they don't all fit.)
 		val pixel = pixelAngle(lastProjection).toDouble()
 		var scale = 1.0
 		for (attempt in 0 until 8) {
-			spines = tubes.map { tube ->
-				val points = if (tube is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov) {
-					net.kernelpanicsoft.relativity.spacetime.polyline(tube.curve, { p ->
+			val cut = tubes.map { tube ->
+				if (tube is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov) {
+					val samples = net.kernelpanicsoft.relativity.spacetime.samples(tube.curve, { p ->
 						maxOf(TUBE_TOLERANCE, TUBE_PIXELS * pixel * kotlin.math.sqrt((p.x() - camX) * (p.x() - camX) + (p.y() - camY) * (p.y() - camY) + (p.z() - camZ) * (p.z() - camZ))) * scale
 					})
-				} else simplify(spineOf(tube), tolerance)
-				points.asReversed()
+					samples.map { it.first }.asReversed() to samples.map { net.kernelpanicsoft.relativity.spacetime.along(tube.tilts, it.second) }.asReversed()
+				} else simplify(spineOf(tube), tolerance).asReversed() to null
 			}
+			spines = cut.map { it.first }
+			tilts = cut.map { it.second }
 			if (spines.sumOf { it.size } <= MAX_TUBE_POINTS) break
 			tolerance *= 2.0
 			scale *= 2.0
@@ -624,14 +631,17 @@ object VertexLens {
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Warp(tube.speed)
 				else -> net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.Interior.Flat
 			}
-			data.put(tubeRadius(tube).toFloat()).put(0f).put(0f).put(0f)
+			// (y 1: its points carry their tilts, vertex_lens_core.glsl's relativityTubeTilted.)
+			data.put(tubeRadius(tube).toFloat()).put(if (tilts.getOrNull(j) != null) 1f else 0f).put(0f).put(0f)
 			data.put(inside.a.toFloat()).put(inside.b.toFloat()).put(inside.c.toFloat()).put(inside.alpha.toFloat())
 			data.put(inside.beta.toFloat()).put(inside.gamma.toFloat()).put(0f).put(0f)
 		}
 		repeat(MAX_TUBES - kept.size) { repeat(12) { data.put(0f) } }
-		for ((j, spine) in kept.withIndex()) for (p in spine) {
+		for ((j, spine) in kept.withIndex()) for ((i, p) in spine.withIndex()) {
 			val at = view.transform(Vector3f((p.x() - camX).toFloat(), (p.y() - camY).toFloat(), (p.z() - camZ).toFloat()))
-			data.put(at.x).put(at.y).put(at.z).put(j.toFloat())
+			// (Its tube, and where the tube's tilt changes along it the tilt here: TUBE_TILT_SCALE of it, under a half.)
+			val tilt = tilts.getOrNull(j)?.getOrNull(i) ?: 0.0
+			data.put(at.x).put(at.y).put(at.z).put(j + (TUBE_TILT_SCALE * tilt).toFloat())
 		}
 		repeat(MAX_TUBE_POINTS - points) { repeat(4) { data.put(0f) } }
 		uploadBubbles(data, camX, camY, camZ, view)

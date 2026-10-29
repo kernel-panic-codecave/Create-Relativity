@@ -30,7 +30,7 @@ object TestSources {
 			if (last < 0) return@computeIfPresent sources
 			val tube = sources[last] as FieldSource.Krasnikov
 			extended = true
-			sources.toMutableList().also { it[last] = tube.copy(curve = tube.curve + Cubic.line(tube.curve.last().d, org.joml.Vector3d(point))) }
+			sources.toMutableList().also { it[last] = tube.copy(curve = tube.curve + Cubic.line(tube.curve.last().d, org.joml.Vector3d(point)), tilts = tube.tilts + tube.tilts.last()) }
 		}
 		return extended
 	}

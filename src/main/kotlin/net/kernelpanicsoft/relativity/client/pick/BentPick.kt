@@ -89,7 +89,11 @@ object BentPick {
 		// Through a tube's or bubble's walls, as drawn: the first whose light isn't straight.
 		for (source in sources) {
 			val module: LensModule = when (source) {
-				is FieldSource.Krasnikov -> TubeModule(source.spine.asReversed().map { at(it.x(), it.y(), it.z()) }, TubeModule.Interior.Krasnikov(source.k), source.radius)
+				is FieldSource.Krasnikov -> TubeModule(
+					source.spine.asReversed().map { at(it.x(), it.y(), it.z()) }, TubeModule.Interior.Krasnikov(source.k), source.radius,
+					// (Each segment at its ends' tilts' mean: a tube easing back to flat toward its end.)
+					source.spineTilts.asReversed().zipWithNext { a, b -> TubeModule.Interior.Krasnikov(0.5 * (a + b)) },
+				)
 				is FieldSource.Tube -> TubeModule(source.spine.asReversed().map { at(it.x(), it.y(), it.z()) }, TubeModule.Interior.Warp(source.speed), source.radius)
 				is FieldSource.Ellipsoid -> BubbleModule(
 					at(source.center.x(), source.center.y(), source.center.z()),

@@ -939,16 +939,35 @@ bool relativityTubeSegment(int g) { return g >= 0 && g + 1 < relativityTubePoint
 float relativityTubeRadius(int g) { return RelativityLensData[46 + 3 * relativityTubeOf(g)].x; }
 
 // Region g's inside (outside: flat): g^tt, g^ts, g^ss and alpha; beta and gamma; its direction t.
+// A tube whose tilt changes along it (a Krasnikov tube easing back to flat: VertexLens, its y): each point's tilt rides
+// in its w after the tube's index (RELATIVITY_TUBE_TILT_SCALE of it); a segment is the Krasnikov interior of its ends'
+// mean (TubeModule.Interior.Krasnikov).
+const float RELATIVITY_TUBE_TILT_SCALE = 0.4; // VertexLens.TUBE_TILT_SCALE
+bool relativityTubeTilted(int g) { return RelativityLensData[46 + 3 * relativityTubeOf(g)].y > 0.5; }
+float relativityTubeTilt(int i) { return (RelativityLensData[58 + i].w - float(relativityTubeOf(i))) / RELATIVITY_TUBE_TILT_SCALE; }
+float relativityTubeSegmentTilt(int g) { return 0.5 * (relativityTubeTilt(g) + relativityTubeTilt(g + 1)); }
 vec4 relativityTubeMetric(int g) {
     vec4 inside = vec4(-1.0, 0.0, 1.0, 0.0);
-    if (relativityIsBubble(g)) inside = RelativityLensData[127 + 7 * (g - RELATIVITY_BUBBLE_REGION)];
-    else if (g >= 0) inside = RelativityLensData[47 + 3 * relativityTubeOf(g)];
+    if (relativityIsBubble(g)) {
+        inside = RelativityLensData[127 + 7 * (g - RELATIVITY_BUBBLE_REGION)];
+    } else if (g >= 0) {
+        inside = RelativityLensData[47 + 3 * relativityTubeOf(g)];
+        if (relativityTubeTilted(g)) {
+            float k = relativityTubeSegmentTilt(g);
+            float q = 1.0 / ((1.0 + k) * (1.0 + k));
+            inside = vec4(-4.0 * k * q, -2.0 * (1.0 - k) * q, 4.0 * q, -(1.0 - k) * 0.5);
+        }
+    }
     return inside;
 }
 vec2 relativityTubeObservers(int g) {
     vec2 inside = vec2(1.0, 0.0);
-    if (relativityIsBubble(g)) inside = RelativityLensData[128 + 7 * (g - RELATIVITY_BUBBLE_REGION)].xy;
-    else if (g >= 0) inside = RelativityLensData[48 + 3 * relativityTubeOf(g)].xy;
+    if (relativityIsBubble(g)) {
+        inside = RelativityLensData[128 + 7 * (g - RELATIVITY_BUBBLE_REGION)].xy;
+    } else if (g >= 0) {
+        inside = RelativityLensData[48 + 3 * relativityTubeOf(g)].xy;
+        if (relativityTubeTilted(g)) inside = vec2((1.0 + relativityTubeSegmentTilt(g)) * 0.5, 0.0);
+    }
     return inside;
 }
 vec3 relativityTubeAxis(int g) {
@@ -1334,6 +1353,7 @@ bool relativityTubeStraightAt(vec3 along, int k, out vec3 m) {
 
 const int RELATIVITY_WALL_SCAN = 8;       // TubeModule.WALL_SCAN
 const int RELATIVITY_WALL_BISECTIONS = 8; // TubeModule.WALL_BISECTIONS
+const float RELATIVITY_TUBE_THROUGH_MARGIN = 3.0; // blocks: how far outside a tube's wall the image stage sees through it too
 
 // The aim's first guesses, in closed form, from inside a tube (TubeModule.guess; else the straight line). A target in
 // the same straight piece, exactly (the direction whose light runs straight at it). One outside: the light leaving
@@ -1465,6 +1485,30 @@ const int RELATIVITY_TUBE_AXIS_SCAN = 1;      // TubeModule.AXIS_SCAN
 // the traced path's miss, done once it misses by little or a step turns it by less than a quarter of a pixel (where the
 // tube squeezes the view, a wide miss is a small angle); false if none gets there (the target hidden). One trace a pass round a single loop (each call
 // is inlined whole).
+// Whether the straight line from the camera to target passes by a tube's wall: within its radius and a margin of the
+// spine (a corner of a triangle across the outline is a few blocks from it at most). For the image stage (ImageStage),
+// which draws a triangle across a tube's outline again with all its corners seen each way.
+bool relativityTubeByWall(vec3 target) {
+    for (int g = 0; g < relativityTubePoints(); g += 1) {
+        if (!relativityTubeSegment(g)) continue;
+        vec3 a = relativityTubePoint(g);
+        vec3 u = relativityTubePoint(g + 1) - a;
+        // Closest points of the sight line (0 to target) and the segment.
+        float uu = dot(u, u);
+        float tt = dot(target, target);
+        float ut = dot(u, target);
+        float ua = dot(u, a);
+        float ta = dot(target, a);
+        float det = uu * tt - ut * ut;
+        float s = 0.0;
+        if (det > 1e-9) s = clamp((ta * uu - ua * ut) / det, 0.0, 1.0);
+        float v = clamp((s * ut - ua) / max(uu, 1e-9), 0.0, 1.0);
+        s = clamp((ta + v * ut) / max(tt, 1e-9), 0.0, 1.0);
+        if (distance(target * s, a + u * v) < relativityTubeRadius(g) + RELATIVITY_TUBE_THROUGH_MARGIN) return true;
+    }
+    return false;
+}
+
 bool relativityTubeAim(vec3 target, out vec3 seen) {
     float distance = length(target);
     vec3 straight = target / distance;
