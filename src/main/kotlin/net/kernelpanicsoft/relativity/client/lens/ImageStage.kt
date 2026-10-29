@@ -36,8 +36,6 @@ object ImageStage {
 	 */
 	private const val EMITTED = 1
 
-	/** How many times a triangle across a tube's outline is drawn again: once seen straight, once seen through. */
-	private const val TUBE_COPIES = 2
 
 	/** The slots other than the primary's: their images, two to a vec4. */
 	private const val OTHERS = 3
@@ -155,7 +153,7 @@ void main() {
 		val hasBent = outputs.any { it.name == "relativityBent" }
 		return """#version 150
 layout(triangles) in;
-layout(triangle_strip, max_vertices = ${3 * (maxOf(EMITTED, TUBE_COPIES) + 1)}) out;
+layout(triangle_strip, max_vertices = ${3 * (EMITTED + 1)}) out;
 $block
 $declarations
 in vec4 relativityStageA[];
@@ -192,7 +190,7 @@ ${copy("corner", "    ")}
 void main() {
     for (int corner = 0; corner < 3; corner += 1) relativityStagePass(corner);
     EndPrimitive();
-${tubeCopies(hasBent)}
+${tubeCopies()}
     int emitted = 0;
     if (across) emitted = $EMITTED;
     for (int s = 0; s <= $OTHERS && emitted < $EMITTED; s += 1) {
@@ -246,62 +244,25 @@ ${tubeCopies(hasBent)}
 	}
 
 	/**
-	 * The geometry shader's tube copies: a triangle across a tube's outline (its corners seen through the tube and not:
-	 * stretched across, the pixel check keeps little of it) drawn again with every corner seen straight, and again with
-	 * every corner seen through; of each the pixel check keeps the part that shows, so the outline's edge runs between
-	 * pixels, not corners. Seen straight is exact (outside the tubes light runs straight); seen through, a corner in plain
-	 * view is placed as the through corners' images are, turned and stretched as their edge is (by one alone, moved with
-	 * it). Only for programs whose vertices say where they were bent to ([hasBent]); `across` false otherwise.
+	 * The geometry shader's tube copy: a triangle across a tube's outline (its corners seen through the tube and not:
+	 * stretched across, the pixel check keeps little of it) drawn again with every corner seen straight (exact: outside
+	 * the tubes light runs straight); the pixel check keeps the part that shows, so the outline's edge runs between
+	 * pixels, not corners. (Drawn again seen through as well, by the through corners' images, it added nothing measurable
+	 * and declaring the room for it cost a sixth of the frame rate.) In place of another image (the stage draws one more
+	 * triangle at most): `across` says so.
 	 */
-	private fun tubeCopies(hasBent: Boolean): String {
-		if (!hasBent) return "    bool across = false;"
-		return """    float w0 = relativityStageT[0].w;
+	private fun tubeCopies(): String = """    float w0 = relativityStageT[0].w;
     float w1 = relativityStageT[1].w;
     float w2 = relativityStageT[2].w;
     bool across = w0 > 0.5 && w1 > 0.5 && w2 > 0.5 && (abs(w0 - w1) > 0.5 || abs(w0 - w2) > 0.5);
     if (across) {
         for (int corner = 0; corner < 3; corner += 1) {
             if (relativityStageT[corner].w < 1.5) relativityStagePass(corner);
-            else relativityStageEmit(corner, normalize(${renamed("relativityUnbent")}[corner]) * length(${renamed("relativityUnbent")}[corner]), 1.0);
-        }
-        EndPrimitive();
-        int ta = -1;
-        int tb = -1;
-        for (int corner = 0; corner < 3; corner += 1) {
-            if (relativityStageT[corner].w < 1.5) continue;
-            if (ta < 0) ta = corner;
-            else tb = corner;
-        }
-        for (int corner = 0; corner < 3; corner += 1) {
-            if (relativityStageT[corner].w > 1.5) {
-                relativityStagePass(corner);
-            } else {
-                vec3 sa = normalize(${renamed("relativityUnbent")}[ta]);
-                vec3 ia = normalize(${renamed("relativityBent")}[ta]);
-                vec3 off = normalize(${renamed("relativityUnbent")}[corner]) - sa;
-                if (tb >= 0) {
-                    vec3 u = normalize(${renamed("relativityUnbent")}[tb]) - sa;
-                    vec3 v = normalize(${renamed("relativityBent")}[tb]) - ia;
-                    float lu = length(u);
-                    float lv = length(v);
-                    if (lu > 1e-6 && lv > 1e-6) {
-                        // (Rodrigues: off turned as u is to v, then stretched as much.)
-                        vec3 a = cross(u / lu, v / lv);
-                        float sn = length(a);
-                        float cs = dot(u / lu, v / lv);
-                        if (sn > 1e-6) {
-                            a /= sn;
-                            off = off * cs + cross(a, off) * sn + a * dot(a, off) * (1.0 - cs);
-                        }
-                        off *= lv / lu;
-                    }
-                }
-                relativityStageEmit(corner, normalize(ia + off) * length(${renamed("relativityUnbent")}[corner]), 1.0);
-            }
+            else relativityStageEmit(corner, ${renamed("relativityUnbent")}[corner], 1.0);
         }
         EndPrimitive();
     }"""
-	}
+
 
 	private fun compile(type: Int, source: String, what: String): Int? {
 		val shader = GL20.glCreateShader(type)
