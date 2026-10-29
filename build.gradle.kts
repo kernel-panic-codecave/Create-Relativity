@@ -46,6 +46,8 @@ loom {
             name("Minecraft GameTest Client")
             property("neoforge.enableGameTest", "true")
             property("archie.gametest.side", "client")
+            // (Lens switches passed on from Gradle's own: `./gradlew runGametestClient -Drelativity.imageStage=true`.)
+            System.getProperty("relativity.imageStage")?.let { property("relativity.imageStage", it) }
             property("archie.gametest", "true")
             property("archie.gametest.modid", modId)
             property("neoforge.enabledGameTestNamespaces", modId)

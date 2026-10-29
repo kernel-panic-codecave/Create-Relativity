@@ -36,6 +36,9 @@ object ImageStage {
 	 */
 	private const val EMITTED = 1
 
+	/** How many times a triangle across a tube's outline is drawn again: once seen straight, once seen through. */
+	private const val TUBE_COPIES = 2
+
 	/** The slots other than the primary's: their images, two to a vec4. */
 	private const val OTHERS = 3
 
@@ -96,6 +99,7 @@ object ImageStage {
 out vec4 relativityStageA;
 out vec2 relativityStageB;
 out vec2 relativityStageP;
+out vec4 relativityStageT;
 
 // Where the camera sees p in slot s (table position; 0 none).
 vec2 relativityStageImage(vec3 p, int s) {
@@ -115,6 +119,14 @@ bool relativityStageNear(vec3 p) {
 
 void main() {
     relativityStageMain();
+    // Tubes alone, seen from outside: by a tube's outline, which way the vertex is seen (w 1 in plain view, 2 through a
+    // tube); else w 0.
+    relativityStageT = vec4(0.0);
+    bool tubesAlone = relativityWalls() && relativityFieldCount() == 0 && relativityTubeCount() > 0 && relativityTubeRegion(vec3(0.0)) < 0;
+    if (tubesAlone && $checked > 0.5 && relativityTubeByWall($unbent)) {
+        relativityStageT.w = 1.0;
+        if (!relativityTubeClear($unbent)) relativityStageT.w = 2.0;
+    }
     relativityStageA = vec4(0.0);
     relativityStageB = vec2(0.0);
     relativityStageP = vec2(0.0);
@@ -143,12 +155,13 @@ void main() {
 		val hasBent = outputs.any { it.name == "relativityBent" }
 		return """#version 150
 layout(triangles) in;
-layout(triangle_strip, max_vertices = ${3 * (EMITTED + 1)}) out;
+layout(triangle_strip, max_vertices = ${3 * (maxOf(EMITTED, TUBE_COPIES) + 1)}) out;
 $block
 $declarations
 in vec4 relativityStageA[];
 in vec2 relativityStageB[];
 in vec2 relativityStageP[];
+in vec4 relativityStageT[];
 
 vec2 relativityStageImage(int corner, int s) {
     if (s == 0) return relativityStageP[corner];
@@ -170,18 +183,18 @@ ${if (hasBent) "    relativityBent = at;" else ""}
     EmitVertex();
 }
 
+void relativityStagePass(int corner) {
+${copy("corner", "    ")}
+    gl_Position = gl_in[corner].gl_Position;
+    EmitVertex();
+}
+
 void main() {
-    for (int corner = 0; corner < 3; corner += 1) {
-${copy("corner", "        ")}
-        gl_Position = gl_in[corner].gl_Position;
-        EmitVertex();
-    }
+    for (int corner = 0; corner < 3; corner += 1) relativityStagePass(corner);
     EndPrimitive();
-    // Each of the first corner's images (any slot, the primary's too) with the other corners' nearest (any slot, the
-    // same first on a tie): the slots' signatures change across seams (light passing by another hole's axis) where a
-    // triangle's corners fall in different slots though their images lie side by side. All three primaries: the
-    // triangle passed through already is that one.
+${tubeCopies(hasBent)}
     int emitted = 0;
+    if (across) emitted = $EMITTED;
     for (int s = 0; s <= $OTHERS && emitted < $EMITTED; s += 1) {
         vec2 a = relativityStageImage(0, s);
         if (a.x <= 0.0) continue;
@@ -230,6 +243,64 @@ ${copy("corner", "        ")}
     }
 }
 """
+	}
+
+	/**
+	 * The geometry shader's tube copies: a triangle across a tube's outline (its corners seen through the tube and not:
+	 * stretched across, the pixel check keeps little of it) drawn again with every corner seen straight, and again with
+	 * every corner seen through; of each the pixel check keeps the part that shows, so the outline's edge runs between
+	 * pixels, not corners. Seen straight is exact (outside the tubes light runs straight); seen through, a corner in plain
+	 * view is placed as the through corners' images are, turned and stretched as their edge is (by one alone, moved with
+	 * it). Only for programs whose vertices say where they were bent to ([hasBent]); `across` false otherwise.
+	 */
+	private fun tubeCopies(hasBent: Boolean): String {
+		if (!hasBent) return "    bool across = false;"
+		return """    float w0 = relativityStageT[0].w;
+    float w1 = relativityStageT[1].w;
+    float w2 = relativityStageT[2].w;
+    bool across = w0 > 0.5 && w1 > 0.5 && w2 > 0.5 && (abs(w0 - w1) > 0.5 || abs(w0 - w2) > 0.5);
+    if (across) {
+        for (int corner = 0; corner < 3; corner += 1) {
+            if (relativityStageT[corner].w < 1.5) relativityStagePass(corner);
+            else relativityStageEmit(corner, normalize(${renamed("relativityUnbent")}[corner]) * length(${renamed("relativityUnbent")}[corner]), 1.0);
+        }
+        EndPrimitive();
+        int ta = -1;
+        int tb = -1;
+        for (int corner = 0; corner < 3; corner += 1) {
+            if (relativityStageT[corner].w < 1.5) continue;
+            if (ta < 0) ta = corner;
+            else tb = corner;
+        }
+        for (int corner = 0; corner < 3; corner += 1) {
+            if (relativityStageT[corner].w > 1.5) {
+                relativityStagePass(corner);
+            } else {
+                vec3 sa = normalize(${renamed("relativityUnbent")}[ta]);
+                vec3 ia = normalize(${renamed("relativityBent")}[ta]);
+                vec3 off = normalize(${renamed("relativityUnbent")}[corner]) - sa;
+                if (tb >= 0) {
+                    vec3 u = normalize(${renamed("relativityUnbent")}[tb]) - sa;
+                    vec3 v = normalize(${renamed("relativityBent")}[tb]) - ia;
+                    float lu = length(u);
+                    float lv = length(v);
+                    if (lu > 1e-6 && lv > 1e-6) {
+                        // (Rodrigues: off turned as u is to v, then stretched as much.)
+                        vec3 a = cross(u / lu, v / lv);
+                        float sn = length(a);
+                        float cs = dot(u / lu, v / lv);
+                        if (sn > 1e-6) {
+                            a /= sn;
+                            off = off * cs + cross(a, off) * sn + a * dot(a, off) * (1.0 - cs);
+                        }
+                        off *= lv / lu;
+                    }
+                }
+                relativityStageEmit(corner, normalize(ia + off) * length(${renamed("relativityUnbent")}[corner]), 1.0);
+            }
+        }
+        EndPrimitive();
+    }"""
 	}
 
 	private fun compile(type: Int, source: String, what: String): Int? {
