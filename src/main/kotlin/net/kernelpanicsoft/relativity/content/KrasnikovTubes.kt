@@ -55,8 +55,10 @@ object KrasnikovTubes {
 		/** Whether [taper] is set yet: on the first tick the train moves (standing at its station, its navigation's
 		 * distance to go is its path's cost, not the track's length). */
 		var taperSet = false
-		/** Its k (its network's warp factor's: KrasnikovNetworks), as of the last tick. */
+		/** Its k (its train's network's warp factor's: KrasnikovNetworks), as of the last tick. */
 		var k = 1.0
+		/** Each of [spines]' k (its own network's). */
+		var spineKs: List<Double> = emptyList()
 		var strength = 0.0
 		/** Behind the train: the track its tail has covered (each piece, and whether it's Krasnikov track), back to the last signal it passed. */
 		val trail = ArrayList<Pair<Cubic, Boolean>>()
@@ -204,23 +206,35 @@ object KrasnikovTubes {
 			tube.strength = age / RAMP_TICKS
 			// Its front, out from the train at the tube's light speed (ahead of the train, at 90% of it).
 			val front = c / k * age / 20.0
-			// Its tilt where it's [ahead] blocks on from the train's head: full, easing back to flat over the last [taper]
-			// before the destination (where the train brakes: its top speed follows), all eased in as the tube forms.
-			fun tiltAt(ahead: Double) = tilt(k, tube.strength * ((left - ahead) / tube.taper).coerceIn(0.0, 1.0))
+			// How far tilted it is where it's [ahead] blocks on from the train's head (0 flat, 1 its network's full tilt):
+			// full, easing back to flat over the last [taper] before the destination (where the train brakes: its top
+			// speed follows), all eased in as the tube forms.
+			fun shareAt(ahead: Double) = (tube.strength * ((left - ahead) / tube.taper).coerceIn(0.0, 1.0)).coerceIn(0.0, 1.0)
+			fun tiltAt(ahead: Double) = tilt(k, shareAt(ahead))
 			val spines = ArrayList<Pair<List<Cubic>, List<Double>>>()
+			val spineKs = ArrayList<Double>()
 			var owned = -1
 			var run = ArrayList<Cubic>()
-			var tilts = ArrayList<Double>()
+			var shares = ArrayList<Double>()
+			// (A node of the stretch's Krasnikov network: each stretch lies on one, ordinary track between any two.)
+			var runNode: TrackNode? = null
+			val graph = train.graph
 			fun close() {
-				if (run.isNotEmpty()) spines += run to tilts
+				if (run.isNotEmpty()) {
+					val runK = if (graph != null && runNode != null) 1.0 / KrasnikovNetworks.speed(graph, runNode!!) else k
+					spines += run to shares.map { 1.0 - (1.0 - runK) * it }
+					spineKs += runK
+				}
 				run = ArrayList()
-				tilts = ArrayList()
+				shares = ArrayList()
+				runNode = null
 			}
-			// Each piece added at how far on from the head its end is.
-			fun add(piece: Cubic, end: Double) {
-				if (run.isEmpty()) tilts += tiltAt(end - piece.length())
+			// Each piece added at how far on from the head its end is (on the network of [node], if known).
+			fun add(piece: Cubic, end: Double, node: TrackNode? = null) {
+				if (run.isEmpty()) shares += shareAt(end - piece.length())
 				run += piece
-				tilts += tiltAt(end)
+				shares += shareAt(end)
+				if (runNode == null) runNode = node
 			}
 			// Behind it, the track its tail has covered since it set off (from past its tail then, by its overhang), back
 			// to the last signal it passed: the blocks behind fall free for other trains as it passes on.
@@ -240,7 +254,7 @@ object KrasnikovTubes {
 				bodyFrom = run.size
 				for (piece in part) {
 					at += piece.length()
-					add(piece, at)
+					add(piece, at, head(train)?.takeIf { it.edge?.trackMaterial === Maglev.KRASNIKOV }?.node1)
 				}
 			}
 			val bodyTo = run.size
@@ -262,14 +276,15 @@ object KrasnikovTubes {
 				if (!krasnikov) {
 					close()
 				} else if (piece.length() > 1e-3) {
-					add(piece, end)
+					add(piece, end, d.from)
 				}
 				if (travelled > front) break@outer
 			}
 			close()
 			tube.spines = spines
+			tube.spineKs = spineKs
 			for ((index, spine) in spines.withIndex()) {
-				tubes += FieldSource.Krasnikov(spine.first, tilt(k, tube.strength), RADIUS, spine.second)
+				tubes += FieldSource.Krasnikov(spine.first, tilt(spineKs[index], tube.strength), RADIUS, spine.second)
 				owners += if (index == owned) Owner(train.id, bodyFrom, bodyTo) else null
 			}
 		}
@@ -285,8 +300,9 @@ object KrasnikovTubes {
 			if (strength <= 0.0) { gone += id; continue }
 			// (Its tilts eased back toward flat together.)
 			val share = if (tube.fadeStrength > 0) strength / tube.fadeStrength else 0.0
-			for ((curve, tilts) in tube.spines) {
-				tubes += FieldSource.Krasnikov(curve, tilt(tube.k, strength), RADIUS, tilts.map { 1.0 - (1.0 - it) * share })
+			for ((index, spine) in tube.spines.withIndex()) {
+				val (curve, tilts) = spine
+				tubes += FieldSource.Krasnikov(curve, tilt(tube.spineKs.getOrElse(index) { tube.k }, strength), RADIUS, tilts.map { 1.0 - (1.0 - it) * share })
 				owners += null
 			}
 		}
