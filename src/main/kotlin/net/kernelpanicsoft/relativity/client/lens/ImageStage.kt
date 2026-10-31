@@ -145,7 +145,7 @@ void main() {
 	 */
 	private fun geometrySource(source: String, outputs: List<Output>): String {
 		val block = Regex("""layout\s*\(\s*std140\s*\)\s*uniform\s+RelativityLens\s*\{[^}]*\}\s*;""").find(source)?.value
-			?: "layout(std140) uniform RelativityLens {\n    vec4 RelativityLensData[151];\n};"
+			?: "layout(std140) uniform RelativityLens {\n    vec4 RelativityLensData[159];\n};"
 		val declarations = outputs.joinToString("\n") { o ->
 			"${o.qualifiers} in ${o.type} ${renamed(o.name)}[];\n${o.qualifiers} out ${o.type} ${o.name};"
 		}

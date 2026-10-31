@@ -1246,6 +1246,86 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * Frame rate with a long winding Krasnikov tube (as a warp train's, its whole route: many points, many segments):
+	 * seen from above, beside and inside, with every point the lens takes and with fewer. Logs only (lens cost, #55).
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.longTubeFps() {
+		if (!ClientTestInput.selected("longTubeFps")) return
+		settleClient("Long tube fps, start")
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(6)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		// A track-like curve: S-bends back and forth across the floor, each a cubic (as Create's turns).
+		val pieces = ArrayList<net.kernelpanicsoft.relativity.spacetime.Cubic>()
+		var x = -60.0
+		for (i in 0 until 12) {
+			val z0 = if (i % 2 == 0) -12.0 else 12.0
+			val z1 = -z0
+			pieces += net.kernelpanicsoft.relativity.spacetime.Cubic(
+				org.joml.Vector3d(x, -58.5, z0 + 0.5), org.joml.Vector3d(x + 5.0, -58.5, z0 + 0.5),
+				org.joml.Vector3d(x + 5.0, -58.5, z1 + 0.5), org.joml.Vector3d(x + 10.0, -58.5, z1 + 0.5),
+			)
+			x += 10.0
+		}
+		val tube = net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(pieces, 0.05, 3.0)
+		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else listOf(tube)
+		}
+		withTestWorld {
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(5) { settleClient("Long tube fps, world") }
+			waitTicks(60)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "relativity bh clear")) command(command)
+			command("tick freeze")
+			runOnClient { BlackHoleLens.timeGpu = true; VertexLens.timeLevel = true }
+			fun ClientGameTestContext.fps(): Double {
+				waitTicks(30)
+				return (0 until 3).map { waitTicks(20); computeOnClient { it.fps }.toDouble() }.average()
+			}
+			try {
+				for ((name, at) in listOf("above" to "0.5 -30 0.5 0 80", "beside" to "0.5 -54 -30.5 0 25", "inside" to "-55.0 -60.12 -11.5 -90 10")) {
+					command("tp @a $at")
+					runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+					val bare = fps()
+					SpacetimeField.addProvider(provider)
+					for (budget in listOf(VertexLens.MAX_TUBE_POINTS, 32, 16, 8)) {
+						runOnClient { VertexLens.tubePointBudget = budget }
+						val rate = fps()
+						val points = computeOnClient { VertexLens.lastTubePoints }
+						// (The post pass's own GPU time: sky through the tubes, per pixel.)
+						val post = (0 until 10).map { waitTicks(1); computeOnClient { BlackHoleLens.gpuMillis } }.filter { it.isFinite() }.sorted().let { if (it.isEmpty()) Double.NaN else it[it.size / 2] }
+						val level = computeOnClient { VertexLens.levelTimer.millis }
+						CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps with {} points (budget {}), post pass {} ms, level {} ms; {} without the tube", name, "%.0f".format(rate), points, budget, "%.1f".format(post), "%.1f".format(level), "%.0f".format(bare))
+					}
+					// (Without the light table walked through the tube: the post pass tracing its sky per pixel.)
+					runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.tubeTable = false }
+					CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps without the tube table", name, "%.0f".format(fps()))
+					runOnClient { VertexLens.tubeTable = true }
+					// (Where the cost is: the aim's traces, and each trace's events.)
+					for ((traces, events) in listOf(4 to 16, 16 to 4, 4 to 4)) {
+						runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.tubeTraces = traces; VertexLens.tubeEvents = events }
+						CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps with {} traces of {} events", name, "%.0f".format(fps()), traces, events)
+					}
+					runOnClient { VertexLens.tubeTraces = 16; VertexLens.tubeEvents = VertexLens.TUBE_EVENTS }
+					// (Where the cost is: without the pixel check, it's the vertices'.)
+					runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.pixelCheck = false }
+					CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps without the pixel check", name, "%.0f".format(fps()))
+					runOnClient { VertexLens.pixelCheck = true }
+					SpacetimeField.removeProvider(provider)
+				}
+			} finally {
+				SpacetimeField.removeProvider(provider)
+				runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.pixelCheck = true; VertexLens.tubeTable = true; BlackHoleLens.timeGpu = false; VertexLens.timeLevel = false }
+				command("tick unfreeze")
+			}
+		}
+	}
+
+	/**
 	 * A Krasnikov tube (20 c) along x over the ground test's checkerboard and pillars, the floor running through it, seen
 	 * from inside (forward, back, aside) and from beside it: the shaders' tube aim against the CPU module's for a grid of
 	 * points (the same algorithm: they must agree), and the picture against the CPU module's light per pixel. Both follow

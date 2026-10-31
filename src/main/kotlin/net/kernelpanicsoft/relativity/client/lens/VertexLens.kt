@@ -45,7 +45,10 @@ object VertexLens {
 	private val TEXTURE_UNIT: Int by lazy { GL11.glGetInteger(GL20.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS) - 1 }
 	private const val BLOCK = "RelativityLens"
 	private const val SAMPLER = "RelativityImages"
-	private const val BLOCK_BYTES = 2416 // 151 vec4s: see vertex_lens_core.glsl's RelativityLensData
+	private const val BLOCK_BYTES = 2544 // 159 vec4s: see vertex_lens_core.glsl's RelativityLensData
+
+	/** Tube segments a bounding ball covers ([151..158]: vertex_lens_core.glsl's RELATIVITY_TUBE_CLUSTER). */
+	private const val TUBE_CLUSTER = 8
 
 	/** The field lens's sources (vertex_lens_core.glsl's RELATIVITY_MAX_FIELD), nearest first. */
 	const val MAX_FIELD_SOURCES = 8
@@ -60,8 +63,34 @@ object VertexLens {
 	const val MAX_TUBES = 4
 	const val MAX_TUBE_POINTS = 64
 
+	/** Debug (GameTests): at most this many tube points uploaded (the rest as if too many to fit). */
+	@JvmField
+	var tubePointBudget = MAX_TUBE_POINTS
+
+	/**
+	 * Tubes alone (no bubbles) walked through the light table (light_table.comp's tubeWalk): the post pass's sky from
+	 * it, not traced per pixel (a fifth of its cost round a long tube); [tubeSeeds] for the vertices. Debug off.
+	 */
+	@JvmField
+	var tubeTable = true
+
+	/** Debug (GameTests): times the level's own drawing on the GPU (after the sky to the end), [levelTimer]. */
+	@JvmField
+	var timeLevel = false
+
+	/** The level's drawing's GPU time while [timeLevel]. */
+	val levelTimer = GpuTimer()
+
+	/** Debug (GameTests): the tube points uploaded last frame. */
+	@JvmField
+	var lastTubePoints = 0
+
 	/** The tube walk's most events (walls and joints crossed) in the shaders. */
-	private const val TUBE_EVENTS = 16
+	const val TUBE_EVENTS = 16
+
+	/** Debug (GameTests): the tubes' trace's most events (walls and joints crossed) a trace. */
+	@JvmField
+	var tubeEvents = TUBE_EVENTS
 
 	/** How far (blocks) a tube's spine as uploaded may stray from its own, at the least: straight runs become one segment. */
 	private const val TUBE_TOLERANCE = 0.05
@@ -75,6 +104,19 @@ object VertexLens {
 	/** The tube aim's most traces a point (a group of vertices waits for its slowest). */
 	@JvmField
 	var tubeTraces = 16
+
+	/**
+	 * Debug: the tube aim started from the light table's image and refined by at most [seededTraces] (tubes alone,
+	 * [tubeTable]). Off: each vertex searches as without the table (the table still gives the post pass its sky).
+	 * Measured: refining costs about what searching does (the aim's own cost, not its traces), and a few traces leave it
+	 * unconverged (half the pixels wrong inside a tube).
+	 */
+	@JvmField
+	var tubeSeeds = false
+
+	/** The tube aim's most traces refining the light table's image ([tubeSeeds]). */
+	@JvmField
+	var seededTraces = 3
 
 	/** This frame's tubes for the field lens, nearest first. */
 	private var tubeSources: List<net.kernelpanicsoft.relativity.spacetime.FieldSource> = emptyList()
@@ -276,9 +318,13 @@ object VertexLens {
 
 	private fun onRenderStage(event: RenderLevelStageEvent) {
 		when (event.stage) {
-			RenderLevelStageEvent.Stage.AFTER_SKY -> beginLevel(event.projectionMatrix)
+			RenderLevelStageEvent.Stage.AFTER_SKY -> {
+				beginLevel(event.projectionMatrix)
+				if (timeLevel) levelTimer.begin()
+			}
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
+				if (timeLevel) levelTimer.end()
 				setEnabled(false)
 				secondsWanted = false
 			}
@@ -330,8 +376,11 @@ object VertexLens {
 			}
 			loneHole = holes.size == 1 && others.isEmpty()
 		}
-		// The light table: composed sources with any that bend light (holes, masses) in this frame's own view.
-		LightTable.prepare(!perspective && fieldWanted && fieldSources.isNotEmpty(), projection)
+		// The light table: composed sources with any that bend light (holes, masses) in this frame's own view; or tubes
+		// and bubbles alone, walked through their walls (light_table.comp's tubeWalk), each vertex refined from it.
+		// (Not with bubbles: the walk through them gave the sky wrong behind them.)
+		val walls = tubeTable && tubeSources.isNotEmpty() && bubbleSources.isEmpty()
+		LightTable.prepare(!perspective && fieldWanted && (fieldSources.isNotEmpty() || walls), projection)
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null)
 		// (The table stands while nothing it's made from has changed: the block, as uploaded, is all of it.)
 		if (!LightTable.on || uploadHash != builtHash) LightTable.build { linkProgram(it) }
@@ -615,15 +664,16 @@ object VertexLens {
 			}
 			spines = cut.map { it.first }
 			tilts = cut.map { it.second }
-			if (spines.sumOf { it.size } <= MAX_TUBE_POINTS) break
+			if (spines.sumOf { it.size } <= tubePointBudget) break
 			tolerance *= 2.0
 			scale *= 2.0
 		}
 		// (Still too many: the nearest that fit.)
 		var points = 0
-		val kept = spines.takeWhile { points += it.size; points <= MAX_TUBE_POINTS }
+		val kept = spines.takeWhile { points += it.size; points <= tubePointBudget }
 		points = kept.sumOf { it.size }
-		data.put(kept.size.toFloat()).put(points.toFloat()).put(TUBE_EVENTS.toFloat()).put(net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.QUICK_STEPS.toFloat())
+		lastTubePoints = points
+		data.put(kept.size.toFloat()).put(points.toFloat()).put(tubeEvents.toFloat()).put(net.kernelpanicsoft.relativity.physics.lens.field.TubeModule.QUICK_STEPS.toFloat())
 		for (j in kept.indices) {
 			val tube = tubes[j]
 			val inside = when (tube) {
@@ -637,14 +687,35 @@ object VertexLens {
 			data.put(inside.beta.toFloat()).put(inside.gamma.toFloat()).put(0f).put(0f)
 		}
 		repeat(MAX_TUBES - kept.size) { repeat(12) { data.put(0f) } }
+		val placed = ArrayList<Vector3f>()
+		val radii = ArrayList<Float>()
 		for ((j, spine) in kept.withIndex()) for ((i, p) in spine.withIndex()) {
 			val at = view.transform(Vector3f((p.x() - camX).toFloat(), (p.y() - camY).toFloat(), (p.z() - camZ).toFloat()))
+			placed += Vector3f(at)
+			radii += tubeRadius(tubes[j]).toFloat()
 			// (Its tube, and where the tube's tilt changes along it the tilt here: TUBE_TILT_SCALE of it, under a half.)
 			val tilt = tilts.getOrNull(j)?.getOrNull(i) ?: 0.0
 			data.put(at.x).put(at.y).put(at.z).put(j + (TUBE_TILT_SCALE * tilt).toFloat())
 		}
 		repeat(MAX_TUBE_POINTS - points) { repeat(4) { data.put(0f) } }
 		uploadBubbles(data, camX, camY, camZ, view)
+		// [151..158]: a ball round each run of TUBE_CLUSTER segments (points c TUBE_CLUSTER to (c + 1) TUBE_CLUSTER) and
+		// its tubes' walls, radius -1 for none: the shaders' walks over segments skip the runs a line or point misses.
+		for (c in 0 until MAX_TUBE_POINTS / TUBE_CLUSTER) {
+			val from = c * TUBE_CLUSTER
+			val to = minOf(from + TUBE_CLUSTER, placed.size - 1)
+			if (from >= to) {
+				data.put(0f).put(0f).put(0f).put(-1f)
+				continue
+			}
+			val lo = Vector3f(Float.MAX_VALUE)
+			val hi = Vector3f(-Float.MAX_VALUE)
+			for (i in from..to) { lo.min(placed[i]); hi.max(placed[i]) }
+			val centre = Vector3f(lo).add(hi).mul(0.5f)
+			var reach = 0f
+			for (i in from..to) reach = maxOf(reach, placed[i].distance(centre) + radii[i])
+			data.put(centre.x).put(centre.y).put(centre.z).put(reach)
+		}
 	}
 
 	/**
@@ -655,7 +726,7 @@ object VertexLens {
 	private fun uploadBubbles(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val bubbles = if (fieldSky) bubbleSources.take(MAX_BUBBLES) else emptyList()
 		// (And the walls' aim's most traces.)
-		data.put(bubbles.size.toFloat()).put(tubeTraces.toFloat()).put(0f).put(0f)
+		data.put(bubbles.size.toFloat()).put(tubeTraces.toFloat()).put(seededTraces.toFloat()).put(if (tubeSeeds) 1f else 0f)
 		for (bubble in bubbles) {
 			val c = view.transform(Vector3f((bubble.center.x() - camX).toFloat(), (bubble.center.y() - camY).toFloat(), (bubble.center.z() - camZ).toFloat()))
 			data.put(c.x).put(c.y).put(c.z).put(0f)
