@@ -1301,10 +1301,10 @@ class LensClientGameTest {
 						val level = computeOnClient { VertexLens.levelTimer.millis }
 						CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps with {} points (budget {}), post pass {} ms, level {} ms; {} without the tube", name, "%.0f".format(rate), points, budget, "%.1f".format(post), "%.1f".format(level), "%.0f".format(bare))
 					}
-					// (Without the light table walked through the tube: the post pass tracing its sky per pixel.)
-					runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.tubeTable = false }
-					CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps without the tube table", name, "%.0f".format(fps()))
-					runOnClient { VertexLens.tubeTable = true }
+					// (With the light table walked through the tube: the post pass's sky from it, not traced per pixel.)
+					runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.tubeTable = true }
+					CreateRelativity.LOGGER.info("Long tube fps, {}: {} fps with the tube table", name, "%.0f".format(fps()))
+					runOnClient { VertexLens.tubeTable = false }
 					// (Where the cost is: the aim's traces, and each trace's events.)
 					for ((traces, events) in listOf(4 to 16, 16 to 4, 4 to 4)) {
 						runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.tubeTraces = traces; VertexLens.tubeEvents = events }
@@ -1317,9 +1317,62 @@ class LensClientGameTest {
 					runOnClient { VertexLens.pixelCheck = true }
 					SpacetimeField.removeProvider(provider)
 				}
+				// As in the game: the tube changing every tick (a train's, rebuilt round it as it runs, its tilt easing in
+				// and out), and something fast inside it (the train): frame times, not just the rate (stutter).
+				fun ClientGameTestContext.frameTimes(label: String, ticks: Int, during: (Int) -> Unit = {}) {
+					runOnClient { synchronized(VertexLens.frames) { VertexLens.frames.clear() }; VertexLens.recordFrames = true }
+					for (t in 0 until ticks) { during(t); waitTicks(1) }
+					val inOrder = computeOnClient { VertexLens.recordFrames = false; synchronized(VertexLens.frames) { VertexLens.frames.toList() } }
+					// (Which frames were long, in order: one at the start is the switch; more later, stutter.)
+					CreateRelativity.LOGGER.info("Long tube frames, above, {}: long frames {}", label, inOrder.withIndex().filter { it.value > 200.0 }.map { "#${it.index}: ${"%.0f".format(it.value)} ms" })
+					val times = inOrder.sorted()
+					CreateRelativity.LOGGER.info("Long tube frames, above, {}: {} frames, mean {} ms, 99% {} ms, worst {} ms", label, times.size,
+						"%.1f".format(times.average()), "%.1f".format(times.getOrElse(times.size * 99 / 100) { Double.NaN }), "%.1f".format(times.lastOrNull() ?: Double.NaN))
+				}
+				command("tp @a 0.5 -30 0.5 0 80")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				SpacetimeField.addProvider(provider)
+				waitTicks(40)
+				frameTimes("static tube", 60)
+				SpacetimeField.removeProvider(provider)
+				command("tick unfreeze")
+				var tick = 0
+				val changing = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+					if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList()
+					else listOf(net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov(pieces, 0.05 + 0.001 * (tick % 10), 3.0))
+				}
+				SpacetimeField.addProvider(changing)
+				waitTicks(20)
+				frameTimes("changing tube", 60) { tick += 1 }
+				runOnClient { VertexLens.tubeTable = true }
+				frameTimes("changing tube, with the tube table", 60) { tick += 1 }
+				runOnClient { VertexLens.tubeTable = false }
+				// (A fast cart along it: 60 blocks a tick, as a warp train.)
+				var cart: net.minecraft.world.entity.Entity? = null
+				server.runOnServer { minecraft ->
+					val level = minecraft.overworld()
+					cart = net.minecraft.world.entity.EntityType.MINECART.create(level)!!.also { it.moveTo(-60.0, -60.0, -11.5); it.isNoGravity = true; level.addFreshEntity(it) }
+				}
+				waitTicks(10)
+				frameTimes("changing tube, fast cart in it", 60) { t ->
+					tick += 1
+					server.runOnServer { _ ->
+						val piece = pieces[(t / 2) % pieces.size]
+						val at = piece.at(if (t % 2 == 0) 0.0 else 0.5)
+						cart?.teleportTo(at.x, at.y - 1.5, at.z)
+					}
+				}
+				SpacetimeField.removeProvider(changing)
+				frameTimes("no tube, fast cart", 60) { t ->
+					server.runOnServer { _ ->
+						val at = pieces[(t / 2) % pieces.size].at(if (t % 2 == 0) 0.0 else 0.5)
+						cart?.teleportTo(at.x, at.y - 1.5, at.z)
+					}
+				}
+				server.runOnServer { _ -> cart?.discard() }
 			} finally {
 				SpacetimeField.removeProvider(provider)
-				runOnClient { VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.pixelCheck = true; VertexLens.tubeTable = true; BlackHoleLens.timeGpu = false; VertexLens.timeLevel = false }
+				runOnClient { VertexLens.recordFrames = false; VertexLens.tubePointBudget = VertexLens.MAX_TUBE_POINTS; VertexLens.pixelCheck = true; VertexLens.tubeTable = false; BlackHoleLens.timeGpu = false; VertexLens.timeLevel = false }
 				command("tick unfreeze")
 			}
 		}

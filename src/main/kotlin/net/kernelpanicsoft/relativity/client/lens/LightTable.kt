@@ -126,6 +126,17 @@ object LightTable {
 			GL15.glBufferData(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 4L * SLOTS, GL15.GL_STREAM_READ)
 			GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0)
 		}
+		// (Only once the GPU has done the last copy, its fence signalled: mapping the buffer before then waits for every
+		// frame queued ahead of it, a second and more at a few fps. Not done yet: last frame's slots kept, no new copy.)
+		if (slotPending) {
+			val fence = slotFence
+			val done = fence == 0L || org.lwjgl.opengl.GL32.glClientWaitSync(fence, 0, 0L).let {
+				it == org.lwjgl.opengl.GL32.GL_ALREADY_SIGNALED || it == org.lwjgl.opengl.GL32.GL_CONDITION_SATISFIED
+			}
+			if (!done) return
+			if (fence != 0L) org.lwjgl.opengl.GL32.glDeleteSync(fence)
+			slotFence = 0L
+		}
 		GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, slotBuffer)
 		if (slotPending) {
 			val data = GL15.glMapBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, GL15.GL_READ_ONLY)
@@ -138,8 +149,12 @@ object LightTable {
 		}
 		org.lwjgl.opengl.GL45.glGetTextureSubImage(seeds, 0, 0, 0, SLOTS * SHELLS, SLOTS, 1, 1, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, 4 * SLOTS, 0L)
 		GL15.glBindBuffer(org.lwjgl.opengl.GL21.GL_PIXEL_PACK_BUFFER, 0)
+		slotFence = org.lwjgl.opengl.GL32.glFenceSync(org.lwjgl.opengl.GL32.GL_SYNC_GPU_COMMANDS_COMPLETE, 0)
 		slotPending = true
 	}
+
+	/** The GPU's fence after the slots' copy (0: none). */
+	private var slotFence = 0L
 
 	private fun ensure(): Boolean {
 		if (texture != 0 && program != 0 && pickProgram != 0 && seedsProgram != 0) return true

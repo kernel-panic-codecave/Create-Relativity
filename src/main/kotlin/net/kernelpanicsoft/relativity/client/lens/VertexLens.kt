@@ -69,14 +69,25 @@ object VertexLens {
 
 	/**
 	 * Tubes alone (no bubbles) walked through the light table (light_table.comp's tubeWalk): the post pass's sky from
-	 * it, not traced per pixel (a fifth of its cost round a long tube); [tubeSeeds] for the vertices. Debug off.
+	 * it, not traced per pixel (a fifth of its cost round a long tube); [tubeSeeds] for the vertices. Off: in the game a
+	 * tube changes every tick (round its moving train, easing in and out), and rebuilding the table every frame cost more
+	 * (about 30 ms round a long tube) than it saved the post pass.
 	 */
 	@JvmField
-	var tubeTable = true
+	var tubeTable = false
 
 	/** Debug (GameTests): times the level's own drawing on the GPU (after the sky to the end), [levelTimer]. */
 	@JvmField
 	var timeLevel = false
+
+	/** Debug (GameTests): each frame's time (ms, frame to frame) into [frames] while set. */
+	var recordFrames = false
+		set(value) {
+			if (value && !field) lastFrame = 0L
+			field = value
+		}
+	val frames = ArrayList<Double>()
+	private var lastFrame = 0L
 
 	/** The level's drawing's GPU time while [timeLevel]. */
 	val levelTimer = GpuTimer()
@@ -325,6 +336,11 @@ object VertexLens {
 			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
 				if (timeLevel) levelTimer.end()
+				if (recordFrames) {
+					val now = System.nanoTime()
+					if (lastFrame != 0L) synchronized(frames) { frames += (now - lastFrame) / 1e6 }
+					lastFrame = now
+				}
 				setEnabled(false)
 				secondsWanted = false
 			}
