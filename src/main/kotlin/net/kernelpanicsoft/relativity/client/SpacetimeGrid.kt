@@ -69,7 +69,6 @@ object SpacetimeGrid {
 	private fun regionOf(source: FieldSource): AABB = when (source) {
 		is BlackHole -> AABB(source.center, source.center).inflate(max(8.0 * source.schwarzschildRadius, 6.0))
 		is FieldSource.Mass -> Vec3(source.center.x(), source.center.y(), source.center.z()).let { AABB(it, it).inflate(max(6.0 * source.softening, 6.0)) }
-		is FieldSource.Bubble -> Vec3(source.center.x(), source.center.y(), source.center.z()).let { AABB(it, it).inflate(1.6 * source.radius) }
 		is FieldSource.Ellipsoid -> Vec3(source.center.x(), source.center.y(), source.center.z()).let { AABB(it, it).inflate(1.6 * source.axes.maxOf { a -> a.length() }) }
 		is FieldSource.Tube -> spineBox(source.spine, source.radius)
 		is FieldSource.Krasnikov -> spineBox(source.spine, source.radius)

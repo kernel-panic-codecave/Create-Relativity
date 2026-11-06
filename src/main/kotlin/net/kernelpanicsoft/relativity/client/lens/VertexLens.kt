@@ -231,7 +231,6 @@ object VertexLens {
 		val strongest = others.filter { it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube && it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid && it !is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov }.maxByOrNull { source ->
 			when (source) {
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> 2.0 * abs(source.mass) / maxOf(source.center.distance(at), 1.0)
-				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble -> source.speed * source.radius / maxOf(source.center.distance(at), 1.0)
 				is BlackHole -> source.schwarzschildRadius / maxOf(source.center.distanceTo(camera), 1.0)
 				is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov -> 0.0
 			}
@@ -245,10 +244,6 @@ object VertexLens {
 			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Mass -> {
 				val c = strongest.center
 				Centre(c.x(), c.y(), c.z(), maxOf(2.0 * abs(strongest.mass), strongest.softening / 3.0), maxOf(0.25 * strongest.softening, 0.05), null, strongest)
-			}
-			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Bubble -> {
-				val c = strongest.center
-				Centre(c.x(), c.y(), c.z(), strongest.radius / 10.0, 0.05, null, strongest.javaClass)
 			}
 			is BlackHole -> centreOf(strongest, emptyList(), camera)
 			is net.kernelpanicsoft.relativity.spacetime.FieldSource.Tube, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Ellipsoid, is net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov -> null

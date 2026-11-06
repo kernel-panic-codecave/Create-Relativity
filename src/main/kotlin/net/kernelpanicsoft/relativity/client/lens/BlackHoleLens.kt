@@ -222,7 +222,6 @@ object BlackHoleLens {
 		return SpacetimeField.fieldSources(level).filter { source ->
 			when (source) {
 				is FieldSource.Mass -> 2.0 * kotlin.math.abs(source.mass) > MIN_BENDING * source.center.distance(at)
-				is FieldSource.Bubble -> false
 				is BlackHole -> source.schwarzschildRadius > MIN_BENDING * source.center.distanceTo(camera)
 				// (Tubes: the field lens's tube module, in view out to the render distance.)
 				is FieldSource.Tube -> source.distance(at) < Minecraft.getInstance().gameRenderer.renderDistance + source.radius

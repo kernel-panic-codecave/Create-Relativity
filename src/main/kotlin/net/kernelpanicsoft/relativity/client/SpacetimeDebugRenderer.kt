@@ -137,12 +137,6 @@ object SpacetimeDebugRenderer {
 				ellipse(lines, pose, c, axes[2], axes[1], MASS)
 				for (a in axes) segment(lines, pose, Vector3d(c).sub(Vector3d(a).mul(0.3)), Vector3d(c).add(Vector3d(a).mul(0.3)), MASS, 255)
 			}
-			is FieldSource.Bubble -> {
-				val c = at(source.center)
-				val r = source.radius
-				val axes = listOf(Vector3d(r, 0.0, 0.0), Vector3d(0.0, r, 0.0), Vector3d(0.0, 0.0, r))
-				bubble(lines, pose, c, axes, source.direction, source.speed)
-			}
 			is FieldSource.Ellipsoid -> bubble(lines, pose, at(source.center), source.axes.map { Vector3d(it) }, source.direction, source.speed)
 			is FieldSource.Tube -> tube(lines, pose, source.spine.map(at), source.radius, if (source.speed < 0.0) -1 else 1, TUBE)
 			is FieldSource.Krasnikov -> tube(lines, pose, source.spine.map(at), source.radius, 1, KRASNIKOV)

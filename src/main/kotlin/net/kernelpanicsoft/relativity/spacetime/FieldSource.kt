@@ -2,7 +2,6 @@ package net.kernelpanicsoft.relativity.spacetime
 
 import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass
-import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
 import net.kernelpanicsoft.relativity.physics.spacetime.field.KrasnikovTube
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpEllipsoid
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube
@@ -12,7 +11,7 @@ import org.joml.Vector3dc
 
 /**
  * Something that curves spacetime in a level, in game terms (block coordinates, game axes): a [BlackHole], a [Mass], a
- * [Bubble], a [Tube], an [Ellipsoid] or a [Krasnikov] tube. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
+ * [Tube], an [Ellipsoid] (a warp bubble; a round one is an ellipsoid with equal axes) or a [Krasnikov] tube. Black holes come from their entities ([SpacetimeField.blackHoles]); everything else from
  * [SpacetimeField.addProvider] (gravity generators, warp drives, tests); [SpacetimeField.sources] gives both. Every
  * system that asks [SpacetimeField] sees them: free fall, clocks, the lens.
  */
@@ -56,24 +55,6 @@ sealed interface FieldSource {
 	}
 
 	/**
-	 * An Alcubierre warp bubble of [radius] blocks centred at [center], moving along unit game [direction] at [speed]
-	 * times c (more than 1 is faster than light).
-	 */
-	data class Bubble(val center: Vector3dc, val direction: Vector3dc, val speed: Double, val radius: Double) : FieldSource {
-		override fun toPhysics(origin: Vector3dc): MetricSource {
-			val p = DoubleArray(3)
-			val n = DoubleArray(3)
-			GameFrame.toPhysics(Vector3d(center).sub(origin), p)
-			GameFrame.toPhysics(Vector3d(direction).normalize(), n)
-			return WarpBubble(p[0], p[1], p[2], n[0], n[1], n[2], speed, radius)
-		}
-
-		// The shift reaches about a wall's thickness past the radius; inside and on the wall it's of order speed / radius.
-		override fun strengthAt(position: Vector3dc): Double =
-			if (center.distance(position) < 1.5 * radius) kotlin.math.abs(speed) / radius else 0.0
-	}
-
-	/**
 	 * A warp tube ([WarpTube]): a warp field of [radius] blocks round the polyline [spine] (game coordinates), pushing at
 	 * [speed] times c along it (more than 1 is faster than light): a maglev train's, round its carriages and bending
 	 * with its track.
@@ -108,7 +89,8 @@ sealed interface FieldSource {
 	}
 
 	/**
-	 * A warp bubble with an ellipsoidal wall ([WarpEllipsoid]): a warp-driven ship's, round its bounds. Centred at
+	 * A warp bubble with an ellipsoidal wall ([WarpEllipsoid]): a warp-driven ship's, round its bounds (a round bubble is
+	 * one with three equal axes). Centred at
 	 * [center], its three semi-axis vectors [axes] (game axes, their lengths the semi-axes), moving along unit game
 	 * [direction] at [speed] times c; [inner] the ellipsoidal radius inside which it's exactly flat (its wall from there
 	 * to 1: [WarpEllipsoid]'s compact shape; 0 for its tanh wall).
