@@ -1,5 +1,5 @@
 // Warp bubbles (lens BubbleField): Alcubierre's, an ellipsoidal wall (a sphere's a special case) round a push of v
-// along n, frozen where it is (WarpEllipsoid; WarpBubble a sphere of it): g^ti = -v f n, g^ij = delta - v^2 f^2 n n,
+// along n, frozen where it is (WarpEllipsoid; a round one three equal axes): g^ti = -v f n, g^ij = delta - v^2 f^2 n n,
 // so along n: B = v f, C = -v^2 f^2. f on the ellipsoidal radius s (1 on the wall): the tanh wall (sharpness 8 on s)
 // or, with an inner radius, exactly 1 inside it, easing to 0 at 1 (6t^5 - 15t^4 + 10t^3). Its observers ride with it
 // (Eulerian: light seen along m has p = m / (1 + v f m.n)).

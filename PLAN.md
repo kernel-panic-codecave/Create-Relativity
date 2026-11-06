@@ -133,7 +133,7 @@ SR kinematics:
     shift (space flowing past), which a scalar potential can't hold.
   - **As built (physics-core `spacetime/field`)**: sources add into the *inverse* metric, `g^{μν} = η^{μν} + Σ δg^{μν}`,
     each with exact derivatives (`MetricSource`: `KerrSource` = Kerr exactly in Kerr–Schild form, `PointMass` of either
-    sign in the weak field, `WarpBubble` = Alcubierre, moving). Light follows the Hamiltonian `½ g^{μν} p_μ p_ν`
+    sign in the weak field, `WarpEllipsoid` = Alcubierre, moving; a round bubble three equal axes). Light follows the Hamiltonian `½ g^{μν} p_μ p_ν`
     (`HamiltonianRay`), which needs nothing but `g^{μν}` and its gradient, the same form the GPU will use;
     `ComposedSpacetime` inverts numerically for clocks and timelike geodesics. Near one source the sum is that source
     exactly; between several it's superposition (exact in the weak field). Done: the game's `SpacetimeField` on it (one

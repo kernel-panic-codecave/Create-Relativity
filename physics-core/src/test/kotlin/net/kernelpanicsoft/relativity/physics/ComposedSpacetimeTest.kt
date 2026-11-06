@@ -8,7 +8,7 @@ import net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime
 import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.PointMass
-import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpBubble
+import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpEllipsoid
 import net.kernelpanicsoft.relativity.physics.spacetime.field.SampledField
 import net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample
 import kotlin.math.abs
@@ -103,7 +103,7 @@ class ComposedSpacetimeTest {
 	@Test
 	fun `a warp bubble carries its centre along, faster than light, with no time dilation`() {
 		val speed = 2.0
-		val bubble = WarpBubble(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, speed = speed, radius = 10.0)
+		val bubble = WarpEllipsoid(0.0, 0.0, 0.0, doubleArrayOf(10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0), doubleArrayOf(1.0, 0.0, 0.0), speed)
 		val spacetime = ComposedSpacetime(listOf(bubble))
 		val geodesic = Geodesic(spacetime, rtol = 1e-10, atol = 1e-12)
 		val state = Geodesic.timelike(spacetime, doubleArrayOf(0.0, 0.0, 0.0, 0.0), doubleArrayOf(speed, 0.0, 0.0))
@@ -117,7 +117,7 @@ class ComposedSpacetimeTest {
 	@Test
 	fun `inside a superluminal bubble light can't go backwards`() {
 		val speed = 2.0
-		val spacetime = ComposedSpacetime(listOf(WarpBubble(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, speed = speed, radius = 10.0)))
+		val spacetime = ComposedSpacetime(listOf(WarpEllipsoid(0.0, 0.0, 0.0, doubleArrayOf(10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0), doubleArrayOf(1.0, 0.0, 0.0), speed)))
 		val ray = HamiltonianRay(spacetime)
 		val v = DoubleArray(3)
 		ray.coordinateVelocity(HamiltonianRay.lightlike(spacetime, doubleArrayOf(0.0, 0.0, 0.0, 0.0), doubleArrayOf(1.0, 0.0, 0.0)), v)

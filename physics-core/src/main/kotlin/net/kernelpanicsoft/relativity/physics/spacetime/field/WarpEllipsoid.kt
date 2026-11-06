@@ -7,8 +7,8 @@ import kotlin.math.tanh
  * An Alcubierre warp bubble with an ellipsoidal wall (round a ship: its bounds' box), centred at ([cx], [cy], [cz]) at
  * t = 0 and moving at coordinate speed [speed] (any, faster than light included) along unit direction [n]. Its
  * [axes] are three perpendicular semi-axis vectors (x, y, z triples: their lengths the semi-axes). `ds² = −dt² +
- * (dx^i − v n^i f dt)²` as [WarpBubble], f the shape on the ellipsoidal radius s (1 on the wall): a sphere of radius R
- * is the same as [WarpBubble] of R. [sigma] is the wall's sharpness on s (per unit of s: R times a sphere's). Not
+ * (dx^i − v n^i f dt)²` (Alcubierre's), f the shape on the ellipsoidal radius s (1 on the wall): a round bubble of
+ * radius R is three equal semi-axes of R. [sigma] is the wall's sharpness on s (per unit of s: R times a sphere's). Not
  * [moving], it stays where it is, its push the same (frozen: the lens's view of it, BubbleModule). With [inner] > 0
  * the shape has compact support instead: exactly 1 inside ellipsoidal radius [inner] (truly flat: a ship's box inside
  * it feels nothing at any warp, where a tanh wall's tail times v² still pulls hard), easing to exactly 0 at 1 by the
