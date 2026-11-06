@@ -22,7 +22,7 @@ object LensCheck {
 	 * Per point: 1 placed or -1 hidden, and its bent NDC x, y. With [why]: why it's hidden (lens_check.fsh); [tubes]:
 	 * the tubes' aim; [sky]: where the field lens's light from the camera along it ends heading.
 	 */
-	fun run(points: List<FloatArray>, projection: Matrix4f, why: Boolean = false, tubes: Boolean = false, sky: Boolean = false, image: Boolean = false, table: Boolean = false): List<FloatArray> {
+	fun run(points: List<FloatArray>, projection: Matrix4f, why: Boolean = false, tubes: Boolean = false, sky: Boolean = false, image: Boolean = false, table: Boolean = false, tableImage: Boolean = false, fieldForce: Boolean = false, field: Boolean = false): List<FloatArray> {
 		if (program == 0) program = link() ?: return emptyList()
 		VertexLens.linkProgram(program)
 		val width = points.size
@@ -57,7 +57,7 @@ object LensCheck {
 			val matrix = stack.mallocFloat(16)
 			projection.get(matrix)
 			GL20.glUniformMatrix4fv(GL20.glGetUniformLocation(program, "Projection"), false, matrix)
-			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (table) 10 else if (image) 9 else if (sky) 8 else if (tubes) 7 else if (why) 4 else 0)
+			GL20.glUniform1i(GL20.glGetUniformLocation(program, "Direct"), if (field) 13 else if (fieldForce) 12 else if (tableImage) 11 else if (table) 10 else if (image) 9 else if (sky) 8 else if (tubes) 7 else if (why) 4 else 0)
 			GL30.glBindVertexArray(vao)
 			GL11.glDrawArrays(GL11.GL_TRIANGLES, 0, 3)
 			val out = stack.mallocFloat(width * 4)
@@ -89,7 +89,8 @@ object LensCheck {
 			return shader
 		}
 		val vertex = compile(GL20.GL_VERTEX_SHADER, "#version 330 core\nvoid main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }")
-		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n$core\n$body")
+		val fields = net.kernelpanicsoft.relativity.client.lens.field.LensFields.include
+		val fragment = compile(GL20.GL_FRAGMENT_SHADER, "#version 330 core\n$core\n$fields\n$body")
 		val id = GL20.glCreateProgram()
 		GL20.glAttachShader(id, vertex)
 		GL20.glAttachShader(id, fragment)

@@ -1246,6 +1246,70 @@ class LensClientGameTest {
 	}
 
 	/**
+	 * The lens's fields (LensFields, the GLSL in lens_fields): the tube registered as a field type, its field where it should
+	 * be (inside: its tilt; far out: flat), and its force on light in closed form against differences of H. A bent tube,
+	 * points across its wall; near its joint the axis's turning is only approximately differentiated (logged).
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.lensFields() {
+		if (!ClientTestInput.selected("lensFields")) return
+		val tubeId = net.kernelpanicsoft.relativity.CreateRelativity.id("tube")
+		assertTrue(net.kernelpanicsoft.relativity.lens.RelativityRegistries.LENS_FIELD_TYPES.contains(tubeId)) { "The tube isn't a registered lens field type" }
+		val k = 0.05
+		val spine = listOf(org.joml.Vector3d(-60.0, -58.5, 0.5), org.joml.Vector3d(8.0, -58.5, 0.5), org.joml.Vector3d(48.0, -58.5, 40.5))
+		val tube = net.kernelpanicsoft.relativity.spacetime.FieldSource.Krasnikov.through(spine, k, 3.0)
+		val provider = net.kernelpanicsoft.relativity.spacetime.FieldSource.Provider { level ->
+			if (level.dimension() != net.minecraft.world.level.Level.OVERWORLD) emptyList() else listOf(tube)
+		}
+		withTestWorld {
+			while (atLength { it.level == null || it.player == null }) Thread.sleep(500)
+			repeat(3) { settleClient("Lens fields, world") }
+			command("gamemode spectator @a")
+			command("tp @a -10.5 -50 -12.5 0 20")
+			SpacetimeField.addProvider(provider)
+			try {
+				waitTicks(20)
+				val (eye, rotation) = computeOnClient { minecraft ->
+					val camera = minecraft.gameRenderer.mainCamera
+					camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+				}
+				// Points across the wall (rho 0 to 6) round the straight piece and round the joint (x 8).
+				class Probe(val world: org.joml.Vector3d, val rho: Double, val nearJoint: Boolean)
+				val probes = ArrayList<Probe>()
+				for (x in listOf(-40.0, -20.0, -5.0, 6.0, 8.0, 10.0)) for (rho in listOf(0.0, 1.0, 2.0, 2.7, 2.9, 3.0, 3.1, 3.3, 4.0, 6.0, 9.0)) for (angle in listOf(0.3, 2.0, 4.1)) {
+					probes += Probe(org.joml.Vector3d(x, -58.5 + rho * kotlin.math.sin(angle), 0.5 + rho * kotlin.math.cos(angle)), rho, kotlin.math.abs(x - 8.0) < 4.0)
+				}
+				val views = probes.map { p -> rotation.transform(org.joml.Vector3f((p.world.x - eye.x).toFloat(), (p.world.y - eye.y).toFloat(), (p.world.z - eye.z).toFloat())).let { floatArrayOf(it.x, it.y, it.z) } }
+				val fields = atLength { LensCheck.run(views, VertexLens.lastProjection, field = true) }
+				val forces = atLength { LensCheck.run(views, VertexLens.lastProjection, fieldForce = true) }
+				val q = 1.0 / ((1.0 + k) * (1.0 + k))
+				val insideA = -4.0 * k * q
+				val failures = ArrayList<String>()
+				val errors = ArrayList<Double>()
+				val jointErrors = ArrayList<Double>()
+				for ((i, p) in probes.withIndex()) {
+					val f = fields[i]
+					if (p.rho <= 1.0 && !p.nearJoint && (kotlin.math.abs(f[3] - 1f) > 0.01 || kotlin.math.abs(f[0] - insideA) > 0.01)) failures += "inside at ${p.world}: A ${f[0]}, weight ${f[3]}"
+					if (p.rho >= 6.0 && !p.nearJoint && (f[3] > 1e-3 || kotlin.math.abs(f[0] + 1f) > 1e-3)) failures += "outside at ${p.world}: A ${f[0]}, weight ${f[3]}"
+					val force = forces[i]
+					val size = kotlin.math.sqrt((force[0] * force[0] + force[1] * force[1] + force[2] * force[2]).toDouble())
+					val relative = force[3] / (size + 1e-2)
+					if (p.nearJoint) jointErrors += relative else errors += relative
+				}
+				errors.sort()
+				jointErrors.sort()
+				CreateRelativity.LOGGER.info("Lens fields: force in closed form against differences, off by (relative) median {}, 90% {}, max {}; near the joint median {}, max {}",
+					"%.4f".format(errors[errors.size / 2]), "%.4f".format(errors[errors.size * 9 / 10]), "%.4f".format(errors.last()),
+					"%.4f".format(jointErrors[jointErrors.size / 2]), "%.4f".format(jointErrors.last()))
+				if (errors.last() > 0.05) failures += "the closed-form force is off by ${errors.last()} (relative) away from the joint"
+				assertTrue(failures.isEmpty()) { "Lens fields: ${failures.take(6)}" }
+			} finally {
+				SpacetimeField.removeProvider(provider)
+			}
+		}
+	}
+
+	/**
 	 * Frame rate with a long winding Krasnikov tube (as a warp train's, its whole route: many points, many segments):
 	 * seen from above, beside and inside, with every point the lens takes and with fewer. Logs only (lens cost, #55).
 	 */
@@ -1317,6 +1381,55 @@ class LensClientGameTest {
 					runOnClient { VertexLens.pixelCheck = true }
 					SpacetimeField.removeProvider(provider)
 				}
+				// The aim alone (LensCheck: the lens core in a bare program, no world shader round it) over the floor under
+				// the tube, against what the level's drawing spends on its vertices: how much the world shader adds.
+				command("tp @a 0.5 -30 0.5 0 80")
+				runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO }
+				SpacetimeField.addProvider(provider)
+				waitTicks(40)
+				val (eye, rotation) = computeOnClient { minecraft ->
+					val camera = minecraft.gameRenderer.mainCamera
+					camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+				}
+				val floor = ArrayList<FloatArray>()
+				for (i in 0 until 128) for (j in 0 until 128) {
+					val x = -60.0 + 120.0 * i / 127.0
+					val z = -15.0 + 31.0 * j / 127.0
+					val v = rotation.transform(org.joml.Vector3f((x - eye.x).toFloat(), (-60.0 - eye.y).toFloat(), (z - eye.z).toFloat()))
+					floor += floatArrayOf(v.x, v.y, v.z)
+				}
+				for (attempt in 0 until 4) {
+					val (millis, placed) = atLength {
+						org.lwjgl.opengl.GL11.glFinish()
+						val start = System.nanoTime()
+						val out = floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tubes = true) }
+						org.lwjgl.opengl.GL11.glFinish()
+						(System.nanoTime() - start) / 1e6 to out.count { it[3] > 0f }
+					}
+					CreateRelativity.LOGGER.info("Long tube aim alone, above: {} floor points in {} ms ({} us a point), {} placed", floor.size, "%.1f".format(millis), "%.2f".format(millis * 1000 / floor.size), placed)
+				}
+				// (How many of them the aim searches for: their straight line crosses the tube.)
+				val crossing = (0 until 128 * 128).count { n ->
+					val x = -60.0 + 120.0 * (n / 128) / 127.0
+					val z = -15.0 + 31.0 * (n % 128) / 127.0
+					(1..63).any { k ->
+						val f = k / 64.0
+						tube.distance(org.joml.Vector3d(eye.x + (x - eye.x) * f, eye.y + (-60.0 - eye.y) * f, eye.z + (z - eye.z) * f)) < 3.0
+					}
+				}
+				CreateRelativity.LOGGER.info("Long tube aim alone, above: {} of the {} floor points' lines cross the tube", crossing, floor.size)
+				// The light table's images of them (when it's built through the tube) against the aim's: found, and how far off.
+				val exact = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tubes = true) } }
+				val fromTable = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tableImage = true) } }
+				val pixel = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
+				val offs = exact.zip(fromTable).filter { (e, t) -> e[3] > 0f && t[3] > 0f }.map { (e, t) ->
+					val c = (e[0] * t[0] + e[1] * t[1] + e[2] * t[2]) / (kotlin.math.sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kotlin.math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]))
+					kotlin.math.acos(c.coerceIn(-1f, 1f).toDouble()) / pixel
+				}.sorted()
+				CreateRelativity.LOGGER.info("Long tube table, above: aim {} found, table {} found ({} both, {} by the aim alone); table off the aim (px) median {}, 90% {}, 99% {}",
+					exact.count { it[3] > 0f }, fromTable.count { it[3] > 0f }, offs.size, exact.zip(fromTable).count { (e, t) -> e[3] > 0f && t[3] <= 0f },
+					"%.2f".format(offs.getOrElse(offs.size / 2) { Double.NaN }), "%.2f".format(offs.getOrElse(offs.size * 9 / 10) { Double.NaN }), "%.2f".format(offs.getOrElse(offs.size * 99 / 100) { Double.NaN }))
+				SpacetimeField.removeProvider(provider)
 				// As in the game: the tube changing every tick (a train's, rebuilt round it as it runs, its tilt easing in
 				// and out), and something fast inside it (the train): frame times, not just the rate (stutter).
 				fun ClientGameTestContext.frameTimes(label: String, ticks: Int, during: (Int) -> Unit = {}) {

@@ -2,12 +2,38 @@
 // one per output texel (LensCheck).
 uniform sampler2D Points; // view-space positions
 uniform mat4 Projection;
-uniform int Direct; // 0: the bend; 4: why a point is hidden; 7: the tubes' aim; 8: the field lens's sky; 9: its image
+uniform int Direct; // 0: the bend; 4: why a point is hidden; 7: the tubes' aim; 8: the field lens's sky; 9: its image; 10 the table's why; 11 its image
 
 out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 12) {
+        // The fields' force on light at p (lensFieldForce: their gradients in closed form) for a set momentum, against
+        // H's differences: xyz the closed form's, w how far apart they are.
+        vec3 m = normalize(vec3(0.6, 0.3, -0.74));
+        LensFieldSample s = lensFieldAt(p);
+        vec3 force = lensFieldForce(s, m);
+        float h = 0.002;
+        vec3 numeric = -vec3(lensFieldH(lensFieldAt(p + vec3(h, 0.0, 0.0)), m) - lensFieldH(lensFieldAt(p - vec3(h, 0.0, 0.0)), m),
+                             lensFieldH(lensFieldAt(p + vec3(0.0, h, 0.0)), m) - lensFieldH(lensFieldAt(p - vec3(0.0, h, 0.0)), m),
+                             lensFieldH(lensFieldAt(p + vec3(0.0, 0.0, h)), m) - lensFieldH(lensFieldAt(p - vec3(0.0, 0.0, h)), m)) / (2.0 * h);
+        Result = vec4(force, length(force - numeric));
+        return;
+    }
+    if (Direct == 13) {
+        // The fields at p: x A (both parts), y B, z C, w the axial weight.
+        LensFieldSample s = lensFieldAt(p);
+        Result = vec4(s.a + s.axialA, s.b, s.c, s.weight);
+        return;
+    }
+    if (Direct == 11) {
+        // The light table's image of p (relativityTableImage): xyz where it's seen, w 1 found, -1 not.
+        vec3 seen;
+        bool found = relativityTableImage(p, seen);
+        Result = vec4(seen, found ? 1.0 : -1.0);
+        return;
+    }
     if (Direct == 10) {
         // The light table's image of p (relativityTableImage): x how it ended (relativityTableWhy), y steps, zw the uv.
         vec3 seen;

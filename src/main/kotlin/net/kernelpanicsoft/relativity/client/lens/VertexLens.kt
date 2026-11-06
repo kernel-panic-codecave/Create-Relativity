@@ -398,6 +398,12 @@ object VertexLens {
 		val walls = tubeTable && tubeSources.isNotEmpty() && bubbleSources.isEmpty()
 		LightTable.prepare(!perspective && fieldWanted && (fieldSources.isNotEmpty() || walls), projection)
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null)
+		// The fields (LensFields): every registered type's sources, for the field march and its probes.
+		if (level != null && !perspective) {
+			net.kernelpanicsoft.relativity.client.lens.field.LensFields.upload(net.kernelpanicsoft.relativity.lens.LensFrame(
+				level, org.joml.Vector3d(camera.x, camera.y, camera.z), view, holes + others, pixelAngle(projection).toDouble(),
+			))
+		}
 		// (The table stands while nothing it's made from has changed: the block, as uploaded, is all of it.)
 		if (!LightTable.on || uploadHash != builtHash) LightTable.build { linkProgram(it) }
 		if (LightTable.on) builtHash = uploadHash
@@ -823,6 +829,7 @@ object VertexLens {
 		if (binding < 0) binding = GL11.glGetInteger(GL31.GL_MAX_UNIFORM_BUFFER_BINDINGS) - 1
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
+		net.kernelpanicsoft.relativity.client.lens.field.LensFields.link(program)
 		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, "RelativityLightTable" to TEXTURE_UNIT - 1, "RelativityLightSeeds" to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue

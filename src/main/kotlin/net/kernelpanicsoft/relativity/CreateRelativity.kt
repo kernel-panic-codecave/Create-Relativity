@@ -40,6 +40,8 @@ object CreateRelativity {
 
 	init {
 		RelativityConfig.init()
+		net.kernelpanicsoft.relativity.lens.RelativityRegistries.init()
+		net.kernelpanicsoft.relativity.lens.RelativityLensFields.init()
 		SpacetimeAttachments.init()
 		SpacetimeSync.init()
 		net.kernelpanicsoft.relativity.content.KrasnikovSync.init()
