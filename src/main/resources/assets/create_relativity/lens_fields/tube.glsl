@@ -95,7 +95,8 @@ void fieldSample(vec3 x, inout LensFieldSample s) {
             dA, (-4.0 * (1.0 - k) * q3) * gK,
             b, ((2.0 * k - 6.0) * q3) * gK,
             c, (-8.0 * q3) * gK,
-            turn, gTurn);
+            turn, gTurn,
+            -(1.0 - k) * 0.5, (1.0 + k) * 0.5, 0.0);
         // (Safe: clear of the wall's band, and of a joint's.)
         float wallGap = abs(rho - radius) - 3.0 * width;
         float safe = max(min(wallGap, jointGap - 2.0 * width), 0.02);

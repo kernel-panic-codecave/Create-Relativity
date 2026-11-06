@@ -20,9 +20,16 @@ struct LensFieldSample {
     vec3 axis;    // its axis t
     vec3 turn;    // across a joint the axis turns: dt/dx = turn (x) gTurn (outer product), t's other changes left out
     vec3 gTurn;
+    float obsAlpha; // its observers': light they see along unit m has p = (m + t (obsAlpha + (obsBeta - 1) m.t)) /
+    float obsBeta;  // (1 + obsGamma m.t) (flat 0, 1, 0)
+    float obsGamma;
     float weight; // how far inside it the point is (0 none, 1 inside)
     float safe;   // how far light may go from here before the field changes much (blocks)
+    bool absorbed; // inside a horizon: light here is lost
 };
+
+// The field at x, every type's added in (generated after the types' code: LensFields).
+LensFieldSample lensFieldAt(vec3 x);
 
 LensFieldSample lensFieldFlat() {
     LensFieldSample s;
@@ -39,8 +46,12 @@ LensFieldSample lensFieldFlat() {
     s.axis = vec3(1.0, 0.0, 0.0);
     s.turn = vec3(0.0);
     s.gTurn = vec3(0.0);
+    s.obsAlpha = 0.0;
+    s.obsBeta = 1.0;
+    s.obsGamma = 0.0;
     s.weight = 0.0;
     s.safe = 1e30;
+    s.absorbed = false;
     return s;
 }
 
@@ -53,8 +64,9 @@ void lensFieldAddIsotropic(inout LensFieldSample s, float da, vec3 ga, float dd,
 }
 
 // An axial source's part (weight: how far inside it; its A's part, B and C along axis, each with its gradient; turn and
-// gTurn its axis's turning, zero if none): kept if it's the strongest here.
-void lensFieldAddAxial(inout LensFieldSample s, float weight, vec3 axis, float da, vec3 ga, float b, vec3 gb, float c, vec3 gc, vec3 turn, vec3 gTurn) {
+// gTurn its axis's turning, zero if none; its observers' alpha, beta and gamma, for the camera inside it): kept if it's
+// the strongest here.
+void lensFieldAddAxial(inout LensFieldSample s, float weight, vec3 axis, float da, vec3 ga, float b, vec3 gb, float c, vec3 gc, vec3 turn, vec3 gTurn, float alpha, float beta, float gamma) {
     // (Not a bare return: Veil's processor fails on those in void functions.)
     if (weight > s.weight) {
         s.weight = weight;
@@ -67,7 +79,21 @@ void lensFieldAddAxial(inout LensFieldSample s, float weight, vec3 axis, float d
         s.gc = gc;
         s.turn = turn;
         s.gTurn = gTurn;
+        s.obsAlpha = alpha;
+        s.obsBeta = beta;
+        s.obsGamma = gamma;
     }
+}
+
+// Inside a horizon here: light reaching it is lost.
+void lensFieldAbsorb(inout LensFieldSample s) {
+    s.absorbed = true;
+}
+
+// The momentum of light seen going along unit m by the observers at a point of field s.
+vec3 lensFieldStart(LensFieldSample s, vec3 m) {
+    float mt = dot(m, s.axis);
+    return (m + s.axis * (s.obsAlpha + (s.obsBeta - 1.0) * mt)) / (1.0 + s.obsGamma * mt);
 }
 
 // A source's safe step here (blocks): the field's, the least of its sources'.
@@ -93,4 +119,39 @@ vec3 lensFieldForce(LensFieldSample s, vec3 p) {
     // (The axis turning: dH/d(p.t) = B + C p.t, d(p.t)/dx = (p.turn) gTurn.)
     grad += (s.b + s.c * ps) * dot(p, s.turn) * s.gTurn;
     return -grad;
+}
+
+// One step of light at x with momentum p through the fields (s: the field at x), the midpoint rule over the field's
+// safe step (at least minStep, at most maxStep): x, p and s moved on.
+void lensFieldAdvance(inout vec3 x, inout vec3 p, inout LensFieldSample s, float minStep, float maxStep) {
+    vec3 v = lensFieldVelocity(s, p);
+    float dl = clamp(s.safe, minStep, maxStep) / max(length(v), 1e-6);
+    vec3 xm = x + v * (0.5 * dl);
+    vec3 pm = p + lensFieldForce(s, p) * (0.5 * dl);
+    LensFieldSample sm = lensFieldAt(xm);
+    x += lensFieldVelocity(sm, pm) * dl;
+    p += lensFieldForce(sm, pm) * dl;
+    s = lensFieldAt(x);
+}
+
+// Where light seen along unit d from the camera first gets r out (on the chord of the step that takes it there);
+// false if it doesn't within the steps.
+bool lensFieldReach(vec3 d, float r, out vec3 at) {
+    vec3 x = vec3(0.0);
+    LensFieldSample s = lensFieldAt(x);
+    vec3 p = lensFieldStart(s, d);
+    at = d * r;
+    for (int i = 0; i < 1500; i += 1) {
+        vec3 a = x;
+        lensFieldAdvance(x, p, s, 0.02, max(r, 1.0));
+        if (s.absorbed) return false;
+        if (length(x) >= r) {
+            vec3 u = normalize(x - a);
+            float b = dot(a, u);
+            float t = -b + sqrt(max(b * b - (dot(a, a) - r * r), 0.0));
+            at = a + u * t;
+            return true;
+        }
+    }
+    return false;
 }

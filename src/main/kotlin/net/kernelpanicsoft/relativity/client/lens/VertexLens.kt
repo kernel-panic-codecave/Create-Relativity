@@ -125,6 +125,13 @@ object VertexLens {
 	@JvmField
 	var tubeSeeds = false
 
+	/**
+	 * The light table marched through the lens's fields (LensFields: every registered field type, light_table.comp's
+	 * fieldMarch) instead of the per-type walks; with [tubeTable] for tubes. Being brought in (debug, GameTests).
+	 */
+	@JvmField
+	var fieldMarch = false
+
 	/** The tube aim's most traces refining the light table's image ([tubeSeeds]). */
 	@JvmField
 	var seededTraces = 3
@@ -748,7 +755,7 @@ object VertexLens {
 	private fun uploadBubbles(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val bubbles = if (fieldSky) bubbleSources.take(MAX_BUBBLES) else emptyList()
 		// (And the walls' aim's most traces.)
-		data.put(bubbles.size.toFloat()).put(tubeTraces.toFloat()).put(seededTraces.toFloat()).put(if (tubeSeeds) 1f else 0f)
+		data.put(bubbles.size.toFloat()).put(tubeTraces.toFloat()).put(seededTraces.toFloat()).put(if (fieldMarch) 4f else if (tubeSeeds) 1f else 0f)
 		for (bubble in bubbles) {
 			val c = view.transform(Vector3f((bubble.center.x() - camX).toFloat(), (bubble.center.y() - camY).toFloat(), (bubble.center.z() - camZ).toFloat()))
 			data.put(c.x).put(c.y).put(c.z).put(0f)

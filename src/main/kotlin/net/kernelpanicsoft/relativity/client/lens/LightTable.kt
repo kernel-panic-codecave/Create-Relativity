@@ -91,8 +91,22 @@ object LightTable {
 	 * signatures tallied (light_table.comp), the slots picked (light_table_pick.comp), the inverse map rasterized
 	 * (light_table_seeds.comp).
 	 */
+	/** Debug (GameTests): times each build on the GPU, [buildTimer]. */
+	@JvmField
+	var timeBuild = false
+	val buildTimer = GpuTimer()
+
 	fun build(link: (Int) -> Unit) {
 		if (!on) return
+		if (timeBuild) buildTimer.begin()
+		try {
+			buildPasses(link)
+		} finally {
+			if (timeBuild) buildTimer.end()
+		}
+	}
+
+	private fun buildPasses(link: (Int) -> Unit) {
 		val previous = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM)
 		org.lwjgl.opengl.GL44.glClearTexImage(seeds, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, intArrayOf(-1))
 		org.lwjgl.opengl.GL44.glClearTexImage(counts, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, intArrayOf(0))
@@ -194,7 +208,8 @@ object LightTable {
 		val core = text("pinwheel/shaders/include/vertex_lens_core.glsl") ?: return null
 		val body = text("shaders/relativity/$name.comp") ?: return null
 		val shader = GL20.glCreateShader(GL43.GL_COMPUTE_SHADER)
-		GL20.glShaderSource(shader, "#version 430 core\n$core\n$body")
+		val fields = net.kernelpanicsoft.relativity.client.lens.field.LensFields.include
+		GL20.glShaderSource(shader, "#version 430 core\n$core\n$fields\n$body")
 		GL20.glCompileShader(shader)
 		if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) {
 			CreateRelativity.LOGGER.error("Light table ({}): {}", name, GL20.glGetShaderInfoLog(shader))

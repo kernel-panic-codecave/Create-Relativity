@@ -8,6 +8,46 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 14) {
+        // The fields' exact image of p (a reference for the table): light marched through them (lensFieldReach) to p's
+        // distance, its direction refined by Gauss-Newton on where it lands, from the table's image (else straight): xyz
+        // the direction, w 1 if it lands within a hundredth of a block, else -1.
+        float r = length(p);
+        vec3 d = normalize(p);
+        vec3 seed;
+        if (relativityTableImage(p, seed)) d = seed;
+        vec3 e1 = normalize(cross(d, abs(d.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+        vec3 e2 = cross(d, e1);
+        float miss = 1e30;
+        for (int it = 0; it < 10 && miss > 1e-3; it += 1) {
+            vec3 at;
+            vec3 ax;
+            vec3 ay;
+            bool ok = lensFieldReach(d, r, at);
+            float h = 1e-4;
+            bool okx = lensFieldReach(normalize(d + e1 * h), r, ax);
+            bool oky = lensFieldReach(normalize(d + e2 * h), r, ay);
+            if (!ok || !okx || !oky) break;
+            vec3 res = at - p;
+            miss = length(res);
+            vec3 ja = (ax - at) / h;
+            vec3 jb = (ay - at) / h;
+            float aa = dot(ja, ja);
+            float ab = dot(ja, jb);
+            float bb = dot(jb, jb);
+            float det = aa * bb - ab * ab;
+            if (abs(det) < 1e-20) break;
+            float ra = -dot(ja, res);
+            float rb = -dot(jb, res);
+            float da = clamp((bb * ra - ab * rb) / det, -0.2, 0.2);
+            float db = clamp((aa * rb - ab * ra) / det, -0.2, 0.2);
+            d = normalize(d + e1 * da + e2 * db);
+            e1 = normalize(cross(d, abs(d.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+            e2 = cross(d, e1);
+        }
+        Result = vec4(d, miss < 0.01 ? 1.0 : -1.0);
+        return;
+    }
     if (Direct == 12) {
         // The fields' force on light at p (lensFieldForce: their gradients in closed form) for a set momentum, against
         // H's differences: xyz the closed form's, w how far apart they are.

@@ -18,5 +18,9 @@ object RelativityRegistries : RegistrarHelper(CreateRelativity.MOD_ID) {
 
 /** This mod's own field source types. */
 object RelativityLensFields : RegistryHelper<LensFieldType>(DeferredRegister.create(CreateRelativity.MOD_ID, RelativityRegistries.LENS_FIELD_TYPE_KEY)) {
+	val HOLE by register("hole") { HoleField }
+	val MASS by register("mass") { MassField }
 	val TUBE by register("tube") { TubeField }
+	val WARP_TUBE by register("warp_tube") { WarpTubeField }
+	val BUBBLE by register("bubble") { BubbleField }
 }
