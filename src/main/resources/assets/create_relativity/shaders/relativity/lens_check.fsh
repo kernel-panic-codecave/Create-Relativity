@@ -22,7 +22,7 @@ void main() {
             int k = int(clamp(floor(sh), 0.0, float(relativityTableShells() - 2)));
             walled = relativityTableRead(uv, 2 * k + 1).w > 0.0 || relativityTableRead(uv, 2 * k + 3).w > 0.0;
         }
-        // (TEMP: traced only where the table fails, from its search's nearest uv.)
+        // (Traced only where the table fails, from its search's nearest uv.)
         if (found) { Result = vec4(seen, 1.0); return; }
         seen = relativityTableDirection(relativityTableWhy.zw);
         bool ok = lensFieldRefine(p, seen, 3, 0.5 * RelativityLensData[11].x * r);

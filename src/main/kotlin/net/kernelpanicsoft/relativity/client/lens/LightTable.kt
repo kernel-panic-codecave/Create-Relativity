@@ -180,14 +180,6 @@ object LightTable {
 	 * Reads last frame's slot signatures (copied into a buffer then) and copies this frame's: so which slots are in use is
 	 * known a frame late, without waiting on the GPU.
 	 */
-	/** TEMP debug: the counts texture's 256 entries (blocking). */
-	fun debugCounts(): IntArray {
-		val out = IntArray(256)
-		GL11.glBindTexture(GL11.GL_TEXTURE_2D, counts)
-		GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, out)
-		GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0)
-		return out
-	}
 
 	/**
 	 * The last build's detail (blocking; for tests): slots taken (beyond [DETAIL_SLOTS] counted too), then blocks marked

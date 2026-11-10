@@ -1530,10 +1530,7 @@ class LensClientGameTest {
 				val fromTable = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tableImage = true) } }
 				// (Marched: against the fields' own exact images, not the thin walls' aim.)
 				val reference = if (march) atLength { floor.chunked(256).flatMap { LensCheck.run(it, VertexLens.lastProjection, fieldImage = true) } } else exact
-				// TEMP: why the table misses, and its far-off answers' distance from the camera.
 				if (march) {
-					val whys = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, table = true) } }
-					val missed = floor.indices.filter { reference[it][3] > 0f && fromTable[it][3] <= 0f }
 					// The fields' lens: the table finished by tracing where it fails or by a wall; what that costs.
 					val pixelAngle = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
 					fun timed(run: () -> List<FloatArray>): Pair<Double, List<FloatArray>> = atLength<Pair<Double, List<FloatArray>>> { _ ->
@@ -1589,18 +1586,6 @@ class LensClientGameTest {
 					}
 					runOnClient { net.kernelpanicsoft.relativity.lens.TubeField.lensSharpness = 8.0 }
 					waitTicks(20)
-					val c = computeOnClient { LightTable.debugCounts() }
-					CreateRelativity.LOGGER.info("TEMP rays: complete {}, absorbed {}, out of steps {}, past far {}, other {}; rough {}; most steps of a short one {}", c[254], c[250], c[251], c[252], c[253], c[249], c[248])
-					CreateRelativity.LOGGER.info("TEMP table misses by why: {}", missed.groupingBy { whys[it][0].toInt() }.eachCount().toSortedMap())
-					CreateRelativity.LOGGER.info("TEMP table misses by distance: {}", missed.groupingBy { kotlin.math.sqrt(floor[it].let { f -> f[0] * f[0] + f[1] * f[1] + f[2] * f[2] }).toInt() / 10 * 10 }.eachCount().toSortedMap())
-					val px = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
-					val far = floor.indices.filter { reference[it][3] > 0f && fromTable[it][3] > 0f }.map { i ->
-						val e = reference[i]; val t = fromTable[i]
-						val c = (e[0] * t[0] + e[1] * t[1] + e[2] * t[2]) / (kotlin.math.sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kotlin.math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]))
-						i to kotlin.math.acos(c.coerceIn(-1f, 1f).toDouble()) / px
-					}.filter { it.second > 20.0 }
-					CreateRelativity.LOGGER.info("TEMP table far-off ({}) by distance: {}", far.size, far.groupingBy { kotlin.math.sqrt(floor[it.first].let { f -> f[0] * f[0] + f[1] * f[1] + f[2] * f[2] }).toInt() / 10 * 10 }.eachCount().toSortedMap())
-					CreateRelativity.LOGGER.info("TEMP table far-off samples: {}", far.take(8).map { (i, off) -> "${floor[i].toList()} straight ${"%.3f".format(1f)} ref ${reference[i].toList()} table ${fromTable[i].toList()} ${"%.0f".format(off)}px" })
 				}
 				val pixel = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
 				val offs = reference.zip(fromTable).filter { (e, t) -> e[3] > 0f && t[3] > 0f }.map { (e, t) ->

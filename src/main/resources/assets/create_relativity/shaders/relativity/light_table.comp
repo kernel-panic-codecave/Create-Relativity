@@ -133,14 +133,13 @@ void fieldMarch(ivec2 texel, int shells) {
     vec3 w = d;
     float h = FIELD_MIN_STEP;
     int i = 0;
-    bool rough = false;
     // (Whether it has been through a wall's band yet: there the table is coarse, and the lens finishes by tracing.)
     bool walled = false;
     for (i = 0; i < FIELD_LIMIT && k < shells; i += 1) {
         vec3 a = x;
         // (As far as the field lets it, and no farther than the farthest sphere.)
         if (s.safe <= FIELD_MIN_STEP) walled = true;
-        if (!lensFieldAdvanceAdaptive(x, p, s, h, FIELD_MIN_STEP, far, FIELD_TOLERANCE)) rough = true;
+        lensFieldAdvanceAdaptive(x, p, s, h, FIELD_MIN_STEP, far, FIELD_TOLERANCE);
         if (s.absorbed) break;
         vec3 next = x;
         w = normalize(next - a);
@@ -161,14 +160,6 @@ void fieldMarch(ivec2 texel, int shells) {
         }
         if (length(x) > far * 1.01) break;
     }
-    // TEMP: why rays stop short (Counts 249..254).
-    if (rough) relativityCount(ivec2(249, 0), 1u);
-    if (k >= shells) relativityCount(ivec2(254, 0), 1u);
-    else if (s.absorbed) relativityCount(ivec2(250, 0), 1u);
-    else if (i >= FIELD_LIMIT) relativityCount(ivec2(251, 0), 1u);
-    else if (length(x) > far * 1.01) relativityCount(ivec2(252, 0), 1u);
-    else relativityCount(ivec2(253, 0), 1u);
-    if (k < shells) imageAtomicMax(Counts, ivec2(248, 0), uint(i));
     for (int rest = k; rest < shells; rest += 1) {
         relativityStore(texel, 2 * rest, vec4(0.0));
         relativityStore(texel, 2 * rest + 1, vec4(0.0));

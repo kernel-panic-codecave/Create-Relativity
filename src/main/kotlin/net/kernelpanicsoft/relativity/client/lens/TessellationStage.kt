@@ -8,14 +8,15 @@ import org.lwjgl.opengl.GL40
 /**
  * The tessellation stage: a lensed program's triangles split on the GPU as finely as the lens bends them, so there are
  * always enough vertices for the curve of their images, wherever the lens is and however it moves (no meshes rebuilt).
- * Added round the linked program's own vertex and fragment shaders as the image stage ([ImageStage]) is (whatever made
- * them: vanilla, Veil's injections, other mods'): the vertex shader's copy leaves gl_Position unbent (its outputs
- * renamed into the patch); the control stage (shaders/stages/lens.tcsh) splits each edge by how far the lens bends its
- * midpoint's image off straight; the evaluation stage (lens.tesh) interpolates every output, bends each new vertex and
- * adds the image stage's per-vertex part (image_vertex.glsl), its geometry stage after, unchanged. Drawn as patches
+ * Part of a lens twin ([LensTwins], [ImageStage]) for render types drawn as plain triangles (quads and lines are): the
+ * vertex shader's copy leaves gl_Position unbent and passes its bent one beside it (vertex_tess_tail.glsl); the control
+ * stage (shaders/stages/lens.tcsh) splits each edge by how far the lens bends its midpoint's image off straight, each
+ * invocation measuring its own edge; the evaluation stage (lens.tesh) interpolates every output, bends each new vertex
+ * and adds the image stage's per-vertex part (lens_stage_vertex.glsl), its geometry stage after. Drawn as patches
  * ([patches]: GlStateManager).
  *
- * Terrain programs only so far ([TARGETS]: always drawn as triangles); on with -Drelativity.tessellation=true.
+ * Off unless -Drelativity.tessellation=true (to be on by default once its second images are right: see the busy view in
+ * groundAroundHole).
  */
 object TessellationStage {
 	@JvmField
@@ -24,17 +25,12 @@ object TessellationStage {
 	/** Whether the stage splits the terrain (vanilla's: not with Sodium, whose chunk programs it doesn't take yet): QuadSubdivision's off. */
 	val splitsTerrain: Boolean by lazy { enabled && !net.neoforged.fml.ModList.get().isLoaded("sodium") }
 
-	/** The programs tessellated (by their ShaderInstance names). */
-	private val TARGETS = setOf("rendertype_solid", "rendertype_cutout", "rendertype_cutout_mipped", "rendertype_translucent")
-
 	/** Programs given the stage: drawn as patches. */
 	private val tessellated = HashSet<Int>()
 
 	/** The program in use (GlStateManager._glUseProgram). */
 	@JvmField
 	var current = 0
-
-	fun wanted(name: String): Boolean = enabled && name.substringAfterLast('/').substringAfterLast(':') in TARGETS
 
 	/** Whether triangles drawn now must go as patches; sets the patch size if so. */
 	@JvmStatic
@@ -75,7 +71,7 @@ object TessellationStage {
 	 * types' rules), 2 the per-vertex second images not looked for, 4 the geometry stage's copies not drawn.
 	 */
 	@JvmField
-	var skip = 0
+	var skip = System.getProperty("relativity.tessellationSkip", "0").toInt()
 
 	/** Debug: the most pieces an edge's split into (the lens block's [11].w), 0 the control stage's own. */
 	@JvmField

@@ -17,6 +17,8 @@ out vec4 relativityCBent[];
 // Each corner's images in the table's slots (vertex_tess_tail.glsl), passed on.
 in vec4 relativityVSlotsA[];
 in vec4 relativityVSlotsB[];
+// Each corner's second image by the chain (vertex_tess_tail.glsl).
+in vec4 relativityVSecond[];
 out vec4 relativityCSlotsA[];
 out vec4 relativityCSlotsB[];
 // Each invocation's edge's pieces and bend (pixels): the one opposite its corner.
@@ -92,6 +94,13 @@ void main() {
         }
         // (And each field type's extremes, where three points can't follow the bend: lensFieldPieces.)
         pieces = max(pieces, lensFieldPieces(va, vb));
+        // (And its second image, where both ends have one: cut into pieces no longer than RELATIVITY_TESS_SPAN pixels.
+        // By the shadow's edge an edge's second image is stretched round the ring far past its primary's, and a long
+        // straight piece of it is a chord across the shadow.)
+        if (relativityVSecond[a].w > 0.5 && relativityVSecond[b].w > 0.5) {
+            float arc = acos(clamp(dot(relativityVSecond[a].xyz, relativityVSecond[b].xyz), -1.0, 1.0));
+            pieces = max(pieces, ceil(arc / RelativityLensData[11].x / RELATIVITY_TESS_SPAN));
+        }
         pieces = min(pieces, RELATIVITY_TESS_MOST);
         // (A debug cap: the block's [11].w, 0 none.)
         if (RelativityLensData[11].w > 0.5) pieces = min(pieces, RelativityLensData[11].w);

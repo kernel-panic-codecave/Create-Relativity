@@ -84,9 +84,10 @@ bool relativityStageApart3(vec3 a, vec3 b, vec3 c, vec4 hole) {
 // Whether the line of sight through a hole's centre crosses the triangle (corners a, b, c, view space, unbent) behind
 // the hole: its image a ring round the shadow (the Einstein ring), which no triangle can be; its corners' images on
 // every side of the ring, the straight triangle between them over the shadow.
-bool relativityStageRinged(vec3 a, vec3 b, vec3 c, vec4 hole) {
-    float far = length(hole.xyz);
-    vec3 h = hole.xyz / far;
+// Whether the line from the camera along unit direction h crosses the triangle (corners a, b, c, view space) farther
+// than `beyond`.
+bool relativityStageCrossed(vec3 a, vec3 b, vec3 c, vec3 h, float beyond) {
+    float far = beyond;
     vec3 e1 = b - a;
     vec3 e2 = c - a;
     vec3 q = cross(h, e2);
@@ -97,6 +98,10 @@ bool relativityStageRinged(vec3 a, vec3 b, vec3 c, vec4 hole) {
     float v = dot(h, r) / det;
     if (u < 0.0 || v < 0.0 || u + v > 1.0) return false;
     return dot(e2, r) / det > far;
+}
+
+bool relativityStageRinged(vec3 a, vec3 b, vec3 c, vec4 hole) {
+    return relativityStageCrossed(a, b, c, normalize(hole.xyz), length(hole.xyz));
 }
 
 // Whether view-space point p lies beyond a hole along the line of sight to it.
@@ -140,6 +145,8 @@ void main() {
     // The second image by the chain (relativityStageS), where all three corners have one: behind the primaries along the
     // same ray (its light went the long way round), mirrored (a face whose front is seen comes out clockwise: drawn
     // counter-clockwise, culling keeping it), not across a ring.
+    // (Not one the line from the camera straight away from that hole crosses: the second images' own axis, their
+    // Einstein ring round it, every side of the ring at once, as a primary image's behind the hole.)
     // (All three round the same hole: corners whose light went round different ones have no image between them.)
     bool sameHole = distance(relativityStageG[0], relativityStageG[1]) < 1e-3 && distance(relativityStageG[0], relativityStageG[2]) < 1e-3;
     if (emitted < 1 && sameHole && relativityStageS[0].w > 0.5 && relativityStageS[1].w > 0.5 && relativityStageS[2].w > 0.5) {
@@ -152,7 +159,8 @@ void main() {
         vec4 qa = proj * vec4(pa, 1.0);
         vec4 qb = proj * vec4(pb, 1.0);
         vec4 qc = proj * vec4(pc, 1.0);
-        bool wraps = relativityStageG[0].w > 0.0 && relativityStageApart3(pa, pb, pc, relativityStageG[0]);
+        bool wraps = relativityStageG[0].w > 0.0 && (relativityStageApart3(pa, pb, pc, relativityStageG[0])
+            || relativityStageCrossed(relativityStageUnbent[0], relativityStageUnbent[1], relativityStageUnbent[2], -normalize(relativityStageG[0].xyz), 0.0));
         if (qa.w > 0.0 && qb.w > 0.0 && qc.w > 0.0 && !wraps) {
             vec2 ab = qb.xy / qb.w - qa.xy / qa.w;
             vec2 ac = qc.xy / qc.w - qa.xy / qa.w;

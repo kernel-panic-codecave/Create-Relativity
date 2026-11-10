@@ -7,6 +7,9 @@ out vec4 relativityVBent;
 // them (lens_stage_vertex.glsl), for the evaluation stage to start its new vertices' searches from.
 out vec4 relativityVSlotsA;
 out vec4 relativityVSlotsB;
+// Its second image by the chain of sources (as lens_stage_vertex.glsl finds it: xyz the view direction, w 1 found), for
+// the control stage to split edges by how long their second images are.
+out vec4 relativityVSecond;
 
 vec2 relativityVTailImage(vec3 p, int s) {
     vec3 seen;
@@ -26,10 +29,15 @@ void relativityStageTail() {
     relativityVBent = relativityLens(gl_Position, ProjMat);
     relativityVSlotsA = vec4(0.0);
     relativityVSlotsB = vec4(0.0);
+    relativityVSecond = vec4(0.0);
     vec4 view = inverse(ProjMat) * gl_Position;
     vec3 p = view.xyz / view.w;
     // (Not with sources and no walls: their second images come from the chain, per vertex, not the table.)
     bool chained = relativityFieldCount() > 0 && !relativityWalls();
+    if (chained && relativityLensed(ProjMat) && mod(RelativityLensData[8].x, 4.0) < 1.5 && relativityVTailNear(p)) {
+        vec3 seen;
+        if (relativityFieldImage(p, true, true, seen)) relativityVSecond = vec4(seen, 1.0);
+    }
     if (!chained && relativityLensed(ProjMat) && mod(RelativityLensData[8].x, 4.0) < 1.5 && relativityFieldComposed() && relativityTableOn() && relativityVTailNear(p)) {
         vec2 found[4];
         for (int s = 0; s < 4 + relativityRuntimeZero(); s += 1) found[s] = relativityVTailImage(p, s);
