@@ -15,12 +15,11 @@ import org.lwjgl.opengl.GL40
  * and adds the image stage's per-vertex part (lens_stage_vertex.glsl), its geometry stage after. Drawn as patches
  * ([patches]: GlStateManager).
  *
- * Off unless -Drelativity.tessellation=true (to be on by default once its second images are right: see the busy view in
- * groundAroundHole).
+ * On unless -Drelativity.tessellation=false.
  */
 object TessellationStage {
 	@JvmField
-	var enabled = System.getProperty("relativity.tessellation", "false").toBoolean()
+	var enabled = System.getProperty("relativity.tessellation", "true").toBoolean()
 
 	/** Whether the stage splits the terrain (vanilla's: not with Sodium, whose chunk programs it doesn't take yet): QuadSubdivision's off. */
 	val splitsTerrain: Boolean by lazy { enabled && !net.neoforged.fml.ModList.get().isLoaded("sodium") }

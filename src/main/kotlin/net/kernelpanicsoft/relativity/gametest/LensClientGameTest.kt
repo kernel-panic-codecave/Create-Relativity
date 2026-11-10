@@ -592,6 +592,81 @@ class LensClientGameTest {
 	 * the same images per pixel before, so the whole lens should barely change), and the frame rate either way.
 	 */
 	/**
+	 * The chain's second images (relativityFieldImage the long way round) against physics-core's tracer, round a lone
+	 * hole: for floor points round and behind the camera, where the true second images lie (their angle off the hole
+	 * against its shadow's) and which of them the shader finds, by that angle.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.secondImageProbe() {
+		if (!ClientTestInput.selected("secondImageProbe")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(8)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf("gamemode spectator @a", "time set noon", "gamerule doDaylightCycle false", "gamerule relativityBlackHoleGrowth false", "tick freeze")) command(command)
+			command("relativity bh clear")
+			command("relativity bh create 0.5 -54 0.5 2.0 0")
+			command("tp @a -14.5 -54 0.5 -90 5")
+			waitTicks(40)
+			settle()
+			val (eye, rotation) = computeOnClient { minecraft ->
+				val camera = minecraft.gameRenderer.mainCamera
+				camera.position to org.joml.Quaternionf(camera.rotation()).conjugate()
+			}
+			val eyeD = org.joml.Vector3d(eye.x, eye.y, eye.z)
+			val holeView = rotation.transform(org.joml.Vector3f((0.5 - eye.x).toFloat(), (-54.0 - eye.y).toFloat(), (0.5 - eye.z).toFloat()))
+			val reference = CpuLensReference(emptyList<net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource>(), eyeD, org.joml.Quaternionf(rotation).conjugate())
+			val c = reference.toPhysics(org.joml.Vector3d(0.5 - eye.x, -54.0 - eye.y, 0.5 - eye.z))
+			val truth = CpuLensReference(listOf(net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource(c[0], c[1], c[2], 1.0, 0.0)), eyeD, org.joml.Quaternionf(rotation).conjugate())
+			// Floor points round and behind the camera (y -60), within 24 blocks.
+			val points = ArrayList<FloatArray>()
+			for (x in -24..24 step 4) for (z in -24..24 step 4) {
+				val v = rotation.transform(org.joml.Vector3f((-14.5 + x - eye.x).toFloat(), (-60.0 - eye.y).toFloat(), (0.5 + z - eye.z).toFloat()))
+				points += floatArrayOf(v.x, v.y, v.z)
+			}
+			val gpu = computeOnClient { _ -> LensCheck.run(points, VertexLens.lastProjection, chainSecond = true) }
+			val pixel = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
+			val h = org.joml.Vector3f(holeView).normalize()
+			val u0 = 2.0 / holeView.length()
+			val shadow = kotlin.math.asin(kotlin.math.min(2.59807621 * u0 * kotlin.math.sqrt(1.0 - u0), 1.0))
+			fun off(d: FloatArray): Double {
+				val n = kotlin.math.sqrt((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).toDouble())
+				return kotlin.math.acos(((d[0] * h.x + d[1] * h.y + d[2] * h.z) / n).coerceIn(-1.0, 1.0)) / shadow
+			}
+			// Seeds round the shadow's edge on the side opposite each point (where a second image lies), a little out.
+			val rows = points.indices.toList().parallelStream().map { i ->
+				val p = points[i]
+				val side = org.joml.Vector3f(p[0], p[1], p[2]).sub(org.joml.Vector3f(h).mul(org.joml.Vector3f(p[0], p[1], p[2]).dot(h))).normalize().negate()
+				val seeds = listOf(1.01, 1.05, 1.2, 1.5).map { k ->
+					val a = shadow * k
+					org.joml.Vector3f(h).mul(kotlin.math.cos(a).toFloat()).add(org.joml.Vector3f(side).mul(kotlin.math.sin(a).toFloat())).let { floatArrayOf(it.x, it.y, it.z) }
+				} + listOfNotNull(gpu[i].takeIf { it[3] > 0f })
+				// (A second image: off the straight direction's side of the hole.)
+				val images = truth.images(p, seeds, pixel).filter { d -> (d[0] * p[0] + d[1] * p[1] + d[2] * p[2]) < 0.999f * kotlin.math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) * kotlin.math.sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) && off(d) < 3.0 }
+				i to images.minByOrNull { off(it) }
+			}.toList()
+			val bins = listOf(1.02, 1.05, 1.1, 1.2, 1.5, 3.0)
+			for ((k, top) in bins.withIndex()) {
+				val bottom = if (k == 0) 0.0 else bins[k - 1]
+				val inBin = rows.filter { (_, t) -> t != null && off(t) >= bottom && off(t) < top }
+				val found = inBin.count { (i, _) -> gpu[i][3] > 0f }
+				val near = inBin.filter { (i, _) -> gpu[i][3] > 0f }.map { (i, t) ->
+					val g = gpu[i]; val n = kotlin.math.sqrt((g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).toDouble()) * kotlin.math.sqrt((t!![0] * t[0] + t[1] * t[1] + t[2] * t[2]).toDouble())
+					kotlin.math.acos(((g[0] * t[0] + g[1] * t[1] + g[2] * t[2]) / n).coerceIn(-1.0, 1.0)) / pixel
+				}.sorted()
+				CreateRelativity.LOGGER.info("Second image probe, true image at {}..{} x the shadow's angle: {} points, the chain finds {} (off the truth median {} px)",
+					"%.2f".format(bottom), "%.2f".format(top), inBin.size, found, "%.1f".format(near.getOrElse(near.size / 2) { Double.NaN }))
+			}
+			CreateRelativity.LOGGER.info("Second image probe: {} points, {} with a true second image, the chain finds {} ({} where the truth has none)",
+				points.size, rows.count { it.second != null }, gpu.count { it[3] > 0f }, rows.count { (i, t) -> t == null && gpu[i][3] > 0f })
+		}
+	}
+
+	/**
 	 * What tessellation costs (run with -Drelativity.tessellation=true): round a lone hole over a floor with blocks and
 	 * cubes about, looking at it, the frame rate, the level's GPU time and the triangles it makes (after every stage),
 	 * with edges split into at most 1, 4, 16 pieces and as many as the control stage asks.

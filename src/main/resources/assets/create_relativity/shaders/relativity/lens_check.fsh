@@ -2,12 +2,20 @@
 // one per output texel (LensCheck).
 uniform sampler2D Points; // view-space positions
 uniform mat4 Projection;
-uniform int Direct; // 0: the bend; 4: why a point is hidden; 7: the tubes' aim; 8: the field lens's sky; 9: its image; 10 the table's why; 11 its image
+uniform int Direct; // 16: the chain's second image; 0: the bend; 4: why a point is hidden; 7: the tubes' aim; 8: the field lens's sky; 9: its image; 10 the table's why; 11 its image
 
 out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 16) {
+        // p's second image by the chain of sources (relativityFieldImage the long way round): xyz where it's seen, w 1
+        // found, -1 not.
+        vec3 seen;
+        bool found = relativityFieldImage(p, true, true, seen);
+        Result = vec4(seen, found ? 1.0 : -1.0);
+        return;
+    }
     if (Direct == 15) {
         // The fields' lens's image of p: the table's, finished by tracing (lensFieldRefine) where it fails or its light
         // has been through a wall (the table's direction layer's w): xyz the direction, w 1 by the table alone, 2

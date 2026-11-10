@@ -29,7 +29,7 @@ object ImageStage {
 	 * slivers hugging the photon ring, left to the post pass.
 	 */
 	@JvmField
-	var reach = 20f
+	var reach = System.getProperty("relativity.imageReach", "20").toFloat()
 
 	/** Each program's shaders made here (to detach and delete when it's linked again). */
 	private val made = HashMap<Int, IntArray>()

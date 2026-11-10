@@ -51,6 +51,7 @@ loom {
             System.getProperty("relativity.tessellation")?.let { property("relativity.tessellation", it) }
             System.getProperty("relativity.tessellationTable")?.let { property("relativity.tessellationTable", it) }
             System.getProperty("relativity.tessellationSkip")?.let { property("relativity.tessellationSkip", it) }
+            System.getProperty("relativity.imageReach")?.let { property("relativity.imageReach", it) }
             property("archie.gametest", "true")
             property("archie.gametest.modid", modId)
             property("neoforge.enabledGameTestNamespaces", modId)

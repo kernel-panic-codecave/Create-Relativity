@@ -104,6 +104,18 @@ bool relativityStageRinged(vec3 a, vec3 b, vec3 c, vec4 hole) {
     return relativityStageCrossed(a, b, c, normalize(hole.xyz), length(hole.xyz));
 }
 
+// Whether view direction d lies in a hole's shadow (xyz its centre, w its r_s) as the camera sees it: within the critical
+// angle round it (past 90 degrees inside its photon sphere). No second image is there.
+bool relativityStageInShadow(vec3 d, vec4 hole) {
+    float rc = length(hole.xyz);
+    float u0 = hole.w / rc;
+    if (u0 >= 1.0) return true;
+    float critical = asin(min(2.59807621 * u0 * sqrt(1.0 - u0), 1.0));
+    float shadow = critical;
+    if (u0 > 2.0 / 3.0) shadow = 3.14159265 - critical;
+    return acos(clamp(dot(normalize(d), hole.xyz / rc), -1.0, 1.0)) < shadow;
+}
+
 // Whether view-space point p lies beyond a hole along the line of sight to it.
 bool relativityStageBehind(vec3 p, vec4 hole) {
     return dot(p, hole.xyz) > dot(hole.xyz, hole.xyz);
@@ -160,7 +172,11 @@ void main() {
         vec4 qb = proj * vec4(pb, 1.0);
         vec4 qc = proj * vec4(pc, 1.0);
         bool wraps = relativityStageG[0].w > 0.0 && (relativityStageApart3(pa, pb, pc, relativityStageG[0])
-            || relativityStageCrossed(relativityStageUnbent[0], relativityStageUnbent[1], relativityStageUnbent[2], -normalize(relativityStageG[0].xyz), 0.0));
+            || relativityStageCrossed(relativityStageUnbent[0], relativityStageUnbent[1], relativityStageUnbent[2], -normalize(relativityStageG[0].xyz), 0.0)
+            || relativityStageInShadow(pa, relativityStageG[0]) || relativityStageInShadow(pb, relativityStageG[0]) || relativityStageInShadow(pc, relativityStageG[0])
+            // (Nor one whose straight edges dip into it: corners on the ring just outside the shadow, a chord between them
+            // inside, its image an arc that isn't.)
+            || relativityStageInShadow(pa + pb, relativityStageG[0]) || relativityStageInShadow(pb + pc, relativityStageG[0]) || relativityStageInShadow(pc + pa, relativityStageG[0]));
         if (qa.w > 0.0 && qb.w > 0.0 && qc.w > 0.0 && !wraps) {
             vec2 ab = qb.xy / qb.w - qa.xy / qa.w;
             vec2 ac = qc.xy / qc.w - qa.xy / qa.w;

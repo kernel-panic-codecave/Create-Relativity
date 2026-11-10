@@ -16,8 +16,16 @@ import kotlin.math.sqrt
  * direction lands at the point's distance, from each seed given; every distinct image it converges to. Slow (a few
  * thousand traces a point): for a test's sample of points, in parallel.
  */
-class CpuLensReference(sources: List<FieldSource>, private val eye: Vector3dc, private val viewToWorld: Quaternionfc) {
-	private val metrics = sources.map { it.toPhysics(eye) }
+class CpuLensReference(private val metrics: List<net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource>, private val eye: Vector3dc, private val viewToWorld: Quaternionfc) {
+	constructor(sources: List<FieldSource>, eye: Vector3dc, viewToWorld: Quaternionfc, @Suppress("UNUSED_PARAMETER") fromSources: Boolean = true) :
+		this(sources.map { it.toPhysics(eye) }, eye, viewToWorld)
+
+	/** The camera's game-space offset [offset] in physics coordinates (for placing physics-core's sources by hand). */
+	fun toPhysics(offset: Vector3d): DoubleArray {
+		val out = DoubleArray(3)
+		GameFrame.toPhysics(offset, out)
+		return out
+	}
 
 	// (One spacetime and tracer a thread: ComposedSpacetime keeps scratch state.)
 	private val rays = ThreadLocal.withInitial { HamiltonianRay(ComposedSpacetime(metrics), rtol = 1e-8, atol = 1e-10) }
