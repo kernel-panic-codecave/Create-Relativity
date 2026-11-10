@@ -35,6 +35,16 @@ uniform usampler2DArray RelativityLightSeeds; // LightTable's inverse, per kept 
 uniform sampler2DArray RelativityLightTable; // LightTable: per view direction, where its light first crosses each sphere
                                              // round the camera (layer 2k: xyz, w 1 if it does) and its heading there
                                              // (2k + 1); layer 2 n: where it ends heading (w 1 out, 0 captured)
+uniform sampler2DArray RelativityLightDetail; // LightTable's detail atlas: blocks of the table's rays traced again
+                                               // RELATIVITY_TABLE_FINE times as finely where the table's too coarse
+uniform isampler2D RelativityLightTiles;       // LightTable's block map: per block of RELATIVITY_TABLE_TILE rays, its slot in
+                                               // the atlas, -1 none
+const int RELATIVITY_TABLE_TILE = 8;           // LightTable.TILE: rays a block's side
+const int RELATIVITY_TABLE_FINE = 3;           // LightTable.FINE: how many times as finely the atlas traces a block
+const int RELATIVITY_TABLE_APRON = 1;          // detail rays round a block's edge (so it filters across it)
+const int RELATIVITY_TABLE_STRIDE = 26;        // TILE * FINE + 2 * APRON: a slot's side in the atlas
+const int RELATIVITY_TABLE_SLOTS_X = 8;        // LightTable.SLOTS_X: slots a row of the atlas
+const int RELATIVITY_TABLE_DETAIL_SLOTS = 64;  // LightTable.DETAIL_SLOTS
 uniform sampler2D RelativityEscape; // SchwarzschildLens' escape table (BlackHoleLens's LUT): (sqrt u0, sqrt(psi / pi)) to
                                     // the escape angle and whether the light falls in; the field lens's holes
 // Whether this draw places vertices at their secondary images ([11].y bit 2).
@@ -681,6 +691,14 @@ bool relativityTableUv(vec3 d, out vec2 uv) {
 }
 
 vec4 relativityTableRead(vec2 uv, int layer) {
+    // (Where the block's traced finer, its detail: rays RELATIVITY_TABLE_FINE times as close, an apron of them round it.)
+    ivec2 tile = ivec2(floor(uv / float(RELATIVITY_TABLE_TILE)));
+    int slot = texelFetch(RelativityLightTiles, clamp(tile, ivec2(0), textureSize(RelativityLightTiles, 0) - 1), 0).r;
+    if (slot >= 0) {
+        vec2 local = (uv - vec2(tile * RELATIVITY_TABLE_TILE)) * float(RELATIVITY_TABLE_FINE) + float(RELATIVITY_TABLE_APRON);
+        ivec2 origin = ivec2(slot - (slot / RELATIVITY_TABLE_SLOTS_X) * RELATIVITY_TABLE_SLOTS_X, slot / RELATIVITY_TABLE_SLOTS_X) * RELATIVITY_TABLE_STRIDE;
+        return texture(RelativityLightDetail, vec3((vec2(origin) + local) / vec2(textureSize(RelativityLightDetail, 0).xy), float(layer)));
+    }
     return texture(RelativityLightTable, vec3(uv / relativityTableSize(), float(layer)));
 }
 
@@ -816,30 +834,34 @@ uint relativityTableSlotSignature(int slot) {
     return texelFetch(RelativityLightSeeds, ivec3(slot, 0, RELATIVITY_TABLE_SLOTS * relativityTableShells()), 0).r;
 }
 
-// Where the camera sees view-space point p by the table in this pass's signature: seeded from that signature's inverse
-// map (the quad of rays covering p's straight-line direction at its sphere, or a neighbour's), refined by Newton, kept
-// only if the image found has the signature.
-bool relativityTableImageIn(vec3 p, int slot, out vec3 seen) {
+// Where the camera sees view-space point p by the table in this pass's signature: seeded from `hint` (table position)
+// if it's given (x > 0: a neighbour's image, nearby), else from that signature's inverse map (the quad of rays covering
+// p's straight-line direction at its sphere, or a neighbour's), refined by Newton, kept only if the image found has the
+// signature.
+bool relativityTableImageInFrom(vec3 p, int slot, vec2 hint, out vec3 seen) {
     seen = normalize(p);
     uint signature = relativityTableSlotSignature(slot);
     if (signature == 0xFFFFFFFFu) return false;
-    int face = relativityTableFace(seen);
-    vec2 uv;
-    relativityTableCube(seen, face, uv);
-    float r = length(p);
-    float s = log(r / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
-    int k = int(clamp(floor(s + 0.5), 0.0, float(relativityTableShells() - 1)));
-    ivec2 cell = ivec2(uv);
-    uint best = 0xFFFFFFFFu;
-    for (int n = 0; n < 9; n += 1) {
-        ivec2 at = clamp(cell + ivec2(n % 3 - 1, n / 3 - 1), ivec2(0), ivec2(RELATIVITY_TABLE_CUBE - 1));
-        best = min(best, texelFetch(RelativityLightSeeds, ivec3(at.x + face * RELATIVITY_TABLE_CUBE, at.y, slot * relativityTableShells() + k), 0).r);
+    vec2 seed = hint;
+    if (hint.x <= 0.0) {
+        int face = relativityTableFace(seen);
+        vec2 uv;
+        relativityTableCube(seen, face, uv);
+        float r = length(p);
+        float s = log(r / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
+        int k = int(clamp(floor(s + 0.5), 0.0, float(relativityTableShells() - 1)));
+        ivec2 cell = ivec2(uv);
+        uint best = 0xFFFFFFFFu;
+        for (int n = 0; n < 9; n += 1) {
+            ivec2 at = clamp(cell + ivec2(n % 3 - 1, n / 3 - 1), ivec2(0), ivec2(RELATIVITY_TABLE_CUBE - 1));
+            best = min(best, texelFetch(RelativityLightSeeds, ivec3(at.x + face * RELATIVITY_TABLE_CUBE, at.y, slot * relativityTableShells() + k), 0).r);
+        }
+        relativityTableWhy = vec4(7.0, float(face), uv);
+        if (best == 0xFFFFFFFFu) return false;
+        int index = int(best & 0xFFFFFu);
+        int width = int(relativityTableSize().x);
+        seed = vec2(float(index % width), float(index / width)) + 1.0;
     }
-    relativityTableWhy = vec4(7.0, float(face), uv);
-    if (best == 0xFFFFFFFFu) return false;
-    int index = int(best & 0xFFFFFu);
-    int width = int(relativityTableSize().x);
-    vec2 seed = vec2(float(index % width), float(index / width)) + 1.0;
     if (!relativityTableImageFrom(p, relativityTableDirection(seed), seen)) return false;
     // An image of another signature close by the seed is this one across a false seam (light passing close to another
     // hole's axis: that hole's bit is noise there), kept, or the triangles across the seam are drawn in no pass. Far off,
@@ -850,6 +872,8 @@ bool relativityTableImageIn(vec3 p, int slot, out vec3 seen) {
     }
     return true;
 }
+
+bool relativityTableImageIn(vec3 p, int slot, out vec3 seen) { return relativityTableImageInFrom(p, slot, vec2(0.0), seen); }
 
 // The image of view-space point p in this pass's slot (relativityTableImageIn).
 bool relativityTableImage(vec3 p, out vec3 seen) { return relativityTableImageIn(p, relativityTableSlot(), seen); }
@@ -1754,8 +1778,8 @@ bool relativityTubeAim(vec3 target, out vec3 seen) {
     return bestMiss < 0.02 * max(distance, 1.0);
 }
 
-// Whether the field lens places the geometry: several sources, or any tube.
-bool relativityFieldComposed() { return relativityFieldCount() > 1 || relativityWalls() || (relativityFieldCount() == 1 && !relativityFieldHole(0)); }
+// Whether the field lens places the geometry: any source (a lone hole as any other), or any tube.
+bool relativityFieldComposed() { return relativityFieldCount() > 0 || relativityWalls(); }
 
 // Where the light leaving the camera along d ends (FieldLens.sky): false if it's captured. Tubes first: they're round the
 // camera, or near it (nothing farther lenses them).
@@ -1903,87 +1927,50 @@ vec4 relativityBend(vec4 clip, mat4 proj) {
     if (RelativityLensData[1].y > 0.5) return proj * vec4(p, 1.0);
     float d = length(p);
     vec3 hole = RelativityLensData[0].xyz;
-    float rc = length(hole);
-    // Several sources: composed along the light (the field lens), primary and secondary images alike. (Called from
-    // here alone: each call is inlined whole, and programs that never bend vertices drop it.)
-    if (relativityFieldComposed()) {
-        vec3 seen;
-        bool longWay = relativitySecond();
-        // (The light table where it's on, in this pass's signature: through the tubes after, as the field image takes them.)
-        bool found;
-        if (relativityTableOn()) {
-            // Tubes alone, the table walked through them: its image the tube aim's start (relativityTubeSeed), the aim
-            // after it from the point itself. Else the image through the other sources, then through the tubes.
-            vec3 aimAt = p;
-            vec3 image;
-            found = relativityTableImage(p, image);
-            if (relativityFieldCount() == 0) {
-                // ([122].w: start from it at all; off, the aim searches as without the table: debug, measured slower.)
-                relativityTubeSeeded = found && RelativityLensData[122].w > 0.5;
-                relativityTubeSeed = image;
-                found = true;
-            } else {
-                aimAt = image * d;
-            }
-            seen = normalize(aimAt);
-            if (found && relativityWalls()) {
-                vec3 through;
-                found = relativityTubeAim(aimAt, through);
-                seen = through;
-            }
-            relativityTubeSeeded = false;
-        } else {
-            found = relativityFieldImage(p, longWay, true, seen);
-        }
-        if (!found) {
-            vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
-            hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
-            return hidden;
-        }
-        // (A secondary image behind the primaries along the same ray: its light went the long way round.)
-        // (Not a ?: inside the constructor: Veil's GLSL processor writes that one back wrong.)
-        float depth = d;
-        if (longWay) depth += 4.0 * RelativityLensData[0].w;
-        return proj * vec4(seen * depth, 1.0);
-    }
-    if (relativitySecond()) {
-        // The secondary image at the length of the light's way round (at least the way via the hole), so the primary
-        // image of whatever is in front along the same ray wins the depth test. Every point drawn has one (out to the
-        // render distance: far ones are slivers by the photon ring, cheap to draw; measured ~2 ms for all of them).
-        float rp = length(p - hole);
-        vec3 seen;
-        if (relativityFarImage(p, seen) != 1) {
-            vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
-            hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
-            return hidden;
-        }
-        // (Plus the way round, ~2 r_s: for points by the axis behind the hole rc + rp is their straight distance too, the
-        // primary image's depth, and where the two overlap by the Einstein ring they fought: flickering as the camera moved.)
-        return proj * vec4(seen * (rc + rp + 2.0 * RelativityLensData[0].w), 1.0);
-    }
-    float nearness = smoothstep(RELATIVITY_NEAR * rc, RELATIVITY_NEAR_BLEND * rc, d);
+    // Composed along the light (the field lens), primary and secondary images alike: every source's a field (a lone hole
+    // too). (Called from here alone, each call inlined whole: so the chain once, below.)
     vec3 seen;
-    int image = 1;
-    if (nearness > 0.0) {
-        image = relativityFarImage(p, seen);
-        if (image == 2 && nearness >= 1.0) return clip;
-        if (image == 2) seen = normalize(p);
+    bool longWay = relativitySecond();
+    bool found = false;
+    // Each source's own exact image, chained along the light (relativityFieldImage: a hole's by its image tables, a
+    // mass's weak bend). The light table only where the chain can't serve: tubes or bubbles (their walls), or no sources
+    // but them; and not the long way round (the table holds light's first crossings outward from the camera, and the
+    // light that comes back round a hole, the player's own image by the photon sphere, passes the camera again, inward).
+    bool table = relativityTableOn() && !longWay && (relativityFieldCount() == 0 || relativityWalls());
+    if (!table) {
+        found = relativityFieldImage(p, longWay, true, seen);
+    } else {
+        // Tubes alone, the table walked through them: its image the tube aim's start (relativityTubeSeed), the aim after
+        // it from the point itself. Else the image through the other sources, then through the tubes.
+        vec3 aimAt = p;
+        vec3 image;
+        found = relativityTableImage(p, image);
+        if (relativityFieldCount() == 0) {
+            // ([122].w: start from it at all; off, the aim searches as without the table: debug, measured slower.)
+            relativityTubeSeeded = found && RelativityLensData[122].w > 0.5;
+            relativityTubeSeed = image;
+            found = true;
+        } else {
+            aimAt = image * d;
+        }
+        seen = normalize(aimAt);
+        if (found && relativityWalls()) {
+            vec3 through;
+            found = relativityTubeAim(aimAt, through);
+            seen = through;
+        }
+        relativityTubeSeeded = false;
     }
-    if (nearness < 1.0) {
-        vec3 near = relativityNearImage(p, hole, RelativityLensData[0].w);
-        // (The tables hiding a point this close is their coarseness, not a missing image.)
-        seen = image < 0 || nearness <= 0.0 ? near : normalize(mix(near, seen, nearness));
-        image = 1;
-    }
-    // No primary image, or near the axis: such a vertex gets a depth far past the far plane (toward the hole on
-    // screen), so a triangle reaching it passes the far plane within a hair of its other vertices: clipped there, or
-    // with depth clamping on, drawn at the far plane, which the post pass takes for sky and redraws.
-    if (image < 0) {
+    if (!found) {
         vec4 hidden = proj * vec4(normalize(hole) * d, 1.0);
         hidden.z = RELATIVITY_BEYOND * abs(hidden.w);
         return hidden;
     }
-    return proj * vec4(seen * d, 1.0);
+    // (A secondary image behind the primaries along the same ray: its light went the long way round.)
+    // (Not a ?: inside the constructor: Veil's GLSL processor writes that one back wrong.)
+    float depth = d;
+    if (longWay) depth += 4.0 * RelativityLensData[0].w;
+    return proj * vec4(seen * depth, 1.0);
 }
 
 // The lens for draws that may not use the level's projection (vanilla, Sodium, Flywheel: the hand, GUI items...).

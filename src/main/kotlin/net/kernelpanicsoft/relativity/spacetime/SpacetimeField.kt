@@ -6,7 +6,9 @@ import net.kernelpanicsoft.relativity.entity.RelativityEntities
 import net.kernelpanicsoft.relativity.physics.geodesic.CoordinateAcceleration
 import net.kernelpanicsoft.relativity.physics.geodesic.Geodesic
 import net.kernelpanicsoft.relativity.physics.spacetime.field.ComposedSpacetime
+import net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample
 import net.kernelpanicsoft.relativity.physics.spacetime.field.KerrSource
+import net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpEllipsoid
 import net.kernelpanicsoft.relativity.physics.spacetime.field.WarpTube
 import net.kernelpanicsoft.relativity.physics.weakfield.PostNewtonian
@@ -16,6 +18,10 @@ import org.joml.Vector3d
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent
 import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent
 import org.joml.Vector3dc
+import java.util.Collections
+import java.util.WeakHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.math.sqrt
 
 /**
  * The one place the rest of the mod asks what spacetime is doing at a point. Black holes are entities
@@ -24,10 +30,10 @@ import org.joml.Vector3dc
 object SpacetimeField {
 	/** Live black-hole entities per level (both sides), kept by entity join/leave events. */
 	// Both maps are shared by the client and server threads in singleplayer (each level's entry by only one of them).
-	private val index: MutableMap<Level, MutableSet<BlackHoleEntity>> = java.util.Collections.synchronizedMap(java.util.WeakHashMap())
+	private val index: MutableMap<Level, MutableSet<BlackHoleEntity>> = Collections.synchronizedMap(WeakHashMap())
 
 	/** Snapshots for the current tick, rebuilt when a tick passes or a hole is added, removed or changed. */
-	private val cache: MutableMap<Level, Pair<Long, List<BlackHole>>> = java.util.Collections.synchronizedMap(java.util.WeakHashMap())
+	private val cache: MutableMap<Level, Pair<Long, List<BlackHole>>> = Collections.synchronizedMap(WeakHashMap())
 	@Volatile private var generation = 0L
 
 	/**
@@ -88,7 +94,7 @@ object SpacetimeField {
 		return doomed.size
 	}
 
-	private val providers = java.util.concurrent.CopyOnWriteArrayList<FieldSource.Provider>()
+	private val providers: MutableList<FieldSource.Provider> = CopyOnWriteArrayList()
 
 	/** Adds a supplier of non-hole sources (gravity generators, warp drives, tests); [removeProvider] takes it away. */
 	fun addProvider(provider: FieldSource.Provider) {
@@ -147,8 +153,8 @@ object SpacetimeField {
 	}
 
 	private class Sources {
-		val holes = ArrayList<Pair<BlackHole, KerrSource>>()
-		val others = ArrayList<net.kernelpanicsoft.relativity.physics.spacetime.field.MetricSource>()
+		val holes: MutableList<Pair<BlackHole, KerrSource>> = ArrayList()
+		val others: MutableList<MetricSource> = ArrayList()
 		fun isEmpty() = holes.isEmpty() && others.isEmpty()
 		fun all() = holes.map { it.second } + others
 
@@ -172,7 +178,7 @@ object SpacetimeField {
 		val add = Vector3d()
 		GameFrame.toPhysics(Vector3d(velocity).div(c), v)
 		val weak = sources.others.isEmpty() && sources.holes.all { (hole, source) ->
-			kotlin.math.sqrt(source.cx * source.cx + source.cy * source.cy + source.cz * source.cz) > WEAK_FIELD_RADII * hole.schwarzschildRadius
+			sqrt(source.cx * source.cx + source.cy * source.cy + source.cz * source.cz) > WEAK_FIELD_RADII * hole.schwarzschildRadius
 		}
 		if (weak) {
 			for ((hole, source) in sources.holes) {
@@ -194,7 +200,7 @@ object SpacetimeField {
 		dest.zero()
 		val sources = sourcesAt(level, position, 0.0)
 		if (sources.isEmpty()) return dest
-		val sample = net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample()
+		val sample = FieldSample()
 		ComposedSpacetime(sources.all()).inverse(DoubleArray(4), sample)
 		val gtt = sample.value[0]
 		if (gtt >= 0.0) return dest
@@ -217,7 +223,7 @@ object SpacetimeField {
 		val sources = sourcesAt(level, position, 0.0)
 		if (sources.isEmpty()) {
 			val beta2 = minOf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2], 1.0)
-			return kotlin.math.sqrt(1.0 - beta2)
+			return sqrt(1.0 - beta2)
 		}
 		val spacetime = ComposedSpacetime(sources.all())
 		val rate = Geodesic.properTimeRate(spacetime, DoubleArray(4), v)
@@ -227,9 +233,9 @@ object SpacetimeField {
 		// ship's riders do, on the clock of the push's own observer: the lapse, 1 / sqrt(−g^tt) (1 for a warp push).
 		// (Not behind a horizon: there no clock runs.)
 		if (spacetime.captures(DoubleArray(4))) return 0.0
-		val sample = net.kernelpanicsoft.relativity.physics.spacetime.field.FieldSample()
+		val sample = FieldSample()
 		spacetime.inverse(DoubleArray(4), sample)
-		return if (sample.value[0] < 0.0) 1.0 / kotlin.math.sqrt(-sample.value[0]) else 0.0
+		return if (sample.value[0] < 0.0) 1.0 / sqrt(-sample.value[0]) else 0.0
 	}
 
 	/**

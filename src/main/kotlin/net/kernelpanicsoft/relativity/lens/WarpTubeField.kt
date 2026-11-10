@@ -10,7 +10,7 @@ import org.joml.Vector3dc
  * inside its soft wall, the nearest [MAX_TUBES]; spines with too many points for [MAX_POINTS] thinned evenly (their
  * ends kept).
  *
- * Its share: [0] x tubes, y points; [1 + j] tube j's x radius, y first point, z points, w speed; [1 + MAX_TUBES + i]
+ * Its share: [0] x tubes, y points, w a pixel's angle; [1 + j] tube j's x radius, y first point, z points, w speed; [1 + MAX_TUBES + i]
  * point i: xyz view space. Each spine reversed (light followed arriving: the push runs the other way).
  */
 object WarpTubeField : LensFieldType {
@@ -28,7 +28,7 @@ object WarpTubeField : LensFieldType {
 			.take(MAX_TUBES)
 		val share = maxOf(2, MAX_POINTS / maxOf(tubes.size, 1))
 		val spines = tubes.map { thin(it.spine, share).asReversed() }
-		out.put(spines.size.toFloat(), spines.sumOf { it.size }.toFloat(), 0f, 0f)
+		out.put(spines.size.toFloat(), spines.sumOf { it.size }.toFloat(), 0f, frame.pixel.toFloat())
 		var first = 0
 		for ((j, spine) in spines.withIndex()) {
 			out.put(tubes[j].radius.toFloat(), first.toFloat(), spine.size.toFloat(), tubes[j].speed.toFloat())

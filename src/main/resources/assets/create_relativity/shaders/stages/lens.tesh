@@ -1,0 +1,76 @@
+#version 430 core
+// The tessellation stage's evaluation shader (TessellationStage): each new vertex's varyings interpolated across the
+// patch at each new vertex's weights (flat and integer ones the first corner's), its position bent by the vertex lens, then the image stage's
+// per-vertex part (lens_stage_vertex.glsl), out under the names the geometry stage reads. Filled in per program:
+// //@varyings the varyings in and out, //@interpolate each interpolated. Run through Veil's shader processing as
+// create_relativity:shaders/stages/lens.tesh: the lens core and the per-vertex part are included by LensStageProcessor.
+uniform mat4 ProjMat;
+layout(triangles, equal_spacing, ccw) in;
+//@varyings
+patch in float relativityTessBendPixels;
+in vec4 relativityCBent[];
+in vec4 relativityCSlotsA[];
+in vec4 relativityCSlotsB[];
+out vec3 relativityStageUnbent;
+out vec3 relativityStageBent;
+flat out float relativityStageChecked;
+//@table
+
+// Corner i's image in slot s (table position; 0 none).
+vec2 relativityTessSlot(int i, int s) {
+    vec4 slots = relativityCSlotsA[i];
+    if (s >= 2) slots = relativityCSlotsB[i];
+    if (s % 2 == 0) return slots.xy;
+    return slots.zw;
+}
+
+vec3 relativityTessView(vec4 clip) {
+    vec4 view = inverse(ProjMat) * clip;
+    return view.xyz / view.w;
+}
+
+// The new vertex at clip (unbent; w its weights) bent: a corner as the vertex shader bent it; else, with
+// RELATIVITY_TESS_TABLE, by the light table where it has an image (a lookup, not a search) and that image is near where
+// the corners' exact images put it (their blend by w, within RELATIVITY_TESS_GUARD pixels and twice the patch's bend: a
+// farther one is the table's interpolation gone wrong, or another image); else by the vertex lens.
+const float RELATIVITY_TESS_GUARD = 4.0;
+
+vec4 relativityTessBend(vec4 clip, vec3 w) {
+    if (w.x > 0.99999) return relativityCBent[0];
+    if (w.y > 0.99999) return relativityCBent[1];
+    if (w.z > 0.99999) return relativityCBent[2];
+    if (RELATIVITY_TESS_TABLE && relativityTableOn()) {
+        vec3 p = relativityTessView(clip);
+        vec3 seen;
+        if (relativityTableImage(p, seen)) {
+            vec3 expected = normalize(w.x * normalize(relativityTessView(relativityCBent[0])) + w.y * normalize(relativityTessView(relativityCBent[1])) + w.z * normalize(relativityTessView(relativityCBent[2])));
+            float off = acos(clamp(dot(normalize(seen), expected), -1.0, 1.0)) / RelativityLensData[11].x;
+            if (off < RELATIVITY_TESS_GUARD + 2.0 * relativityTessBendPixels) return ProjMat * vec4(seen * length(p), 1.0);
+        }
+    }
+    return relativityLens(clip, ProjMat);
+}
+
+void main() {
+    vec3 relativityTessW = gl_TessCoord;
+//@interpolate
+    vec4 relativityTessClip = relativityTessW.x * gl_in[0].gl_Position + relativityTessW.y * gl_in[1].gl_Position + relativityTessW.z * gl_in[2].gl_Position;
+    gl_Position = relativityTessBend(relativityTessClip, relativityTessW);
+    vec4 relativityTessBefore = inverse(ProjMat) * relativityTessClip;
+    relativityStageUnbent = relativityTessBefore.xyz / relativityTessBefore.w;
+    vec4 relativityTessAfter = inverse(ProjMat) * gl_Position;
+    relativityStageBent = relativityTessAfter.xyz / relativityTessAfter.w;
+    relativityStageChecked = 0.0;
+    if (relativityLensed(ProjMat)) relativityStageChecked = 1.0;
+    // (Each slot's search started from its corners' images blended, where all three have one there; not made at all
+    // where none has (x -1): inside a triangle with no image in the slot at its corners there's none either.)
+    for (int s = 0; s < 4; s += 1) {
+        vec2 c0 = relativityTessSlot(0, s);
+        vec2 c1 = relativityTessSlot(1, s);
+        vec2 c2 = relativityTessSlot(2, s);
+        relativityStageSeed[s] = vec2(0.0);
+        if (c0.x <= 0.0 && c1.x <= 0.0 && c2.x <= 0.0) relativityStageSeed[s] = vec2(-1.0);
+        if (c0.x > 0.0 && c1.x > 0.0 && c2.x > 0.0) relativityStageSeed[s] = relativityTessW.x * c0 + relativityTessW.y * c1 + relativityTessW.z * c2;
+    }
+    relativityStageVertex(relativityStageUnbent, relativityStageBent, relativityStageChecked);
+}

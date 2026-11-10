@@ -535,7 +535,7 @@ class LensClientGameTest {
 
 	/**
 	 * The back of your own head: the camera just outside a hole's photon sphere, looking along the circular orbit, sees
-	 * light that left its own body and went round the hole (the player's secondary image, VertexLens.drawSelfSecondImage).
+	 * light that left its own body and went round the hole (the player's own image round the hole, VertexLens.drawSelfImage).
 	 * Screenshots with it and without; how much of the picture it changes.
 	 */
 	@ClientGameTest
@@ -591,6 +591,61 @@ class LensClientGameTest {
 	 * lens alone and of the whole lens with them on and off, how much of the picture they change (the post pass traced
 	 * the same images per pixel before, so the whole lens should barely change), and the frame rate either way.
 	 */
+	/**
+	 * What tessellation costs (run with -Drelativity.tessellation=true): round a lone hole over a floor with blocks and
+	 * cubes about, looking at it, the frame rate, the level's GPU time and the triangles it makes (after every stage),
+	 * with edges split into at most 1, 4, 16 pieces and as many as the control stage asks.
+	 */
+	@ClientGameTest
+	fun ClientGameTestContext.tessellationCost() {
+		if (!ClientTestInput.selected("tessellationCost")) return
+		runOnClient { minecraft ->
+			minecraft.options.renderDistance().set(12)
+			minecraft.options.hideGui = true
+			SpacetimeDebugRenderer.hidden = true
+			minecraft.options.bobView().set(false)
+			minecraft.options.enableVsync().set(false)
+			minecraft.window.updateVsync(false)
+			minecraft.options.framerateLimit().set(260)
+		}
+		withTestWorld {
+			waitTicks(60)
+			for (command in listOf(
+				"gamemode spectator @a", "difficulty peaceful", "gamerule doMobSpawning false", "kill @e[type=!player]",
+				"time set noon", "gamerule doDaylightCycle false", "gamerule doWeatherCycle false", "weather clear",
+				"gamerule relativityBlackHoleGrowth false",
+			)) command(command)
+			server.runOnServer { minecraft ->
+				val level = minecraft.overworld()
+				val random = java.util.Random(11)
+				val colours = listOf(Blocks.WHITE_CONCRETE, Blocks.BLUE_CONCRETE, Blocks.RED_CONCRETE)
+				for (x in -48..48) for (z in -48..48) for (y in -60..-30) {
+					if ((x * x + (y + 54) * (y + 54) + z * z) < 400 || random.nextFloat() > 0.03f) continue
+					level.setBlock(BlockPos(x, y, z), colours[random.nextInt(3)].defaultBlockState(), 2)
+				}
+			}
+			command("tick freeze")
+			command("relativity bh clear")
+			command("relativity bh create 0.5 -54 0.5 2.0 0")
+			command("tp @a -14.5 -54 0.5 -90 5")
+			runOnClient { it.player?.deltaMovement = net.minecraft.world.phys.Vec3.ZERO; VertexLens.timeLevel = true; VertexLens.countLevel = true }
+			waitTicks(40)
+			settle()
+			for ((most, skip) in listOf(1f to 0, 0f to 0, 1f to 7)) {
+				runOnClient { net.kernelpanicsoft.relativity.client.lens.TessellationStage.most = most; net.kernelpanicsoft.relativity.client.lens.TessellationStage.skip = skip }
+				waitTicks(10)
+				val samples = (0 until 3).map {
+					waitTicks(10)
+					computeOnClient { Triple(it.fps.toDouble(), VertexLens.levelTimer.millis, VertexLens.levelCounter.count.toDouble()) }
+				}
+				CreateRelativity.LOGGER.info("Tessellation cost, edges in at most {} pieces, skipping {}: {} fps, level {} ms on the GPU, {} triangles",
+					if (most == 0f) "64 (its own)" else "%.0f".format(most), listOfNotNull("midpoints".takeIf { skip and 1 != 0 }, "image search".takeIf { skip and 2 != 0 }, "copies".takeIf { skip and 4 != 0 }).ifEmpty { listOf("nothing") }.joinToString(" + "), "%.0f".format(samples.map { it.first }.average()),
+					"%.1f".format(samples.map { it.second }.average()), "%.0f".format(samples.map { it.third }.average()))
+			}
+			runOnClient { net.kernelpanicsoft.relativity.client.lens.TessellationStage.most = 0f; net.kernelpanicsoft.relativity.client.lens.TessellationStage.skip = 0; VertexLens.timeLevel = false; VertexLens.countLevel = false }
+		}
+	}
+
 	@ClientGameTest
 	fun ClientGameTestContext.secondImages() {
 		if (!ClientTestInput.selected("secondImages")) return
@@ -703,6 +758,7 @@ class LensClientGameTest {
 			CreateRelativity.LOGGER.info("Second images, spin {}: they change {}% of the vertex lens's picture and {}% of the whole lens's; {} fps with them, {} without", spin,
 				"%.2f".format(100 * changed(shots["vertex_false"]!!, shots["vertex_true"]!!)), "%.2f".format(100 * changed(shots["lens_false"]!!, shots["lens_true"]!!)),
 				"%.0f".format(rates[true]), "%.0f".format(rates[false]))
+			CreateRelativity.LOGGER.info("Second images, spin {}: the light table's detail: {}", spin, computeOnClient { net.kernelpanicsoft.relativity.client.lens.LightTable.detailBlocks() })
 			}
 			runOnClient { VertexLens.secondImages = true }
 		}
@@ -1267,6 +1323,7 @@ class LensClientGameTest {
 			repeat(3) { settleClient("Lens fields, world") }
 			command("gamemode spectator @a")
 			command("tp @a -10.5 -50 -12.5 0 20")
+			runOnClient { VertexLens.fields = true }
 			SpacetimeField.addProvider(provider)
 			try {
 				waitTicks(20)
@@ -1350,6 +1407,7 @@ class LensClientGameTest {
 					SpacetimeField.removeProvider(only)
 				}
 			}
+			runOnClient { VertexLens.fields = false }
 		}
 	}
 
@@ -1472,6 +1530,78 @@ class LensClientGameTest {
 				val fromTable = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tableImage = true) } }
 				// (Marched: against the fields' own exact images, not the thin walls' aim.)
 				val reference = if (march) atLength { floor.chunked(256).flatMap { LensCheck.run(it, VertexLens.lastProjection, fieldImage = true) } } else exact
+				// TEMP: why the table misses, and its far-off answers' distance from the camera.
+				if (march) {
+					val whys = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, table = true) } }
+					val missed = floor.indices.filter { reference[it][3] > 0f && fromTable[it][3] <= 0f }
+					// The fields' lens: the table finished by tracing where it fails or by a wall; what that costs.
+					val pixelAngle = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
+					fun timed(run: () -> List<FloatArray>): Pair<Double, List<FloatArray>> = atLength<Pair<Double, List<FloatArray>>> { _ ->
+						org.lwjgl.opengl.GL11.glFinish()
+						val start = System.nanoTime()
+						val out = run()
+						org.lwjgl.opengl.GL11.glFinish()
+						(System.nanoTime() - start) / 1e6 to out
+					}
+					val (tableMillis, _) = timed { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tableImage = true) } }
+					val (lensMillis, lens) = timed { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, fieldLens = true) } }
+					val lensOffs = reference.zip(lens).filter { (e, t) -> e[3] > 0f && t[3] > 0f }.map { (e, t) ->
+						val cos = (e[0] * t[0] + e[1] * t[1] + e[2] * t[2]) / (kotlin.math.sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kotlin.math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]))
+						kotlin.math.acos(cos.coerceIn(-1f, 1f).toDouble()) / pixelAngle
+					}.sorted()
+					CreateRelativity.LOGGER.info("Long tube fields' lens, above: table alone {} ms, finished by tracing {} ms ({} us a point); {} by the table, {} traced, {} not found; exact {} found, lens {} ({} both, {} by the exact alone, {} by the lens alone); off the exact (px) median {}, 90% {}, 99% {}, max {}",
+						"%.1f".format(tableMillis), "%.1f".format(lensMillis), "%.2f".format(lensMillis * 1000 / floor.size),
+						lens.count { it[3] in 0.5f..1.5f }, lens.count { it[3] > 1.5f }, lens.count { it[3] < 0f },
+						reference.count { it[3] > 0f }, lens.count { it[3] > 0f }, lensOffs.size,
+						reference.zip(lens).count { (e, t) -> e[3] > 0f && t[3] <= 0f }, reference.zip(lens).count { (e, t) -> e[3] <= 0f && t[3] > 0f },
+						"%.2f".format(lensOffs.getOrElse(lensOffs.size / 2) { Double.NaN }), "%.2f".format(lensOffs.getOrElse(lensOffs.size * 9 / 10) { Double.NaN }),
+						"%.2f".format(lensOffs.getOrElse(lensOffs.size * 99 / 100) { Double.NaN }), "%.2f".format(lensOffs.lastOrNull() ?: Double.NaN))
+					// Against physics-core's own tracer (CpuLensReference): a sample of the floor, every image the CPU finds from
+					// the straight line, the table's answer and the fields' exact one; the table's answer against the nearest.
+					val sample = floor.indices.filter { it % 73 == 0 }
+					val truth = CpuLensReference(listOf(tube), org.joml.Vector3d(eye.x, eye.y, eye.z), org.joml.Quaternionf(rotation).conjugate())
+					val started = System.nanoTime()
+					val truths = sample.parallelStream().map { i ->
+						truth.images(floor[i], listOf(fromTable[i], reference[i]).filter { it[3] > 0f }.map { floatArrayOf(it[0], it[1], it[2]) }, pixelAngle)
+					}.toList()
+					fun angle(a: FloatArray, b: FloatArray): Double {
+						val cos = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / (kotlin.math.sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]) * kotlin.math.sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]))
+						return kotlin.math.acos(cos.coerceIn(-1f, 1f).toDouble()) / pixelAngle
+					}
+					fun judge(label: String, answers: List<FloatArray>) {
+						val offs = sample.indices.filter { truths[it].isNotEmpty() && answers[sample[it]][3] > 0f }.map { k -> truths[k].minOf { t -> angle(t, answers[sample[k]]) } }.sorted()
+						CreateRelativity.LOGGER.info("CPU truth, {}: {} of {} sampled points have images ({} with several); {} found ({} where the CPU finds none), {} missed; off the nearest image (px) median {}, 90% {}, 99% {}, max {}",
+							label, truths.count { it.isNotEmpty() }, sample.size, truths.count { it.size > 1 },
+							offs.size, sample.indices.count { truths[it].isEmpty() && answers[sample[it]][3] > 0f }, sample.indices.count { truths[it].isNotEmpty() && answers[sample[it]][3] <= 0f },
+							"%.2f".format(offs.getOrElse(offs.size / 2) { Double.NaN }), "%.2f".format(offs.getOrElse(offs.size * 9 / 10) { Double.NaN }),
+							"%.2f".format(offs.getOrElse(offs.size * 99 / 100) { Double.NaN }), "%.2f".format(offs.lastOrNull() ?: Double.NaN))
+					}
+					CreateRelativity.LOGGER.info("CPU truth: {} points in {} s", sample.size, "%.1f".format((System.nanoTime() - started) / 1e9))
+					judge("table", fromTable)
+					judge("fields' exact (GPU)", reference)
+					judge("thin walls' aim", exact)
+					// The lens's walls softer than the physics' (TubeField.lensSharpness): the table's image against the physics'.
+					for (sharpness in listOf(4.0, 2.0)) {
+						runOnClient { net.kernelpanicsoft.relativity.lens.TubeField.lensSharpness = sharpness }
+						waitTicks(20)
+						val softer = atLength { floor.chunked(1024).flatMap { LensCheck.run(it, VertexLens.lastProjection, tableImage = true) } }
+						judge("table, walls' sharpness $sharpness", softer)
+					}
+					runOnClient { net.kernelpanicsoft.relativity.lens.TubeField.lensSharpness = 8.0 }
+					waitTicks(20)
+					val c = computeOnClient { LightTable.debugCounts() }
+					CreateRelativity.LOGGER.info("TEMP rays: complete {}, absorbed {}, out of steps {}, past far {}, other {}; rough {}; most steps of a short one {}", c[254], c[250], c[251], c[252], c[253], c[249], c[248])
+					CreateRelativity.LOGGER.info("TEMP table misses by why: {}", missed.groupingBy { whys[it][0].toInt() }.eachCount().toSortedMap())
+					CreateRelativity.LOGGER.info("TEMP table misses by distance: {}", missed.groupingBy { kotlin.math.sqrt(floor[it].let { f -> f[0] * f[0] + f[1] * f[1] + f[2] * f[2] }).toInt() / 10 * 10 }.eachCount().toSortedMap())
+					val px = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
+					val far = floor.indices.filter { reference[it][3] > 0f && fromTable[it][3] > 0f }.map { i ->
+						val e = reference[i]; val t = fromTable[i]
+						val c = (e[0] * t[0] + e[1] * t[1] + e[2] * t[2]) / (kotlin.math.sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kotlin.math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]))
+						i to kotlin.math.acos(c.coerceIn(-1f, 1f).toDouble()) / px
+					}.filter { it.second > 20.0 }
+					CreateRelativity.LOGGER.info("TEMP table far-off ({}) by distance: {}", far.size, far.groupingBy { kotlin.math.sqrt(floor[it.first].let { f -> f[0] * f[0] + f[1] * f[1] + f[2] * f[2] }).toInt() / 10 * 10 }.eachCount().toSortedMap())
+					CreateRelativity.LOGGER.info("TEMP table far-off samples: {}", far.take(8).map { (i, off) -> "${floor[i].toList()} straight ${"%.3f".format(1f)} ref ${reference[i].toList()} table ${fromTable[i].toList()} ${"%.0f".format(off)}px" })
+				}
 				val pixel = computeOnClient { minecraft -> 2.0 / (VertexLens.lastProjection.m11() * minecraft.window.height) }
 				val offs = reference.zip(fromTable).filter { (e, t) -> e[3] > 0f && t[3] > 0f }.map { (e, t) ->
 					val c = (e[0] * t[0] + e[1] * t[1] + e[2] * t[2]) / (kotlin.math.sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]) * kotlin.math.sqrt(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]))

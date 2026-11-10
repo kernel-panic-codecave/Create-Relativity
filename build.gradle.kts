@@ -48,6 +48,8 @@ loom {
             property("archie.gametest.side", "client")
             // (Lens switches passed on from Gradle's own: `./gradlew runGametestClient -Drelativity.imageStage=true`.)
             System.getProperty("relativity.imageStage")?.let { property("relativity.imageStage", it) }
+            System.getProperty("relativity.tessellation")?.let { property("relativity.tessellation", it) }
+            System.getProperty("relativity.tessellationTable")?.let { property("relativity.tessellationTable", it) }
             property("archie.gametest", "true")
             property("archie.gametest.modid", modId)
             property("neoforge.enabledGameTestNamespaces", modId)
@@ -151,6 +153,7 @@ dependencies {
     "forgeRuntimeLibrary"("gg.moonflower:molang-compiler:${property("veil_molang_version")}")
     compileOnly("gg.moonflower:molang-compiler:${property("veil_molang_version")}") // (the lens resolution setting reaches Veil's post pipelines as a Molang query)
     "forgeRuntimeLibrary"("io.github.ocelot:glsl-processor:${property("veil_glsl_processor_version")}")
+    compileOnly("io.github.ocelot:glsl-processor:${property("veil_glsl_processor_version")}") // (the lens's Veil shader processor works on its trees)
 
     // Simulated + Aeronautics as individual jars: Loom's remap of the Modrinth "bundled" jar drops
     // META-INF/jarjar/metadata.json, so its nested mods never load. Non-transitive because their

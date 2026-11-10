@@ -22,6 +22,9 @@ object RelativityClient {
 		NeoForge.EVENT_BUS.addListener(net.kernelpanicsoft.relativity.client.lens.SceneCapture::onRenderFrame)
 		BlackHoleLens.init()
 		net.kernelpanicsoft.relativity.client.lens.VertexLens.init()
+		net.kernelpanicsoft.relativity.client.lens.LensTwins.register()
+		net.kernelpanicsoft.relativity.client.lens.LensStageProcessor.register()
+		MOD_BUS.addListener(net.neoforged.neoforge.client.event.RegisterShadersEvent::class.java) { net.kernelpanicsoft.relativity.client.lens.LensTwins.clear() }
 		NeoForge.EVENT_BUS.addListener(RenderLivingEvent.Pre::class.java, NoodleRenderer::onRenderLiving)
 		NeoForge.EVENT_BUS.addListener(ClientClocks::onClientTick)
 		NeoForge.EVENT_BUS.addListener(LightDelay::onClientTick)

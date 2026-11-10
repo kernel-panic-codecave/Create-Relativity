@@ -82,3 +82,42 @@ class GpuSpanTimer {
 		}
 	}
 }
+
+/**
+ * Like [GpuTimer], counting the primitives a stretch of GL work makes (after every stage: tessellation's, the geometry
+ * stage's copies) instead of timing it: [count] the latest. One stretch at a time.
+ */
+class PrimitiveCounter {
+	private val queries = IntArray(4)
+	private val pending = BooleanArray(4)
+	private var next = 0
+	private var open = false
+
+	/** The latest count, -1 until one is ready. */
+	var count = -1L
+		private set
+
+	fun begin() {
+		if (queries[0] == 0) GL15.glGenQueries(queries)
+		collect()
+		if (pending[next]) return
+		org.lwjgl.opengl.GL30.glBeginQuery(org.lwjgl.opengl.GL30.GL_PRIMITIVES_GENERATED, queries[next])
+		open = true
+	}
+
+	fun end() {
+		if (!open) return
+		open = false
+		org.lwjgl.opengl.GL30.glEndQuery(org.lwjgl.opengl.GL30.GL_PRIMITIVES_GENERATED)
+		pending[next] = true
+		next = (next + 1) % queries.size
+	}
+
+	private fun collect() {
+		for (i in queries.indices) {
+			if (!pending[i] || GL15.glGetQueryObjecti(queries[i], GL15.GL_QUERY_RESULT_AVAILABLE) == 0) continue
+			count = GL33.glGetQueryObjecti64(queries[i], GL15.GL_QUERY_RESULT)
+			pending[i] = false
+		}
+	}
+}

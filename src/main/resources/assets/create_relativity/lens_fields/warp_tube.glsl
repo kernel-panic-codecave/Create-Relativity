@@ -96,3 +96,57 @@ void fieldSample(vec3 x, inout LensFieldSample s) {
         lensFieldStep(s, safe);
     }
 }
+
+// x's distance from tube j's spine (its nearest segment).
+float fieldSpineDistance(vec3 x, int j) {
+    vec4 info = fieldData(1 + j);
+    int first = int(info.y + 0.5);
+    int count = int(info.z + 0.5);
+    float best = 1e30;
+    for (int g = first; g < first + count - 1; g += 1) {
+        vec3 p = fieldPoint(g);
+        vec3 e = fieldPoint(g + 1) - p;
+        float l2 = dot(e, e);
+        float u = 0.0;
+        if (l2 > 0.0) u = clamp(dot(x - p, e) / l2, 0.0, 1.0);
+        best = min(best, length(x - p - e * u));
+    }
+    return best;
+}
+
+// ---- Splitting (the tessellation stage): by a wall, whose bend three points of an edge can't follow ----
+// An edge across a tube's wall band (its ends' and middle's distances from the spine reaching both into the band's
+// inner half and its outer half: three walls' widths each side of the radius) is cut into pieces about fieldPixels on screen at its distance (no
+// finer than a quarter of the wall's width), at most fieldMost: vertices where the wall's bend shows, each of them
+// running the whole lens.
+const float fieldMost = 16.0;
+const float fieldPixels = 4.0;
+
+float fieldPieces(vec3 a, vec3 b) {
+    vec3 m = 0.5 * (a + b);
+    float edge = length(b - a);
+    float pixel = fieldData(0).w;
+    float pieces = 1.0;
+    int tubes = int(fieldData(0).x + 0.5);
+    for (int j = 0; j < fieldMaxTubes && j < tubes; j += 1) {
+        float radius = fieldData(1 + j).x;
+        float width = radius / fieldSharpness;
+        float da = fieldSpineDistance(a, j);
+        float db = fieldSpineDistance(b, j);
+        float dm = fieldSpineDistance(m, j);
+        // (Not those merely near it: inside a tube the whole floor is, and cutting it all is ruinous.)
+        float lo = min(da, min(db, dm));
+        float hi = max(da, max(db, dm));
+        if (lo <= radius + 3.0 * width && hi >= radius - 3.0 * width && hi - lo > 0.5 * width) {
+            float piece = max(0.25 * width, fieldPixels * pixel * length(m));
+            pieces = max(pieces, ceil(edge / piece));
+        }
+    }
+    return min(pieces, fieldMost);
+}
+
+// Light runs straight through a warp tube's uniform inside and outside; its walls (fieldPieces) and the image stage's
+// outline copies take the rest: no triangle's bend needs measuring for it.
+bool fieldNear(vec3 a, vec3 b, vec3 c) {
+    return false;
+}

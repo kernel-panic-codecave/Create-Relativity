@@ -8,6 +8,27 @@ out vec4 Result;
 
 void main() {
     vec3 p = texelFetch(Points, ivec2(gl_FragCoord.xy), 0).xyz;
+    if (Direct == 15) {
+        // The fields' lens's image of p: the table's, finished by tracing (lensFieldRefine) where it fails or its light
+        // has been through a wall (the table's direction layer's w): xyz the direction, w 1 by the table alone, 2
+        // finished by tracing, -1 not found.
+        float r = length(p);
+        vec3 seen;
+        bool found = relativityTableImage(p, seen);
+        bool walled = !found;
+        vec2 uv;
+        if (found && relativityTableUv(seen, uv)) {
+            float sh = log(r / RelativityLensData[6].z) / log(RelativityLensData[6].w / RelativityLensData[6].z) * float(relativityTableShells() - 1);
+            int k = int(clamp(floor(sh), 0.0, float(relativityTableShells() - 2)));
+            walled = relativityTableRead(uv, 2 * k + 1).w > 0.0 || relativityTableRead(uv, 2 * k + 3).w > 0.0;
+        }
+        // (TEMP: traced only where the table fails, from its search's nearest uv.)
+        if (found) { Result = vec4(seen, 1.0); return; }
+        seen = relativityTableDirection(relativityTableWhy.zw);
+        bool ok = lensFieldRefine(p, seen, 3, 0.5 * RelativityLensData[11].x * r);
+        Result = vec4(seen, ok ? 2.0 : -1.0);
+        return;
+    }
     if (Direct == 14) {
         // The fields' exact image of p (a reference for the table): light marched through them (lensFieldReach) to p's
         // distance, its direction refined by Gauss-Newton on where it lands, from the table's image (else straight): xyz

@@ -92,6 +92,13 @@ object VertexLens {
 	/** The level's drawing's GPU time while [timeLevel]. */
 	val levelTimer = GpuTimer()
 
+	/** Debug (GameTests): counts the triangles the level's drawing makes (after every stage), [levelCounter]. */
+	@JvmField
+	var countLevel = false
+
+	/** The level's drawing's triangles while [countLevel]. */
+	val levelCounter = PrimitiveCounter()
+
 	/** Debug (GameTests): the tube points uploaded last frame. */
 	@JvmField
 	var lastTubePoints = 0
@@ -131,6 +138,10 @@ object VertexLens {
 	 */
 	@JvmField
 	var fieldMarch = false
+
+	/** The lens's fields uploaded each frame though nothing draws by them yet (LensCheck's field probes; GameTests). */
+	@JvmField
+	var fields = false
 
 	/** The tube aim's most traces refining the light table's image ([tubeSeeds]). */
 	@JvmField
@@ -295,6 +306,14 @@ object VertexLens {
 	var activeThisFrame = false
 		private set
 
+	/**
+	 * True while the level itself is drawn (after the sky to the level's end): only then do render types draw with the
+	 * lens's twin shaders (LensTwins), not the GUI's, the hand's or a screen's after.
+	 */
+	@JvmStatic
+	var drawingLevel = false
+		private set
+
 	fun init() {
 		table = CompletableFuture.supplyAsync {
 			val raw = SchwarzschildImages.buildTable(TABLE_U0, TABLE_UP, TABLE_PHI)
@@ -333,18 +352,21 @@ object VertexLens {
 		when (event.stage) {
 			RenderLevelStageEvent.Stage.AFTER_SKY -> {
 				beginLevel(event.projectionMatrix)
+				drawingLevel = true
 				if (timeLevel) levelTimer.begin()
+				if (countLevel) levelCounter.begin()
 			}
-			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfSecondImage(event.partialTick.getGameTimeDeltaPartialTick(false))
+			RenderLevelStageEvent.Stage.AFTER_ENTITIES -> drawSelfImage(event.partialTick.getGameTimeDeltaPartialTick(false))
 			RenderLevelStageEvent.Stage.AFTER_LEVEL -> {
+				drawingLevel = false
 				if (timeLevel) levelTimer.end()
+				if (countLevel) levelCounter.end()
 				if (recordFrames) {
 					val now = System.nanoTime()
 					if (lastFrame != 0L) synchronized(frames) { frames += (now - lastFrame) / 1e6 }
 					lastFrame = now
 				}
 				setEnabled(false)
-				secondsWanted = false
 			}
 			else -> Unit
 		}
@@ -378,7 +400,8 @@ object VertexLens {
 		// Every source the field lens has modules for (holes, lensed as non-spinning ones, masses, tubes, bubbles):
 		// composed in the shaders, nothing traced or solved per frame; a lone hole by its exact image tables.
 		val fieldCapable = holes.size + others.size >= 1
-		val fieldWanted = fieldCapable && !(holes.size == 1 && others.isEmpty())
+		// (A lone hole too: no special case, composed as any source is.)
+		val fieldWanted = fieldCapable
 		if (!perspective) {
 			composed = fieldWanted
 			fieldSky = fieldCapable
@@ -402,13 +425,15 @@ object VertexLens {
 		upload(centre, camera.x, camera.y, camera.z, view, projection, centre != null)
 		// The fields (LensFields): every registered type's sources, for the field march and its probes.
 		if (level != null && !perspective) {
-			net.kernelpanicsoft.relativity.client.lens.field.LensFields.upload(net.kernelpanicsoft.relativity.lens.LensFrame(
+			if (fields || fieldMarch || TessellationStage.enabled) net.kernelpanicsoft.relativity.client.lens.field.LensFields.upload(net.kernelpanicsoft.relativity.lens.LensFrame(
 				level, org.joml.Vector3d(camera.x, camera.y, camera.z), view, holes + others, pixelAngle(projection).toDouble(),
 			))
 		}
 		// (The table stands while nothing it's made from has changed: the block, as uploaded, is all of it.)
-		if (!LightTable.on || uploadHash != builtHash) LightTable.build { linkProgram(it) }
-		if (LightTable.on) builtHash = uploadHash
+		// (The fields too, when the table's marched through them.)
+		val tableHash = if (fieldMarch) 31 * uploadHash + net.kernelpanicsoft.relativity.client.lens.field.LensFields.hash else uploadHash
+		if (!LightTable.on || tableHash != builtHash) LightTable.build { linkProgram(it) }
+		if (LightTable.on) builtHash = tableHash
 
 		val previous = GlStateManager._getActiveTexture()
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 1)
@@ -421,49 +446,31 @@ object VertexLens {
 		GL11.glBindTexture(GL12.GL_TEXTURE_3D, secondTexture)
 		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 5)
 		GL11.glBindTexture(GL11.GL_TEXTURE_2D, BlackHoleLens.escapeTexture())
+		// (The light table's detail, where it traced blocks finer: LightTable.detail, .tiles.)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 6)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, LightTable.detail)
+		GlStateManager._activeTexture(GL13.GL_TEXTURE0 + TEXTURE_UNIT - 7)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, LightTable.tiles)
 		GlStateManager._activeTexture(previous)
-		// (Not with the light table yet: it holds first crossings, and the chain's second images through several holes
-		// are poor.)
-		// (A lone hole's secondary images. With the light table the post pass draws everything inside the Einstein
-		// rings, every image, from the light itself: relativityInsideRing.)
-		secondsWanted = !perspective && secondImages && !LightTable.on && centre?.hole != null && secondTexture != 0
 	}
 
-	/** Draws the secondary images (the light the long way round the hole, by the Einstein ring) of what's drawn. */
+	/**
+	 * Draws the secondary images (the light the long way round the hole, by the Einstein ring): the image stage's copies
+	 * of each triangle at its other images (ImageStage, from the light table). Off: no vertex looks for them (the block's
+	 * [28].w, their reach, 0).
+	 */
 	@JvmField
 	var secondImages = true
 
-
-	/** Whether this frame's level draws its secondary images ([drawSecondImages]): a non-spinning hole (for now). */
-	private var secondsWanted = false
-
 	/**
-	 * Whether an immediate draw (vanilla's batched entities, block entities, particles: BufferUploader) made with
-	 * [projection] should be drawn again at its secondary images: while the level is drawn with them, and only for the
-	 * level's own projection (not the hand, GUI items, other views; those would be drawn twice on top of themselves).
+	 * Draws the player's own image round the hole in first person (the back of your own head by the photon sphere): the
+	 * light that leaves it, comes round the hole and back to the eye. The game doesn't draw the player in first person
+	 * at all; here its model's drawn once with its vertices at their long-way-round images (the block's [11].y bit 2:
+	 * vertex_lens_core.glsl's relativitySecond, the long way traced through the fields, not by the light table, which
+	 * holds light going outward only). That image is mirrored: its faces' winding reversed, the front ones culled.
 	 */
-	@JvmStatic
-	fun wantsImmediateSecondImages(projection: Matrix4f): Boolean =
-		secondsWanted && !drawingSecondImages && !ownSecondImages && projection.equals(lastProjection, 1e-6f)
-
-	/** While set, immediate draws aren't repeated for their secondary images: the drawer does that itself (DiskMesh,
-	 * whose secondary images are coloured apart). */
-	@JvmField
-	var ownSecondImages = false
-
-	/** Whether this frame draws secondary images at all. */
-	val secondImagesThisFrame: Boolean get() = secondsWanted
-
-	/** The player's own body drawn for its secondary image (its own buffers: flushed in that mode only). */
-	private val selfBuffers by lazy { net.minecraft.client.renderer.MultiBufferSource.immediate(com.mojang.blaze3d.vertex.ByteBufferBuilder(1 shl 16)) }
-
-	/**
-	 * In first person the game doesn't draw the player at all: here it's drawn for its secondary image alone, the light
-	 * that leaves it and comes round the hole back to the eye (by the photon sphere, looking along the orbit: the back of
-	 * your own head). Its primary image (inside the camera) isn't drawn.
-	 */
-	private fun drawSelfSecondImage(partialTick: Float) {
-		if (!secondsWanted || !selfImage) return
+	private fun drawSelfImage(partialTick: Float) {
+		if (!selfImage || !activeThisFrame) return
 		val minecraft = Minecraft.getInstance()
 		val camera = minecraft.gameRenderer.mainCamera
 		val player = minecraft.player ?: return
@@ -474,64 +481,24 @@ object VertexLens {
 		val z = net.minecraft.util.Mth.lerp(partialTick.toDouble(), player.zOld, player.z) - camera.position.z
 		val yaw = net.minecraft.util.Mth.lerp(partialTick, player.yRotO, player.yRot)
 		val light = dispatcher.getPackedLightCoords(player, partialTick)
-		// (All of it in that mode: a batch is drawn as soon as the model moves on to another render type, mid-render.)
-		drawSecondImages {
-			dispatcher.render(player, x, y, z, yaw, partialTick, com.mojang.blaze3d.vertex.PoseStack(), selfBuffers, light)
-			selfBuffers.endBatch()
-		}
-	}
-
-	/**
-	 * Draws the player's own secondary image in first person ([drawSelfSecondImage]). Off: it's the famous "back of your
-	 * own head" by the photon sphere, but light that loops a full turn is squeezed about e^(2 pi) times, so a head's
-	 * image is a ring round the shadow a hundredth of a pixel thick, wherever the camera is (measured, selfImage test).
-	 */
-	@JvmField
-	var selfImage = false
-
-	/** True while a draw places vertices at their secondary images. */
-	@JvmStatic
-	var drawingSecondImages = false
-		private set
-
-	/**
-	 * Runs [draw] again with the vertices placed at their secondary images (vertex_lens_core.glsl's second-image mode):
-	 * the block's [11].y gets its bit 2 for the draw, then loses it. Nothing if this frame has none to draw.
-	 */
-	@JvmStatic
-	fun drawSecondImages(draw: Runnable) {
-		if (!secondsWanted || drawingSecondImages) return
-		drawingSecondImages = true
 		try {
 			setModeFlags(true)
-			if (LightTable.on) {
-				// The light table's other signatures, a pass each ([11].z its slot): some mirrored, some not, so no
-				// culling (depth sorts them).
-				val culled = GL11.glIsEnabled(GL11.GL_CULL_FACE)
-				GL11.glDisable(GL11.GL_CULL_FACE)
-				try {
-					for (slot in 1 until LightTable.SLOTS) {
-						// (Slots with no signature this frame: nothing to draw.)
-						if (!LightTable.slotsInUse[slot]) continue
-						setSlot(slot)
-						draw.run()
-					}
-				} finally {
-					setSlot(0)
-					if (culled) GL11.glEnable(GL11.GL_CULL_FACE)
-				}
-			} else {
-				// A secondary image is the mirror image (the light comes round the other side), so every triangle's
-				// winding is reversed: culling the front faces keeps the ones facing the camera along that light.
-				GL11.glCullFace(GL11.GL_FRONT)
-				draw.run()
-			}
+			GL11.glCullFace(GL11.GL_FRONT)
+			// (Its own buffers, flushed here: in that mode only.)
+			dispatcher.render(player, x, y, z, yaw, partialTick, com.mojang.blaze3d.vertex.PoseStack(), selfBuffers, light)
+			selfBuffers.endBatch()
 		} finally {
 			GL11.glCullFace(GL11.GL_BACK)
 			setModeFlags(false)
-			drawingSecondImages = false
 		}
 	}
+
+	/** Whether the player's own image round the hole is drawn in first person ([drawSelfImage]). */
+	@JvmField
+	var selfImage = true
+
+	/** The player's own model drawn for [drawSelfImage] (its own buffers: flushed in that mode only). */
+	private val selfBuffers by lazy { net.minecraft.client.renderer.MultiBufferSource.immediate(com.mojang.blaze3d.vertex.ByteBufferBuilder(1 shl 16)) }
 
 	/** Debug (LensCheck): the light table's slot later draws place vertices in; 0 again after. */
 	@JvmStatic
@@ -561,7 +528,7 @@ object VertexLens {
 	fun uncheckedAxisCut(on: Boolean) {
 		if (buffer == 0 || !activeThisFrame) return
 		uncheckedCut = on
-		setModeFlags(drawingSecondImages)
+		setModeFlags(false)
 	}
 	private var uncheckedCut = false
 
@@ -570,7 +537,7 @@ object VertexLens {
 	fun fineAxisCut(on: Boolean) {
 		if (buffer == 0 || !activeThisFrame) return
 		fineCut = on
-		setModeFlags(drawingSecondImages)
+		setModeFlags(false)
 	}
 	private var fineCut = false
 
@@ -622,8 +589,11 @@ object VertexLens {
 			// [6], [7]: the light table's view and size; [8..10] unused; [11]: the pixel check's pixel angle and the draw's
 			// flags.
 			LightTable.put(data)
-			repeat(12) { data.put(0f) }
-			data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(0f)
+			// ([8].x: the tessellation stage's debug switches, TessellationStage.skip.)
+			data.put(TessellationStage.skip.toFloat())
+			repeat(11) { data.put(0f) }
+			// (.w: the tessellation stage's most pieces an edge, 0 its own: TessellationStage.most.)
+			data.put(pixelAngle(projection)).put(modeFlags(false, CHECKED_AXIS_CUT)).put(0f).put(TessellationStage.most)
 			// [12..27] unused.
 			repeat(EDGE_SAMPLES) { data.put(0f) }
 			uploadField(data, camX, camY, camZ, view)
@@ -645,7 +615,7 @@ object VertexLens {
 	 */
 	private fun uploadField(data: java.nio.FloatBuffer, camX: Double, camY: Double, camZ: Double, view: Quaternionf) {
 		val sources = if (fieldSky) fieldSources.take(MAX_FIELD_SOURCES) else emptyList()
-		data.put(sources.size.toFloat()).put(0f).put(0f).put(ImageStage.reach)
+		data.put(sources.size.toFloat()).put(0f).put(0f).put(if (secondImages) ImageStage.reach else 0f)
 		for (source in sources) {
 			val (centre, type, params) = when (source) {
 				is BlackHole -> Triple(source.center.let { org.joml.Vector3d(it.x, it.y, it.z) }, 1f, floatArrayOf(source.schwarzschildRadius.toFloat(), 0f))
@@ -832,7 +802,7 @@ object VertexLens {
 		val block = GL31.glGetUniformBlockIndex(program, BLOCK)
 		if (block != GL31.GL_INVALID_INDEX) GL31.glUniformBlockBinding(program, block, binding)
 		net.kernelpanicsoft.relativity.client.lens.field.LensFields.link(program)
-		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, "RelativityLightTable" to TEXTURE_UNIT - 1, "RelativityLightSeeds" to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, ESCAPE_SAMPLER to TEXTURE_UNIT - 5)) {
+		for ((name, unit) in listOf(SAMPLER to TEXTURE_UNIT, "RelativityLightTable" to TEXTURE_UNIT - 1, "RelativityLightSeeds" to TEXTURE_UNIT - 2, SECOND_SAMPLER to TEXTURE_UNIT - 3, ESCAPE_SAMPLER to TEXTURE_UNIT - 5, "RelativityLightDetail" to TEXTURE_UNIT - 6, "RelativityLightTiles" to TEXTURE_UNIT - 7)) {
 			val sampler = GL20.glGetUniformLocation(program, name)
 			if (sampler < 0) continue
 			if (GL.getCapabilities().OpenGL41) {

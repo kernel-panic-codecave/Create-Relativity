@@ -222,7 +222,8 @@ object QuadSubdivision {
 	fun tick() {
 		val minecraft = Minecraft.getInstance()
 		val level = minecraft.level
-		active = level != null && RelativityConfig.Client.Render.lensing
+		// (Not where the tessellation stage splits on the GPU instead: vanilla's terrain programs; Sodium's chunks aren't yet.)
+		active = level != null && RelativityConfig.Client.Render.lensing && !TessellationStage.splitsTerrain
 		val now = if (level == null || !active) emptyList() else SpacetimeField.blackHoles(level).map { doubleArrayOf(it.x, it.y, it.z, it.schwarzschildRadius) }
 		if (active) TubeWalls.tick(minecraft)
 		val axisMoved = updateAxis(minecraft, now)

@@ -28,9 +28,6 @@ struct LensFieldSample {
     bool absorbed; // inside a horizon: light here is lost
 };
 
-// The field at x, every type's added in (generated after the types' code: LensFields).
-LensFieldSample lensFieldAt(vec3 x);
-
 LensFieldSample lensFieldFlat() {
     LensFieldSample s;
     s.a = -1.0;
@@ -121,6 +118,10 @@ vec3 lensFieldForce(LensFieldSample s, vec3 p) {
     return -grad;
 }
 
+// ---- after lensFieldAt ----
+// (LensFields puts what follows after the generated lensFieldAt, the field at a point with every type's added in: they
+// march light through it. Not a forward declaration of it before: Veil's shader processing can't print one.)
+
 // One step of light at x with momentum p through the fields (s: the field at x), the midpoint rule over the field's
 // safe step (at least minStep, at most maxStep): x, p and s moved on.
 void lensFieldAdvance(inout vec3 x, inout vec3 p, inout LensFieldSample s, float minStep, float maxStep) {
@@ -132,6 +133,38 @@ void lensFieldAdvance(inout vec3 x, inout vec3 p, inout LensFieldSample s, float
     x += lensFieldVelocity(sm, pm) * dl;
     p += lensFieldForce(sm, pm) * dl;
     s = lensFieldAt(x);
+}
+
+// One step as lensFieldAdvance, but where the field's safe step is down to minStep (in a wall's band, where light
+// grazing it would crawl) as long as its error allows: the midpoint step against Euler's, h (carried between steps)
+// halved and the step taken again while they're more than tol apart, grown after one well within it. Outside a band
+// the safe step, so no wall is stepped over. Returns false if h fell below minStep / 8 (then the step is taken anyway).
+bool lensFieldAdvanceAdaptive(inout vec3 x, inout vec3 p, inout LensFieldSample s, inout float h, float minStep, float maxStep, float tol) {
+    bool banded = s.safe <= minStep;
+    vec3 v = lensFieldVelocity(s, p);
+    vec3 f = lensFieldForce(s, p);
+    float speed = max(length(v), 1e-6);
+    float step = banded ? h : clamp(s.safe, minStep, maxStep);
+    bool ok = true;
+    for (int tries = 0; tries < 8; tries += 1) {
+        float dl = step / speed;
+        vec3 xm = x + v * (0.5 * dl);
+        vec3 pm = p + f * (0.5 * dl);
+        LensFieldSample sm = lensFieldAt(xm);
+        vec3 xn = x + lensFieldVelocity(sm, pm) * dl;
+        vec3 pn = p + lensFieldForce(sm, pm) * dl;
+        float err = length(xn - (x + v * dl)) + step * length(normalize(pn) - normalize(p + f * dl));
+        if (!banded || err <= tol || step <= 0.125 * minStep) {
+            if (banded && err > tol) ok = false;
+            x = xn;
+            p = pn;
+            s = lensFieldAt(x);
+            if (banded) h = clamp(step * min(2.0, 0.9 * sqrt(tol / max(err, 1e-9))), 0.125 * minStep, maxStep);
+            return ok;
+        }
+        step *= max(0.25, 0.9 * sqrt(tol / err));
+    }
+    return ok;
 }
 
 // Where light seen along unit d from the camera first gets r out (on the chord of the step that takes it there);
@@ -154,4 +187,60 @@ bool lensFieldReach(vec3 d, float r, out vec3 at) {
         }
     }
     return false;
+}
+
+// Where light seen along unit d first gets r out, as lensFieldReach, by lensFieldAdvanceAdaptive's steps (in walls'
+// bands, as long as tol allows: far fewer than the fixed least step).
+bool lensFieldReachAdaptive(vec3 d, float r, float tol, out vec3 at) {
+    vec3 x = vec3(0.0);
+    LensFieldSample s = lensFieldAt(x);
+    vec3 p = lensFieldStart(s, d);
+    at = d * r;
+    float h = 0.02;
+    for (int i = 0; i < 1500; i += 1) {
+        vec3 a = x;
+        lensFieldAdvanceAdaptive(x, p, s, h, 0.02, max(r, 1.0), tol);
+        if (s.absorbed) return false;
+        if (length(x) >= r) {
+            vec3 u = normalize(x - a);
+            float b = dot(a, u);
+            float t = -b + sqrt(max(b * b - (dot(a, a) - r * r), 0.0));
+            at = a + u * t;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Light seen along d refined (Gauss-Newton on where lensFieldReach lands at p's distance, a few iterations, each step
+// at most a fifth of a radian) until it lands within tolerance of p (blocks): true if it did.
+bool lensFieldRefine(vec3 p, inout vec3 d, int iterations, float tolerance) {
+    float r = length(p);
+    d = normalize(d);
+    for (int it = 0; it < iterations; it += 1) {
+        vec3 up = vec3(1.0, 0.0, 0.0);
+        if (abs(d.y) < 0.9) up = vec3(0.0, 1.0, 0.0);
+        vec3 e1 = normalize(cross(d, up));
+        vec3 e2 = cross(d, e1);
+        vec3 at;
+        vec3 ax;
+        vec3 ay;
+        float h = 1e-4;
+        if (!lensFieldReachAdaptive(d, r, 1e-3, at)) return false;
+        vec3 res = at - p;
+        if (length(res) < tolerance) return true;
+        if (!lensFieldReachAdaptive(normalize(d + e1 * h), r, 1e-3, ax) || !lensFieldReachAdaptive(normalize(d + e2 * h), r, 1e-3, ay)) return false;
+        vec3 ja = (ax - at) / h;
+        vec3 jb = (ay - at) / h;
+        float aa = dot(ja, ja);
+        float ab = dot(ja, jb);
+        float bb = dot(jb, jb);
+        float det = aa * bb - ab * ab;
+        if (abs(det) < 1e-20) return false;
+        float ra = -dot(ja, res);
+        float rb = -dot(jb, res);
+        d = normalize(d + e1 * clamp((bb * ra - ab * rb) / det, -0.2, 0.2) + e2 * clamp((aa * rb - ab * ra) / det, -0.2, 0.2));
+    }
+    vec3 last;
+    return lensFieldReachAdaptive(d, r, 1e-3, last) && length(last - p) < tolerance;
 }

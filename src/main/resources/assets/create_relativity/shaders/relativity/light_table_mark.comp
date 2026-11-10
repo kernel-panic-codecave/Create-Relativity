@@ -1,0 +1,97 @@
+// The light table's marking pass (LightTable): which blocks of RELATIVITY_TABLE_TILE x RELATIVITY_TABLE_TILE rays get the
+// detail atlas's slots, the worst first: where the table's too coarse to follow its own map, by how much. In stages
+// (MarkStage), Tiles each block's state between them:
+// 0. (a work group a block) Its severity: the most its neighbouring rays' crossings lie farther apart than
+//    RELATIVITY_TABLE_MARK times their spacing explains (the map squeezed or stretched: a wall, a fold, an Einstein ring),
+//    as a bucket of RELATIVITY_TABLE_BUCKETS (half powers of two), neighbours disagreeing on whether the light gets out at
+//    all (a shadow's edge) near the top; Tiles -2 - bucket (-1 none), Allocator's histogram (x 1 + bucket) counted.
+// 1. (one invocation) The cutoff (Allocator x CUTOFF): the lowest bucket whose blocks and those above fit the slots.
+// 2. (an invocation a block) Those from the cutoff up given slots (Allocator x 0 the next free): Tiles the slot, TileSlots
+//    the block (x | y << 16).
+// 3. Those just below the cutoff, while slots are left. Any block still negative has none.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(rgba32f, binding = 0) uniform readonly image2DArray Table;
+layout(r32i, binding = 4) uniform writeonly iimage2D TileSlots;
+layout(r32i, binding = 5) uniform iimage2D Tiles;
+layout(r32ui, binding = 6) uniform uimage2D Allocator;
+uniform int MarkStage;
+
+const float RELATIVITY_TABLE_MARK = 3.0;
+const int RELATIVITY_TABLE_BUCKETS = 16;
+const int CUTOFF = 1 + RELATIVITY_TABLE_BUCKETS;
+
+shared uint relativityWorst;
+
+int relativityBucket(float ratio) {
+    return clamp(int(floor(2.0 * log2(ratio))), 0, RELATIVITY_TABLE_BUCKETS - 1);
+}
+
+void relativityAllocate(ivec2 block) {
+    uint next = imageAtomicAdd(Allocator, ivec2(0, 0), 1u);
+    if (next >= uint(RELATIVITY_TABLE_DETAIL_SLOTS)) return;
+    imageStore(TileSlots, ivec2(int(next), 0), ivec4(block.x | (block.y << 16)));
+    imageStore(Tiles, block, ivec4(int(next)));
+}
+
+void main() {
+    ivec2 tiles = imageSize(Tiles);
+    if (MarkStage == 1) {
+        if (gl_GlobalInvocationID.x != 0u || gl_GlobalInvocationID.y != 0u) return;
+        uint sum = 0u;
+        int cutoff = RELATIVITY_TABLE_BUCKETS;
+        for (int b = RELATIVITY_TABLE_BUCKETS - 1; b >= 0; b -= 1) {
+            sum += imageLoad(Allocator, ivec2(1 + b, 0)).r;
+            if (sum > uint(RELATIVITY_TABLE_DETAIL_SLOTS)) break;
+            cutoff = b;
+        }
+        imageStore(Allocator, ivec2(CUTOFF, 0), uvec4(uint(cutoff)));
+        return;
+    }
+    if (MarkStage >= 2) {
+        ivec2 block = ivec2(gl_GlobalInvocationID.xy);
+        if (block.x >= tiles.x || block.y >= tiles.y) return;
+        int state = imageLoad(Tiles, block).r;
+        if (state > -2) return;
+        int bucket = -2 - state;
+        int cutoff = int(imageLoad(Allocator, ivec2(CUTOFF, 0)).r);
+        if (MarkStage == 2 ? bucket >= cutoff : bucket == cutoff - 1) relativityAllocate(block);
+        return;
+    }
+    if (gl_LocalInvocationIndex == 0u) relativityWorst = 0u;
+    barrier();
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = ivec2(relativityTableSize());
+    int shells = relativityTableShells();
+    if (texel.x < size.x - 1 && texel.y < size.y - 1) {
+        vec3 d0 = relativityTableDirection(vec2(texel) + 0.5);
+        float spacing = acos(clamp(dot(d0, relativityTableDirection(vec2(texel) + vec2(1.5, 0.5))), -1.0, 1.0));
+        vec4 e0 = imageLoad(Table, ivec3(texel, 2 * shells));
+        vec4 e1 = imageLoad(Table, ivec3(texel + ivec2(1, 0), 2 * shells));
+        vec4 e2 = imageLoad(Table, ivec3(texel + ivec2(0, 1), 2 * shells));
+        // (Severity as bucket + 1, 0 none: a shadow's edge near the top.)
+        int worst = 0;
+        if (abs(e0.w - e1.w) > 0.5 || abs(e0.w - e2.w) > 0.5) worst = RELATIVITY_TABLE_BUCKETS - 2;
+        for (int k = 0; k < shells; k += 1) {
+            vec4 a = imageLoad(Table, ivec3(texel, 2 * k));
+            vec4 b = imageLoad(Table, ivec3(texel + ivec2(1, 0), 2 * k));
+            vec4 c = imageLoad(Table, ivec3(texel + ivec2(0, 1), 2 * k));
+            bool ha = a.w > 0.999;
+            bool hb = b.w > 0.999;
+            bool hc = c.w > 0.999;
+            if (ha != hb || ha != hc) worst = max(worst, RELATIVITY_TABLE_BUCKETS - 2);
+            if (ha && hb && hc) {
+                float limit = RELATIVITY_TABLE_MARK * spacing * length(a.xyz);
+                float ratio = max(length(a.xyz - b.xyz), length(a.xyz - c.xyz)) / max(limit, 1e-9);
+                if (ratio > 1.0) worst = max(worst, 1 + relativityBucket(ratio));
+            }
+        }
+        atomicMax(relativityWorst, uint(worst));
+    }
+    barrier();
+    if (gl_LocalInvocationIndex == 0u) {
+        ivec2 block = ivec2(gl_WorkGroupID.xy);
+        int worst = int(relativityWorst);
+        if (worst > 0) imageAtomicAdd(Allocator, ivec2(worst, 0), 1u);
+        imageStore(Tiles, block, ivec4(worst > 0 ? -1 - worst : -1));
+    }
+}

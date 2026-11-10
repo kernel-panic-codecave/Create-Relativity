@@ -283,6 +283,9 @@ object BlackHoleLens {
 			it.setTexture("RelativitySecondImages", GL12.GL_TEXTURE_3D, VertexLens.secondTexture.takeIf { id -> id != 0 } ?: placeholder3d)
 			it.setTexture("RelativityLightTable", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, LightTable.texture.takeIf { id -> id != 0 } ?: placeholderArray)
 			it.setTexture("RelativityLightSeeds", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, LightTable.seeds.takeIf { id -> id != 0 } ?: placeholderSeeds)
+			// (Its detail, where it traced blocks finer: only read with the table, which builds them.)
+			LightTable.detail.takeIf { id -> id != 0 }?.let { id -> it.setTexture("RelativityLightDetail", org.lwjgl.opengl.GL30.GL_TEXTURE_2D_ARRAY, id) }
+			LightTable.tiles.takeIf { id -> id != 0 }?.let { id -> it.setTexture("RelativityLightTiles", GL11.GL_TEXTURE_2D, id) }
 		}
 	}
 }

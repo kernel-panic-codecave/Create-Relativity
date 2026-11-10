@@ -17,13 +17,16 @@ public abstract class ShaderInstanceMixin {
 	@org.spongepowered.asm.mixin.Shadow
 	public abstract int getId();
 
+	@org.spongepowered.asm.mixin.Shadow
+	public abstract String getName();
+
 	/**
 	 * Its shaders attached, before it's linked (vanilla's ProgramManager.linkShader and Veil's in-place recompile both
 	 * attach through here): the image stage's swapped in, if it's lensed.
 	 */
 	@Inject(method = "attachToProgram", at = @At("TAIL"))
 	private void create_relativity$attachImageStage(CallbackInfo ci) {
-		ImageStage.attach(this.getId());
+		ImageStage.attach(this.getId(), this.getName());
 	}
 
 	@Inject(method = "<init>*", at = @At("TAIL"))

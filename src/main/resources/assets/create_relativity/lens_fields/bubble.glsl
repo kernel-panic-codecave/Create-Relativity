@@ -51,3 +51,47 @@ void fieldSample(vec3 x, inout LensFieldSample s) {
         lensFieldStep(s, max(safe, 0.02));
     }
 }
+
+// ---- Splitting (the tessellation stage): by a wall ----
+// An edge whose ends' and middle's ellipsoidal radii cross a bubble's wall band (the tanh wall's
+// three widths each side of 1; a compact one's inner radius to 1) is cut to a quarter of the band's width in blocks
+// (on its shortest semi-axis), at most fieldMost pieces.
+const float fieldMost = 16.0;
+
+float fieldRadius(vec3 x, int e) {
+    vec3 rel = x - fieldData(5 * e).xyz;
+    return length(vec3(dot(rel, fieldData(5 * e + 1).xyz), dot(rel, fieldData(5 * e + 2).xyz), dot(rel, fieldData(5 * e + 3).xyz)));
+}
+
+float fieldPieces(vec3 a, vec3 b) {
+    vec3 m = 0.5 * (a + b);
+    float edge = length(b - a);
+    float pieces = 1.0;
+    for (int e = 0; e < fieldCount(); e += 1) {
+        float shortest = min(fieldData(5 * e + 1).w, min(fieldData(5 * e + 2).w, fieldData(5 * e + 3).w));
+        float inner = fieldData(5 * e + 4).w;
+        float lo = 1.0 - 3.0 / fieldSharpness;
+        float hi = 1.0 + 3.0 / fieldSharpness;
+        if (inner > 0.0) {
+            lo = inner;
+            hi = 1.0;
+        }
+        float ra = fieldRadius(a, e);
+        float rb = fieldRadius(b, e);
+        float rm = fieldRadius(m, e);
+        // (Across the band, not merely near it.)
+        float rlo = min(ra, min(rb, rm));
+        float rhi = max(ra, max(rb, rm));
+        if (rlo <= hi && rhi >= lo && rhi - rlo > 0.25 * (hi - lo)) {
+            float piece = max(0.25 * (hi - lo) * shortest, 0.02);
+            pieces = max(pieces, ceil(edge / piece));
+        }
+    }
+    return min(pieces, fieldMost);
+}
+
+// Light runs straight through a bubble's uniform inside and outside; its walls (fieldPieces) and the image stage's
+// outline copies take the rest: no triangle's bend needs measuring for it.
+bool fieldNear(vec3 a, vec3 b, vec3 c) {
+    return false;
+}

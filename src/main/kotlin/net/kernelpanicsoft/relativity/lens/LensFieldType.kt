@@ -19,6 +19,12 @@ import java.nio.FloatBuffer
  * lens_fields/common.glsl's lensFieldAddIsotropic or lensFieldAddAxial, and a safe step with lensFieldStep), reading
  * its data with `fieldData(i)` (vec4 i of its share) and `fieldCount()` (how many of it there are). Every name in it
  * starting `field` and a capital letter is its own: renamed per type, so types can't clash.
+ *
+ * Optionally, for the tessellation stage (which splits geometry on the GPU as finely as the lens bends it), its
+ * extremes, where three points of an edge can't show the bend: `float fieldPieces(vec3 a, vec3 b)`, how many pieces the
+ * edge from a to b needs for it (1 none),; and `bool fieldNear(vec3 a,
+ * vec3 b, vec3 c)`, whether it bends light round triangle a, b, c enough to show (without it: wherever it has sources),
+ * else the stage doesn't measure the triangle's bend (a lens call a corner, which it then saves).
  */
 interface LensFieldType {
 	/** Its share of the field block (vec4s). */

@@ -16,10 +16,14 @@ import org.lwjgl.system.MemoryUtil
  * The lens's fields on the GPU: every registered [LensFieldType] (RelativityRegistries.LENS_FIELD_TYPES, from any mod),
  * its share of one uniform block (RelativityLensFields: a header vec4 a type, x how many of it, then each type's share in
  * order), and one include of all their GLSL ([include]: lens_fields/common.glsl, then each type's accessors and code,
- * then lensFieldAt, the field at a point with every type's added in). A type's names starting `field` and a capital are
+ * then lensFieldAt, the field at a point with every type's added in, and the tessellation stage's lensFieldPieces and
+ * lensFieldNear from the types' optional fieldPieces and fieldNear). A type's names starting `field` and a capital are
  * renamed for it (lensField_<namespace>_<path>_...), so types from different mods can't clash.
  */
 object LensFields {
+	/** The marker in common.glsl after which its code goes after lensFieldAt (it uses it). */
+	private const val AFTER_FIELD = "// ---- after lensFieldAt ----"
+
 	/** The uniform block's name, as the include declares it. */
 	const val BLOCK = "RelativityLensFields"
 
@@ -50,8 +54,13 @@ object LensFields {
 		out.appendLine("layout(std140) uniform $BLOCK {")
 		out.appendLine("    vec4 LensFieldData[$size];")
 		out.appendLine("};")
-		out.appendLine(resource(CreateRelativity.id("lens_fields/common.glsl"), LensFields::class.java) ?: error("lens_fields/common.glsl missing"))
+		// (common.glsl in two: its march functions use lensFieldAt, so they go after it.)
+		val common = resource(CreateRelativity.id("lens_fields/common.glsl"), LensFields::class.java) ?: error("lens_fields/common.glsl missing")
+		val split = common.indexOf(AFTER_FIELD).takeIf { it >= 0 } ?: common.length
+		out.appendLine(common.substring(0, split))
 		val calls = ArrayList<String>()
+		val pieces = ArrayList<String>()
+		val nears = ArrayList<String>()
 		for (entry in entries) {
 			val code = resource(entry.type.glsl, entry.type.javaClass)
 			if (code == null) {
@@ -64,6 +73,11 @@ object LensFields {
 			out.appendLine("vec4 ${name}_Data(int i) { return LensFieldData[${entry.base} + clamp(i, 0, ${entry.type.slots - 1})]; }")
 			out.appendLine(code.replace(Regex("""\bfield([A-Z][A-Za-z0-9_]*)\b""")) { "${name}_${it.groupValues[1]}" })
 			calls += "    if (${name}_Count() > 0) ${name}_Sample(x, s);"
+			// (Its splitting hooks, if it has them: how finely its extremes need the geometry cut, for the tessellation stage.)
+			if (Regex("""\bfloat\s+fieldPieces\s*\(""").containsMatchIn(code)) pieces += "    if (${name}_Count() > 0) n = max(n, ${name}_Pieces(a, b));"
+			// (A type that doesn't say where it bends light is taken to, wherever it has sources.)
+			nears += if (Regex("""\bbool\s+fieldNear\s*\(""").containsMatchIn(code)) "    if (${name}_Count() > 0 && ${name}_Near(a, b, c)) return true;"
+				else "    if (${name}_Count() > 0) return true;"
 		}
 		out.appendLine("// The field at x: every type's sources added in.")
 		out.appendLine("LensFieldSample lensFieldAt(vec3 x) {")
@@ -71,10 +85,27 @@ object LensFields {
 		calls.forEach { out.appendLine(it) }
 		out.appendLine("    return s;")
 		out.appendLine("}")
+		out.appendLine(common.substring(split))
+		out.appendLine("// How many pieces the edge from a to b (view space) needs for the types' extremes (their fieldPieces): the most any asks.")
+		out.appendLine("float lensFieldPieces(vec3 a, vec3 b) {")
+		out.appendLine("    float n = 1.0;")
+		pieces.forEach { out.appendLine(it) }
+		out.appendLine("    return n;")
+		out.appendLine("}")
+		out.appendLine("// Whether any type bends light round triangle a, b, c (view space) enough to show (their fieldNear): where none")
+		out.appendLine("// does, the tessellation stage skips measuring the triangle's bend.")
+		out.appendLine("bool lensFieldNear(vec3 a, vec3 b, vec3 c) {")
+		nears.forEach { out.appendLine(it) }
+		out.appendLine("    return false;")
+		out.appendLine("}")
 		out.toString()
 	}
 
 	private var buffer = 0
+
+	/** The block's contents' hash as last uploaded (the light table is rebuilt when it changes). */
+	var hash = 0
+		private set
 	private var binding = -1
 
 	/** Each frame: every type's sources into the block (each its own share), the header's counts with them. */
@@ -96,6 +127,9 @@ object LensFields {
 				GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
 				GL15.glBufferData(GL31.GL_UNIFORM_BUFFER, 16L * size, GL15.GL_DYNAMIC_DRAW)
 			}
+			var h = 1
+			for (i in 0 until 4 * size) h = 31 * h + floats.get(i).toRawBits()
+			hash = h
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, buffer)
 			GL15.glBufferSubData(GL31.GL_UNIFORM_BUFFER, 0, floats)
 			GL15.glBindBuffer(GL31.GL_UNIFORM_BUFFER, 0)

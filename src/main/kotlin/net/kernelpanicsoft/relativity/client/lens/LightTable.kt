@@ -51,6 +51,30 @@ object LightTable {
 	private var seedsProgram = 0
 	private var counts = 0
 
+	/**
+	 * The detail: blocks of [TILE] x [TILE] rays the marking pass (light_table_mark.comp) finds too coarse for the
+	 * table's own map (a wall, a fold, an Einstein ring), traced again [FINE] times as finely with an apron of [APRON]
+	 * round (light_table.comp with LIGHT_TABLE_DETAIL), [DETAIL_SLOTS] of them at most; the lookup reads them where
+	 * they are (vertex_lens_core.glsl's relativityTableRead). [detail] the atlas, [tiles] each block's slot (-1 none),
+	 * [tileSlots] each slot's block, [allocator] the next free slot.
+	 */
+	const val TILE = 8
+	const val FINE = 3
+	const val APRON = 1
+	const val STRIDE = TILE * FINE + 2 * APRON
+	const val SLOTS_X = 8
+	const val DETAIL_SLOTS = 64
+	private val TILES_X = (WIDTH + TILE - 1) / TILE
+	private val TILES_Y = (HEIGHT + TILE - 1) / TILE
+	var detail = 0
+		private set
+	var tiles = 0
+		private set
+	private var tileSlots = 0
+	private var allocator = 0
+	private var markProgram = 0
+	private var detailProgram = 0
+
 	/** Last frame's slots in use (read back a frame late, so nothing waits on the GPU): a pass each beyond slot 0. */
 	var slotsInUse = BooleanArray(SLOTS) { it == 0 }
 		private set
@@ -117,6 +141,29 @@ object LightTable {
 		GL20.glUseProgram(program)
 		GL43.glDispatchCompute((WIDTH + 7) / 8, (HEIGHT + 7) / 8, 1)
 		GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+		// Blocks too coarse marked and given slots, then traced again finer.
+		org.lwjgl.opengl.GL44.glClearTexImage(tileSlots, 0, GL30.GL_RED_INTEGER, GL11.GL_INT, intArrayOf(-1))
+		org.lwjgl.opengl.GL44.glClearTexImage(allocator, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, intArrayOf(0))
+		GL42.glBindImageTexture(4, tileSlots, 0, false, 0, GL15.GL_READ_WRITE, GL30.GL_R32I)
+		GL42.glBindImageTexture(5, tiles, 0, false, 0, GL15.GL_READ_WRITE, GL30.GL_R32I)
+		GL42.glBindImageTexture(6, allocator, 0, false, 0, GL15.GL_READ_WRITE, GL30.GL_R32UI)
+		link(markProgram)
+		GL20.glUseProgram(markProgram)
+		val stage = GL20.glGetUniformLocation(markProgram, "MarkStage")
+		for (pass in 0..3) {
+			GL20.glUniform1i(stage, pass)
+			when (pass) {
+				0 -> GL43.glDispatchCompute(TILES_X, TILES_Y, 1)
+				1 -> GL43.glDispatchCompute(1, 1, 1)
+				else -> GL43.glDispatchCompute((TILES_X + 7) / 8, (TILES_Y + 7) / 8, 1)
+			}
+			GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)
+		}
+		GL42.glBindImageTexture(3, detail, 0, true, 0, GL15.GL_READ_WRITE, GL30.GL_RGBA32F)
+		link(detailProgram)
+		GL20.glUseProgram(detailProgram)
+		GL43.glDispatchCompute((SLOTS_X * STRIDE + 7) / 8, ((DETAIL_SLOTS / SLOTS_X) * STRIDE + 7) / 8, 1)
+		GL42.glMemoryBarrier(GL42.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT or GL42.GL_TEXTURE_FETCH_BARRIER_BIT)
 		link(pickProgram)
 		GL20.glUseProgram(pickProgram)
 		GL43.glDispatchCompute(1, 1, 1)
@@ -133,6 +180,28 @@ object LightTable {
 	 * Reads last frame's slot signatures (copied into a buffer then) and copies this frame's: so which slots are in use is
 	 * known a frame late, without waiting on the GPU.
 	 */
+	/** TEMP debug: the counts texture's 256 entries (blocking). */
+	fun debugCounts(): IntArray {
+		val out = IntArray(256)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, counts)
+		GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, out)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0)
+		return out
+	}
+
+	/**
+	 * The last build's detail (blocking; for tests): slots taken (beyond [DETAIL_SLOTS] counted too), then blocks marked
+	 * per severity bucket, then the cutoff bucket.
+	 */
+	fun detailBlocks(): String {
+		if (allocator == 0) return "none"
+		val out = IntArray(32)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, allocator)
+		GL11.glGetTexImage(GL11.GL_TEXTURE_2D, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, out)
+		GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0)
+		return "${out[0]} slots taken; marked by severity ${out.slice(1..16)}; cutoff ${out[17]}"
+	}
+
 	private fun readSlots() {
 		if (slotBuffer == 0) {
 			slotBuffer = GL15.glGenBuffers()
@@ -171,7 +240,7 @@ object LightTable {
 	private var slotFence = 0L
 
 	private fun ensure(): Boolean {
-		if (texture != 0 && program != 0 && pickProgram != 0 && seedsProgram != 0) return true
+		if (texture != 0 && program != 0 && pickProgram != 0 && seedsProgram != 0 && markProgram != 0 && detailProgram != 0) return true
 		if (failed) return false
 		texture = GL11.glGenTextures()
 		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, texture)
@@ -191,17 +260,41 @@ object LightTable {
 		GL11.glBindTexture(GL11.GL_TEXTURE_2D, counts)
 		GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL30.GL_R32UI, 256, 1, 0, GL30.GL_RED_INTEGER, GL11.GL_UNSIGNED_INT, null as java.nio.IntBuffer?)
 		GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0)
+		detail = GL11.glGenTextures()
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, detail)
+		GL12.glTexImage3D(GL30.GL_TEXTURE_2D_ARRAY, 0, GL30.GL_RGBA32F, SLOTS_X * STRIDE, (DETAIL_SLOTS / SLOTS_X) * STRIDE, 2 * SHELLS + 1, 0, GL11.GL_RGBA, GL11.GL_FLOAT, null as java.nio.FloatBuffer?)
+		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR)
+		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR)
+		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE)
+		GL11.glTexParameteri(GL30.GL_TEXTURE_2D_ARRAY, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE)
+		GL11.glBindTexture(GL30.GL_TEXTURE_2D_ARRAY, 0)
+		fun intTexture(width: Int, format: Int, type: Int): Int {
+			val id = GL11.glGenTextures()
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, id)
+			GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, format, width, if (format == GL30.GL_R32I && width == TILES_X) TILES_Y else 1, 0, GL30.GL_RED_INTEGER, type, null as java.nio.IntBuffer?)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_NEAREST)
+			GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_NEAREST)
+			GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0)
+			return id
+		}
+		tiles = intTexture(TILES_X, GL30.GL_R32I, GL11.GL_INT)
+		org.lwjgl.opengl.GL44.glClearTexImage(tiles, 0, GL30.GL_RED_INTEGER, GL11.GL_INT, intArrayOf(-1))
+		tileSlots = intTexture(DETAIL_SLOTS, GL30.GL_R32I, GL11.GL_INT)
+		// (The next free slot at x 0, the severity histogram at 1..16, the cutoff at 17: light_table_mark.comp.)
+		allocator = intTexture(32, GL30.GL_R32UI, GL11.GL_UNSIGNED_INT)
 		program = compile("light_table") ?: 0
 		pickProgram = compile("light_table_pick") ?: 0
 		seedsProgram = compile("light_table_seeds") ?: 0
-		if (program == 0 || pickProgram == 0 || seedsProgram == 0) {
+		markProgram = compile("light_table_mark") ?: 0
+		detailProgram = compile("light_table", "#define LIGHT_TABLE_DETAIL") ?: 0
+		if (program == 0 || pickProgram == 0 || seedsProgram == 0 || markProgram == 0 || detailProgram == 0) {
 			failed = true
 			return false
 		}
 		return true
 	}
 
-	private fun compile(name: String): Int? {
+	private fun compile(name: String, defines: String = ""): Int? {
 		val resources = Minecraft.getInstance().resourceManager
 		fun text(path: String) = resources.getResource(ResourceLocation.fromNamespaceAndPath(CreateRelativity.MOD_ID, path)).orElse(null)
 			?.open()?.use { String(it.readAllBytes(), Charsets.UTF_8) }
@@ -209,10 +302,10 @@ object LightTable {
 		val body = text("shaders/relativity/$name.comp") ?: return null
 		val shader = GL20.glCreateShader(GL43.GL_COMPUTE_SHADER)
 		val fields = net.kernelpanicsoft.relativity.client.lens.field.LensFields.include
-		GL20.glShaderSource(shader, "#version 430 core\n$core\n$fields\n$body")
+		GL20.glShaderSource(shader, "#version 430 core\n$defines\n$core\n$fields\n$body")
 		GL20.glCompileShader(shader)
 		if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) != GL11.GL_TRUE) {
-			CreateRelativity.LOGGER.error("Light table ({}): {}", name, GL20.glGetShaderInfoLog(shader))
+			CreateRelativity.LOGGER.error("Light table ({}{}): {}", name, if (defines.isEmpty()) "" else ", detail", GL20.glGetShaderInfoLog(shader))
 			return null
 		}
 		val id = GL20.glCreateProgram()
