@@ -28,7 +28,9 @@ void relativityStageTail() {
     relativityVSlotsB = vec4(0.0);
     vec4 view = inverse(ProjMat) * gl_Position;
     vec3 p = view.xyz / view.w;
-    if (relativityLensed(ProjMat) && mod(RelativityLensData[8].x, 4.0) < 1.5 && relativityFieldComposed() && relativityTableOn() && relativityVTailNear(p)) {
+    // (Not with sources and no walls: their second images come from the chain, per vertex, not the table.)
+    bool chained = relativityFieldCount() > 0 && !relativityWalls();
+    if (!chained && relativityLensed(ProjMat) && mod(RelativityLensData[8].x, 4.0) < 1.5 && relativityFieldComposed() && relativityTableOn() && relativityVTailNear(p)) {
         vec2 found[4];
         for (int s = 0; s < 4 + relativityRuntimeZero(); s += 1) found[s] = relativityVTailImage(p, s);
         relativityVSlotsA = vec4(found[0], found[1]);

@@ -10,6 +10,14 @@ out vec4 relativityStageT;
 // The hole its light passes nearest (by impact, in r_s, off the line of sight): xyz its centre (view space), w its r_s; w
 // 0 none. The geometry stage's ring rules use it.
 out vec4 relativityStageH;
+// Its second image by the chain of sources (relativityFieldImage the long way round, each hole's exact aim): xyz the
+// view direction, w 1 if found. With sources and no walls, in place of the table's slots: the table holds light's first
+// crossings outward from the camera, so not the light that goes round a hole and comes back to things nearer the camera
+// than it (behind it: what's seen just outside the shadow's edge).
+out vec4 relativityStageS;
+// The hole that second image's light went round (the chain's terminal one: nearest the point, in its own scale): xyz
+// its centre, w its r_s; w 0 none.
+out vec4 relativityStageG;
 
 // Where the search for each slot's image starts (table position; x 0 the table's own seed, -1 none made): the
 // evaluation stage's blend of its corners' (lens.tesh), nearby.
@@ -78,7 +86,27 @@ void relativityStageVertex(vec3 unbent, vec3 bent, float checked) {
     relativityStageA = vec4(0.0);
     relativityStageB = vec2(0.0);
     relativityStageP = vec2(0.0);
-    if (checked > 0.5 && mod(RelativityLensData[8].x, 4.0) < 1.5 && relativityFieldComposed() && relativityTableOn() && relativityStageNear(unbent)) {
+    relativityStageS = vec4(0.0);
+    relativityStageG = vec4(0.0);
+    bool chained = relativityFieldCount() > 0 && !relativityWalls();
+    if (chained && checked > 0.5 && mod(RelativityLensData[8].x, 4.0) < 1.5 && !relativitySecond() && relativityStageNear(unbent)) {
+        vec3 seen;
+        if (relativityFieldImage(unbent, true, true, seen)) {
+            // (Its terminal hole, as relativityFieldImage picks it.)
+            int terminal = -1;
+            float best = 1e30;
+            for (int k = 0; k < relativityFieldCount(); k += 1) {
+                float x = length(unbent - relativityFieldCentre(k)) / relativityFieldScale(k);
+                if (x < best) {
+                    best = x;
+                    terminal = k;
+                }
+            }
+            relativityStageS = vec4(seen, 1.0);
+            if (terminal >= 0) relativityStageG = vec4(relativityFieldCentre(terminal), relativityFieldParams(terminal).x);
+        }
+    }
+    if (!chained && checked > 0.5 && mod(RelativityLensData[8].x, 4.0) < 1.5 && relativityFieldComposed() && relativityTableOn() && relativityStageNear(unbent)) {
         // (Its primary too, as the vertex lens found it: a triangle across a seam between slots is matched across them.)
         relativityStageP = relativityStageImage(unbent, 0);
         relativityStageA = vec4(relativityStageImage(unbent, 1), relativityStageImage(unbent, 2));

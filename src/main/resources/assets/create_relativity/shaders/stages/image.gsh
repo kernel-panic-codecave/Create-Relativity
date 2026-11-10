@@ -29,6 +29,8 @@ in vec2 relativityStageB[];
 in vec2 relativityStageP[];
 in vec4 relativityStageT[];
 in vec4 relativityStageH[];
+in vec4 relativityStageS[];
+in vec4 relativityStageG[];
 
 vec2 relativityStageImage(int corner, int s) {
     if (s == 0) return relativityStageP[corner];
@@ -135,6 +137,33 @@ void main() {
     }
     int emitted = 0;
     if (!RELATIVITY_STAGE_IMAGES || relativityStageLongWay() || mod(RelativityLensData[8].x, 8.0) > 3.5) emitted = 1;
+    // The second image by the chain (relativityStageS), where all three corners have one: behind the primaries along the
+    // same ray (its light went the long way round), mirrored (a face whose front is seen comes out clockwise: drawn
+    // counter-clockwise, culling keeping it), not across a ring.
+    // (All three round the same hole: corners whose light went round different ones have no image between them.)
+    bool sameHole = distance(relativityStageG[0], relativityStageG[1]) < 1e-3 && distance(relativityStageG[0], relativityStageG[2]) < 1e-3;
+    if (emitted < 1 && sameHole && relativityStageS[0].w > 0.5 && relativityStageS[1].w > 0.5 && relativityStageS[2].w > 0.5) {
+        emitted = 1;
+        float extra = 4.0 * RelativityLensData[0].w;
+        vec3 pa = relativityStageS[0].xyz * (length(relativityStageUnbent[0]) + extra);
+        vec3 pb = relativityStageS[1].xyz * (length(relativityStageUnbent[1]) + extra);
+        vec3 pc = relativityStageS[2].xyz * (length(relativityStageUnbent[2]) + extra);
+        mat4 proj = mat4(RelativityLensData[2], RelativityLensData[3], RelativityLensData[4], RelativityLensData[5]);
+        vec4 qa = proj * vec4(pa, 1.0);
+        vec4 qb = proj * vec4(pb, 1.0);
+        vec4 qc = proj * vec4(pc, 1.0);
+        bool wraps = relativityStageG[0].w > 0.0 && relativityStageApart3(pa, pb, pc, relativityStageG[0]);
+        if (qa.w > 0.0 && qb.w > 0.0 && qc.w > 0.0 && !wraps) {
+            vec2 ab = qb.xy / qb.w - qa.xy / qa.w;
+            vec2 ac = qc.xy / qc.w - qa.xy / qa.w;
+            if (ab.x * ac.y - ab.y * ac.x < 0.0) {
+                relativityStageEmit(0, pa, 2.0);
+                relativityStageEmit(2, pc, 2.0);
+                relativityStageEmit(1, pb, 2.0);
+                EndPrimitive();
+            }
+        }
+    }
     for (int s = 0; s <= 3 && emitted < 1; s += 1) {
         vec2 a = relativityStageImage(0, s);
         if (a.x <= 0.0) continue;
